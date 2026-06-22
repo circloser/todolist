@@ -5,6 +5,19 @@ import { DragEvent, FormEvent, useEffect, useMemo, useState } from "react";
 type StepStatus = "todo" | "done";
 type TaskFilter = "all" | "open" | "done";
 type SortMode = "manual" | "assignee" | "progress" | "updated";
+type ViewMode = "grid" | "gantt";
+type DueFilter = "all" | "urgent" | "overdue";
+
+type WorkflowSubtask = {
+  id: number;
+  itemId: number;
+  title: string;
+  status: StepStatus;
+  position: number;
+  updatedBy: string;
+  updatedAt: string;
+  createdAt: string;
+};
 
 type WorkflowStep = {
   id: number;
@@ -16,6 +29,7 @@ type WorkflowStep = {
   position: number;
   progressValue: number | null;
   status: StepStatus;
+  dueDate: string | null;
   completedAt: string | null;
   updatedBy: string;
   updatedAt: string;
@@ -27,16 +41,40 @@ type WorkflowItem = {
   title: string;
   assignee: string;
   memo: string;
+  dueDate: string | null;
+  templateKey: string;
   position: number;
   updatedBy: string;
   updatedAt: string;
   createdAt: string;
   steps: WorkflowStep[];
+  subtasks: WorkflowSubtask[];
+};
+
+type TemplateOption = {
+  key: string;
+  name: string;
+  description: string;
+};
+
+type HistoryEntry = {
+  id: number;
+  itemId: number | null;
+  entityType: string;
+  entityId: number | null;
+  action: string;
+  summary: string;
+  actor: string;
+  createdAt: string;
 };
 
 type TaskResponse = {
   item?: WorkflowItem | null;
   items?: WorkflowItem[];
+  templates?: TemplateOption[];
+  assigneeSettings?: Record<string, string>;
+  history?: HistoryEntry[];
+  webhook?: { enabled: boolean };
   viewer?: string;
   error?: string;
 };
@@ -52,6 +90,12 @@ const sortOptions: Array<{ key: SortMode; label: string }> = [
   { key: "assignee", label: "담당자" },
   { key: "progress", label: "진도" },
   { key: "updated", label: "최근" },
+];
+
+const dueFilters: Array<{ key: DueFilter; label: string }> = [
+  { key: "all", label: "전체 일정" },
+  { key: "urgent", label: "D-3 이내" },
+  { key: "overdue", label: "지연" },
 ];
 
 const compactStageLabels: Record<string, string> = {
@@ -71,6 +115,14 @@ const compactStageLabels: Record<string, string> = {
   "result-report": "보고",
 };
 
+const defaultTemplates: TemplateOption[] = [
+  {
+    key: "general-service",
+    name: "일반 용역",
+    description: "일반 행정/용역 프로세스",
+  },
+];
+
 function compactStageTitle(step: Pick<WorkflowStep, "stageKey" | "title">) {
   return compactStageLabels[step.stageKey] ?? step.title;
 }
@@ -86,6 +138,64 @@ function formatDate(value?: string | null) {
     hour: "2-digit",
     minute: "2-digit",
   }).format(new Date(value));
+}
+
+function formatDay(value?: string | null) {
+  if (!value) {
+    return "";
+  }
+
+  return new Intl.DateTimeFormat("ko-KR", {
+    month: "2-digit",
+    day: "2-digit",
+  }).format(new Date(`${value}T00:00:00`));
+}
+
+function daysUntil(value?: string | null) {
+  if (!value) {
+    return null;
+  }
+
+  const target = new Date(`${value}T00:00:00`).getTime();
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  return Math.ceil((target - today.getTime()) / 86_400_000);
+}
+
+function urgency(value?: string | null) {
+  const days = daysUntil(value);
+
+  if (days === null) {
+    return "none";
+  }
+
+  if (days < 0) {
+    return "overdue";
+  }
+
+  if (days <= 1) {
+    return "danger";
+  }
+
+  if (days <= 3) {
+    return "warning";
+  }
+
+  return "normal";
+}
+
+function urgencyLabel(value?: string | null) {
+  const days = daysUntil(value);
+
+  if (days === null) {
+    return "";
+  }
+
+  if (days < 0) {
+    return `D+${Math.abs(days)}`;
+  }
+
+  return `D-${days}`;
 }
 
 function assigneeName(value: string) {
@@ -104,12 +214,42 @@ function itemProgress(item: WorkflowItem) {
   return Math.round((completionCount(item) / item.steps.length) * 100);
 }
 
+function subtaskProgress(item: WorkflowItem) {
+  if (!item.subtasks.length) {
+    return null;
+  }
+
+  return Math.round(
+    (item.subtasks.filter((subtask) => subtask.status === "done").length /
+      item.subtasks.length) *
+      100
+  );
+}
+
 function isItemDone(item: WorkflowItem) {
   return item.steps.length > 0 && completionCount(item) === item.steps.length;
 }
 
+function nextStep(item: WorkflowItem) {
+  return item.steps.find((step) => step.status !== "done") ?? null;
+}
+
 function nextStepTitle(item: WorkflowItem) {
-  return item.steps.find((step) => step.status !== "done")?.title ?? "완료";
+  return nextStep(item)?.title ?? "완료";
+}
+
+function canToggleStep(item: WorkflowItem, index: number) {
+  const step = item.steps[index];
+
+  if (!step) {
+    return false;
+  }
+
+  if (step.status === "done") {
+    return true;
+  }
+
+  return index === 0 || item.steps[index - 1]?.status === "done";
 }
 
 function applyManualPositions(items: WorkflowItem[], order: number[]) {
@@ -128,21 +268,66 @@ function moveItem<T>(list: T[], from: number, to: number) {
   return next;
 }
 
+function itemHasUrgentDate(item: WorkflowItem) {
+  const dueDates = [
+    item.dueDate,
+    ...item.steps
+      .filter((step) => step.status !== "done")
+      .map((step) => step.dueDate),
+  ];
+
+  return dueDates.some((date) => {
+    const state = urgency(date);
+    return state === "warning" || state === "danger";
+  });
+}
+
+function itemHasOverdueDate(item: WorkflowItem) {
+  const dueDates = [
+    item.dueDate,
+    ...item.steps
+      .filter((step) => step.status !== "done")
+      .map((step) => step.dueDate),
+  ];
+
+  return dueDates.some((date) => urgency(date) === "overdue");
+}
+
+function rowAccentColor(color?: string) {
+  return color && /^#[0-9a-fA-F]{6}$/.test(color) ? color : "#ffffff";
+}
+
 export default function TaskBoard() {
   const [items, setItems] = useState<WorkflowItem[]>([]);
+  const [templates, setTemplates] = useState<TemplateOption[]>(defaultTemplates);
+  const [history, setHistory] = useState<HistoryEntry[]>([]);
+  const [assigneeSettings, setAssigneeSettings] = useState<Record<string, string>>(
+    {}
+  );
+  const [webhookEnabled, setWebhookEnabled] = useState(false);
   const [viewer, setViewer] = useState("팀");
   const [filter, setFilter] = useState<TaskFilter>("all");
+  const [dueFilter, setDueFilter] = useState<DueFilter>("all");
   const [sortMode, setSortMode] = useState<SortMode>("manual");
+  const [viewMode, setViewMode] = useState<ViewMode>("grid");
   const [assigneeFilter, setAssigneeFilter] = useState("all");
+  const [stageFilter, setStageFilter] = useState("all");
+  const [keyword, setKeyword] = useState("");
   const [newTitle, setNewTitle] = useState("");
   const [newAssignee, setNewAssignee] = useState("");
   const [newMemo, setNewMemo] = useState("");
+  const [newDueDate, setNewDueDate] = useState("");
+  const [newTemplateKey, setNewTemplateKey] = useState("general-service");
+  const [webhookUrl, setWebhookUrl] = useState("");
+  const [expandedIds, setExpandedIds] = useState<Set<number>>(new Set());
+  const [subtaskDrafts, setSubtaskDrafts] = useState<Record<number, string>>({});
   const [loading, setLoading] = useState(true);
   const [adding, setAdding] = useState(false);
   const [draggedId, setDraggedId] = useState<number | null>(null);
   const [savingOrder, setSavingOrder] = useState(false);
   const [savingItemIds, setSavingItemIds] = useState<Set<number>>(new Set());
   const [savingStepIds, setSavingStepIds] = useState<Set<number>>(new Set());
+  const [savingSubtaskIds, setSavingSubtaskIds] = useState<Set<number>>(new Set());
   const [error, setError] = useState("");
 
   async function loadTasks() {
@@ -158,6 +343,10 @@ export default function TaskBoard() {
       }
 
       setItems(data.items ?? []);
+      setTemplates(data.templates?.length ? data.templates : defaultTemplates);
+      setHistory(data.history ?? []);
+      setAssigneeSettings(data.assigneeSettings ?? {});
+      setWebhookEnabled(Boolean(data.webhook?.enabled));
       setViewer(data.viewer ?? "팀");
     } catch (loadError) {
       setError(
@@ -171,7 +360,11 @@ export default function TaskBoard() {
   }
 
   useEffect(() => {
-    void loadTasks();
+    const timer = window.setTimeout(() => {
+      void loadTasks();
+    }, 0);
+
+    return () => window.clearTimeout(timer);
   }, []);
 
   const assignees = useMemo(
@@ -182,23 +375,54 @@ export default function TaskBoard() {
     [items]
   );
 
+  const stages = items[0]?.steps ?? [];
+
   const baseItems = useMemo(() => {
+    const query = keyword.trim().toLocaleLowerCase("ko-KR");
+
     return [...items].filter((item) => {
       if (assigneeFilter !== "all" && assigneeName(item.assignee) !== assigneeFilter) {
         return false;
       }
 
-      if (filter === "open") {
-        return !isItemDone(item);
+      if (stageFilter !== "all" && nextStep(item)?.stageKey !== stageFilter) {
+        return false;
       }
 
-      if (filter === "done") {
-        return isItemDone(item);
+      if (dueFilter === "urgent" && !itemHasUrgentDate(item)) {
+        return false;
+      }
+
+      if (dueFilter === "overdue" && !itemHasOverdueDate(item)) {
+        return false;
+      }
+
+      if (filter === "open" && isItemDone(item)) {
+        return false;
+      }
+
+      if (filter === "done" && !isItemDone(item)) {
+        return false;
+      }
+
+      if (query) {
+        const haystack = [
+          item.title,
+          item.assignee,
+          item.memo,
+          ...item.subtasks.map((subtask) => subtask.title),
+        ]
+          .join(" ")
+          .toLocaleLowerCase("ko-KR");
+
+        if (!haystack.includes(query)) {
+          return false;
+        }
       }
 
       return true;
     });
-  }, [assigneeFilter, filter, items]);
+  }, [assigneeFilter, dueFilter, filter, items, keyword, stageFilter]);
 
   const visibleItems = useMemo(() => {
     const next = [...baseItems];
@@ -233,7 +457,6 @@ export default function TaskBoard() {
     return next.sort((first, second) => first.position - second.position);
   }, [baseItems, sortMode]);
 
-  const stages = visibleItems[0]?.steps ?? items[0]?.steps ?? [];
   const totalSteps = items.reduce((sum, item) => sum + item.steps.length, 0);
   const completedSteps = items.reduce(
     (sum, item) => sum + completionCount(item),
@@ -243,6 +466,24 @@ export default function TaskBoard() {
     ? Math.round((completedSteps / totalSteps) * 100)
     : 0;
   const openItemCount = items.filter((item) => !isItemDone(item)).length;
+
+  const bottlenecks = useMemo(() => {
+    const counts = new Map<string, { title: string; count: number }>();
+
+    for (const item of items) {
+      const step = nextStep(item);
+
+      if (!step) {
+        continue;
+      }
+
+      const current = counts.get(step.stageKey) ?? { title: step.title, count: 0 };
+      current.count += 1;
+      counts.set(step.stageKey, current);
+    }
+
+    return [...counts.values()].sort((first, second) => second.count - first.count);
+  }, [items]);
 
   const assigneeStats = useMemo(
     () =>
@@ -270,16 +511,30 @@ export default function TaskBoard() {
 
   function updateLocalItem(
     id: number,
-    patch: Partial<Pick<WorkflowItem, "title" | "assignee" | "memo">>
+    patch: Partial<Pick<WorkflowItem, "title" | "assignee" | "memo" | "dueDate">>
   ) {
     setItems((current) =>
       current.map((item) => (item.id === id ? { ...item, ...patch } : item))
     );
   }
 
+  function updateLocalSubtask(
+    subtaskId: number,
+    patch: Partial<Pick<WorkflowSubtask, "title" | "status">>
+  ) {
+    setItems((current) =>
+      current.map((item) => ({
+        ...item,
+        subtasks: item.subtasks.map((subtask) =>
+          subtask.id === subtaskId ? { ...subtask, ...patch } : subtask
+        ),
+      }))
+    );
+  }
+
   async function updateItem(
     id: number,
-    patch: Partial<Pick<WorkflowItem, "title" | "assignee" | "memo">>
+    patch: Partial<Pick<WorkflowItem, "title" | "assignee" | "memo" | "dueDate">>
   ) {
     const previousItems = items;
     setError("");
@@ -298,6 +553,8 @@ export default function TaskBoard() {
       }
 
       replaceItem(data.item);
+      setAssigneeSettings((current) => data.assigneeSettings ?? current);
+      setHistory(data.history ?? history);
     } catch (saveError) {
       setItems(previousItems);
       setError(
@@ -314,24 +571,32 @@ export default function TaskBoard() {
     }
   }
 
-  async function updateStep(stepId: number, status: StepStatus) {
+  async function updateStep(
+    item: WorkflowItem,
+    step: WorkflowStep,
+    status: StepStatus
+  ) {
     const previousItems = items;
     setError("");
-    setSavingStepIds((current) => new Set(current).add(stepId));
+    setSavingStepIds((current) => new Set(current).add(step.id));
     setItems((current) =>
-      current.map((item) => ({
-        ...item,
-        steps: item.steps.map((step) =>
-          step.id === stepId ? { ...step, status } : step
-        ),
-      }))
+      current.map((currentItem) =>
+        currentItem.id === item.id
+          ? {
+              ...currentItem,
+              steps: currentItem.steps.map((currentStep) =>
+                currentStep.id === step.id ? { ...currentStep, status } : currentStep
+              ),
+            }
+          : currentItem
+      )
     );
 
     try {
       const response = await fetch("/api/tasks", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ stepId, status }),
+        body: JSON.stringify({ stepId: step.id, status }),
       });
       const data = (await response.json()) as TaskResponse;
 
@@ -340,6 +605,7 @@ export default function TaskBoard() {
       }
 
       replaceItem(data.item);
+      setHistory(data.history ?? history);
     } catch (saveError) {
       setItems(previousItems);
       setError(
@@ -350,9 +616,113 @@ export default function TaskBoard() {
     } finally {
       setSavingStepIds((current) => {
         const next = new Set(current);
-        next.delete(stepId);
+        next.delete(step.id);
         return next;
       });
+    }
+  }
+
+  async function updateStepDueDate(step: WorkflowStep, dueDate: string) {
+    setSavingStepIds((current) => new Set(current).add(step.id));
+    setError("");
+
+    try {
+      const response = await fetch("/api/tasks", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ stepId: step.id, dueDate }),
+      });
+      const data = (await response.json()) as TaskResponse;
+
+      if (!response.ok || !data.item) {
+        throw new Error(data.error ?? "목표일을 저장하지 못했습니다.");
+      }
+
+      replaceItem(data.item);
+      setHistory(data.history ?? history);
+    } catch (saveError) {
+      setError(
+        saveError instanceof Error
+          ? saveError.message
+          : "목표일을 저장하지 못했습니다."
+      );
+    } finally {
+      setSavingStepIds((current) => {
+        const next = new Set(current);
+        next.delete(step.id);
+        return next;
+      });
+    }
+  }
+
+  async function updateSubtask(
+    subtaskId: number,
+    patch: Partial<Pick<WorkflowSubtask, "title" | "status">>
+  ) {
+    const previousItems = items;
+    setError("");
+    setSavingSubtaskIds((current) => new Set(current).add(subtaskId));
+
+    try {
+      const response = await fetch("/api/tasks", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ subtaskId, ...patch }),
+      });
+      const data = (await response.json()) as TaskResponse;
+
+      if (!response.ok || !data.item) {
+        throw new Error(data.error ?? "세부 체크리스트를 저장하지 못했습니다.");
+      }
+
+      replaceItem(data.item);
+      setHistory(data.history ?? history);
+    } catch (saveError) {
+      setItems(previousItems);
+      setError(
+        saveError instanceof Error
+          ? saveError.message
+          : "세부 체크리스트를 저장하지 못했습니다."
+      );
+    } finally {
+      setSavingSubtaskIds((current) => {
+        const next = new Set(current);
+        next.delete(subtaskId);
+        return next;
+      });
+    }
+  }
+
+  async function addSubtask(itemId: number) {
+    const title = subtaskDrafts[itemId]?.trim();
+
+    if (!title) {
+      return;
+    }
+
+    setError("");
+
+    try {
+      const response = await fetch("/api/tasks", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "create-subtask", itemId, title }),
+      });
+      const data = (await response.json()) as TaskResponse;
+
+      if (!response.ok || !data.item) {
+        throw new Error(data.error ?? "세부 체크리스트를 추가하지 못했습니다.");
+      }
+
+      replaceItem(data.item);
+      setSubtaskDrafts((current) => ({ ...current, [itemId]: "" }));
+      setHistory(data.history ?? history);
+    } catch (addError) {
+      setError(
+        addError instanceof Error
+          ? addError.message
+          : "세부 체크리스트를 추가하지 못했습니다."
+      );
     }
   }
 
@@ -375,6 +745,8 @@ export default function TaskBoard() {
           title,
           assignee: newAssignee,
           memo: newMemo,
+          dueDate: newDueDate,
+          templateKey: newTemplateKey,
         }),
       });
       const data = (await response.json()) as TaskResponse;
@@ -387,13 +759,82 @@ export default function TaskBoard() {
       setNewTitle("");
       setNewAssignee("");
       setNewMemo("");
+      setNewDueDate("");
       setSortMode("manual");
+      setHistory(data.history ?? history);
     } catch (addError) {
       setError(
         addError instanceof Error ? addError.message : "업무를 추가하지 못했습니다."
       );
     } finally {
       setAdding(false);
+    }
+  }
+
+  async function saveWebhook(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    if (!webhookUrl.trim()) {
+      return;
+    }
+
+    setError("");
+
+    try {
+      const response = await fetch("/api/tasks", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "save-webhook",
+          webhookName: "팀 알림",
+          webhookUrl,
+        }),
+      });
+      const data = (await response.json()) as TaskResponse;
+
+      if (!response.ok) {
+        throw new Error(data.error ?? "Webhook을 저장하지 못했습니다.");
+      }
+
+      setWebhookEnabled(Boolean(data.webhook?.enabled));
+      setWebhookUrl("");
+      setHistory(data.history ?? history);
+    } catch (saveError) {
+      setError(
+        saveError instanceof Error
+          ? saveError.message
+          : "Webhook을 저장하지 못했습니다."
+      );
+    }
+  }
+
+  async function saveAssigneeColor(assignee: string, color: string) {
+    setError("");
+
+    try {
+      const response = await fetch("/api/tasks", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "set-assignee-color",
+          assignee,
+          color,
+        }),
+      });
+      const data = (await response.json()) as TaskResponse;
+
+      if (!response.ok || !data.assigneeSettings) {
+        throw new Error(data.error ?? "담당자 색상을 저장하지 못했습니다.");
+      }
+
+      setAssigneeSettings(data.assigneeSettings);
+      setHistory(data.history ?? history);
+    } catch (saveError) {
+      setError(
+        saveError instanceof Error
+          ? saveError.message
+          : "담당자 색상을 저장하지 못했습니다."
+      );
     }
   }
 
@@ -417,6 +858,7 @@ export default function TaskBoard() {
       }
 
       setItems(data.items);
+      setHistory(data.history ?? history);
     } catch (saveError) {
       setItems(previousItems);
       setError(
@@ -461,6 +903,30 @@ export default function TaskBoard() {
     event.dataTransfer.dropEffect = "move";
   }
 
+  function toggleExpanded(id: number) {
+    setExpandedIds((current) => {
+      const next = new Set(current);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
+  }
+
+  function progressColor(item: WorkflowItem) {
+    if (itemHasOverdueDate(item)) {
+      return "#d9452f";
+    }
+
+    if (itemHasUrgentDate(item)) {
+      return "#e5aa25";
+    }
+
+    return "#248f84";
+  }
+
   return (
     <main className="min-h-dvh bg-[#f4f6f3] text-[#1d2320]">
       <header className="border-b border-[#d9e1dc] bg-white">
@@ -472,6 +938,9 @@ export default function TaskBoard() {
                   습지복원팀
                 </span>
                 <span>{viewer}</span>
+                <span className="rounded bg-[#f7faf8] px-2.5 py-1">
+                  Webhook {webhookEnabled ? "ON" : "OFF"}
+                </span>
               </div>
               <h1 className="mt-2 text-2xl font-semibold sm:text-3xl">
                 업무 진행표
@@ -494,8 +963,23 @@ export default function TaskBoard() {
             </div>
           </div>
 
-          <div className="grid gap-3 lg:grid-cols-[1fr_auto_auto] lg:items-end">
-            <div className="grid gap-2 sm:grid-cols-[minmax(180px,260px)_minmax(180px,220px)_1fr]">
+          <div className="grid gap-3 xl:grid-cols-[1fr_360px]">
+            <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-[130px_145px_145px_130px_130px_130px_1fr]">
+              <label className="text-sm font-medium text-[#4b5d56]">
+                상태
+                <select
+                  value={filter}
+                  onChange={(event) => setFilter(event.target.value as TaskFilter)}
+                  className="mt-1 min-h-10 w-full border border-[#cbd8d2] bg-white px-3 text-sm text-[#1d2320]"
+                >
+                  {filters.map((option) => (
+                    <option key={option.key} value={option.key}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
               <label className="text-sm font-medium text-[#4b5d56]">
                 담당자
                 <select
@@ -507,6 +991,37 @@ export default function TaskBoard() {
                   {assignees.map((assignee) => (
                     <option key={assignee} value={assignee}>
                       {assignee}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <label className="text-sm font-medium text-[#4b5d56]">
+                단계
+                <select
+                  value={stageFilter}
+                  onChange={(event) => setStageFilter(event.target.value)}
+                  className="mt-1 min-h-10 w-full border border-[#cbd8d2] bg-white px-3 text-sm text-[#1d2320]"
+                >
+                  <option value="all">전체 단계</option>
+                  {stages.map((stage) => (
+                    <option key={stage.stageKey} value={stage.stageKey}>
+                      {stage.title}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <label className="text-sm font-medium text-[#4b5d56]">
+                일정
+                <select
+                  value={dueFilter}
+                  onChange={(event) => setDueFilter(event.target.value as DueFilter)}
+                  className="mt-1 min-h-10 w-full border border-[#cbd8d2] bg-white px-3 text-sm text-[#1d2320]"
+                >
+                  {dueFilters.map((option) => (
+                    <option key={option.key} value={option.key}>
+                      {option.label}
                     </option>
                   ))}
                 </select>
@@ -527,44 +1042,69 @@ export default function TaskBoard() {
                 </select>
               </label>
 
-              <div className="flex items-end">
-                <div className="grid w-full grid-cols-3 overflow-hidden border border-[#cbd8d2] bg-[#f3f6f4] p-1">
-                  {filters.map((item) => (
+              <div className="text-sm font-medium text-[#4b5d56]">
+                보기
+                <div className="mt-1 grid grid-cols-2 overflow-hidden border border-[#cbd8d2] bg-[#f3f6f4] p-1">
+                  {(["grid", "gantt"] as const).map((mode) => (
                     <button
-                      key={item.key}
+                      key={mode}
                       type="button"
-                      onClick={() => setFilter(item.key)}
-                      className={`min-h-9 px-3 text-sm font-semibold transition ${
-                        filter === item.key
-                          ? "bg-white text-[#1f6f67] shadow-sm"
-                          : "text-[#5f6f68] hover:text-[#1d2320]"
+                      onClick={() => setViewMode(mode)}
+                      className={`min-h-8 text-sm font-semibold ${
+                        viewMode === mode ? "bg-white text-[#1f6f67]" : "text-[#5f6f68]"
                       }`}
                     >
-                      {item.label}
+                      {mode === "grid" ? "표" : "간트"}
                     </button>
                   ))}
                 </div>
               </div>
+
+              <label className="text-sm font-medium text-[#4b5d56]">
+                검색
+                <input
+                  value={keyword}
+                  onChange={(event) => setKeyword(event.target.value)}
+                  className="mt-1 min-h-10 w-full border border-[#cbd8d2] bg-white px-3 text-sm text-[#1d2320]"
+                  placeholder="업무명, 메모, 세부 체크리스트"
+                />
+              </label>
             </div>
 
-            <div className="flex flex-wrap gap-2">
-              {assigneeStats.slice(0, 5).map((stat) => (
-                <button
-                  key={stat.assignee}
-                  type="button"
-                  onClick={() => setAssigneeFilter(stat.assignee)}
-                  className="min-h-10 border border-[#d4ded8] bg-white px-3 text-left text-sm hover:border-[#8fbfb5]"
-                >
-                  <span className="font-semibold">{stat.assignee}</span>
-                  <span className="ml-2 text-[#66746e]">
-                    {stat.count}건 · {stat.progress}%
-                  </span>
-                </button>
-              ))}
-            </div>
-
-            <div className="text-sm font-semibold text-[#4f6f68]">
-              {savingOrder ? "순서 저장 중" : `${visibleItems.length}건 표시`}
+            <div className="space-y-2">
+              <div className="text-sm font-semibold text-[#4f6f68]">
+                병목 구간 {savingOrder ? "· 순서 저장 중" : ""}
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {bottlenecks.slice(0, 3).map((bottleneck) => (
+                  <button
+                    key={bottleneck.title}
+                    type="button"
+                    onClick={() => {
+                      const stage = stages.find((item) => item.title === bottleneck.title);
+                      setStageFilter(stage?.stageKey ?? "all");
+                    }}
+                    className="min-h-8 border border-[#d4ded8] bg-white px-3 text-sm"
+                  >
+                    {bottleneck.title} {bottleneck.count}건
+                  </button>
+                ))}
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {assigneeStats.slice(0, 4).map((stat) => (
+                  <button
+                    key={stat.assignee}
+                    type="button"
+                    onClick={() => setAssigneeFilter(stat.assignee)}
+                    className="min-h-8 border border-[#d4ded8] bg-white px-3 text-xs"
+                    style={{
+                      backgroundColor: rowAccentColor(assigneeSettings[stat.assignee]),
+                    }}
+                  >
+                    {stat.assignee} {stat.count}건 · {stat.progress}%
+                  </button>
+                ))}
+              </div>
             </div>
           </div>
         </div>
@@ -577,255 +1117,544 @@ export default function TaskBoard() {
           </div>
         ) : null}
 
-        <div className="overflow-hidden border border-[#cfdad4] bg-white shadow-sm">
-          <div className="overflow-x-hidden">
-            <table className="w-full table-fixed border-collapse text-[11px] xl:text-xs">
-              <colgroup>
-                <col className="w-[2.75%]" />
-                <col className="w-[15.5%]" />
-                <col className="w-[8.5%]" />
-                <col className="w-[8%]" />
-                {stages.map((stage) => (
-                  <col key={stage.stageKey} className="w-[3.2%]" />
-                ))}
-                <col className="w-[20.45%]" />
-              </colgroup>
-              <thead>
-                <tr className="bg-[#f7faf8] text-left text-xs font-semibold text-[#53625c]">
-                  <th className="border-b border-r border-[#dbe4df] bg-[#f7faf8] px-1 py-3" />
-                  <th className="border-b border-r border-[#dbe4df] bg-[#f7faf8] px-2 py-3">
-                    업무
-                  </th>
-                  <th className="border-b border-r border-[#dbe4df] bg-[#f7faf8] px-2 py-3">
-                    담당
-                  </th>
-                  <th className="border-b border-r border-[#dbe4df] px-2 py-3">
-                    진도
-                  </th>
+        {viewMode === "grid" ? (
+          <div className="overflow-hidden border border-[#cfdad4] bg-white shadow-sm">
+            <div className="overflow-x-hidden">
+              <table className="w-full table-fixed border-collapse text-[11px] xl:text-xs">
+                <colgroup>
+                  <col className="w-[2.75%]" />
+                  <col className="w-[15.5%]" />
+                  <col className="w-[8.5%]" />
+                  <col className="w-[8%]" />
                   {stages.map((stage) => (
-                    <th
-                      key={stage.stageKey}
-                      className="border-b border-r border-[#dbe4df] px-1 py-3 text-center"
-                      title={`${stage.title} · ${stage.description}`}
-                    >
-                      <span className="block truncate leading-4">
-                        {compactStageTitle(stage)}
-                      </span>
-                    </th>
+                    <col key={stage.stageKey} className="w-[3.2%]" />
                   ))}
-                  <th className="border-b border-[#dbe4df] px-2 py-3">
-                    메모
-                  </th>
-                </tr>
-              </thead>
-
-              <tbody>
-                {loading ? (
-                  <tr>
-                    <td
-                      colSpan={stages.length + 5}
-                      className="px-4 py-12 text-center text-[#63716b]"
-                    >
-                      불러오는 중
-                    </td>
-                  </tr>
-                ) : null}
-
-                {!loading && !visibleItems.length ? (
-                  <tr>
-                    <td
-                      colSpan={stages.length + 5}
-                      className="px-4 py-12 text-center text-[#63716b]"
-                    >
-                      표시할 업무가 없습니다.
-                    </td>
-                  </tr>
-                ) : null}
-
-                {!loading &&
-                  visibleItems.map((item) => {
-                    const progress = itemProgress(item);
-                    const done = isItemDone(item);
-
-                    return (
-                      <tr
-                        key={item.id}
-                        onDragOver={handleDragOver}
-                        onDrop={() => handleDrop(item.id)}
-                        className={`group border-b border-[#e4ebe7] ${
-                          draggedId === item.id ? "bg-[#edf7f4]" : "bg-white"
-                        } hover:bg-[#f8fbf9]`}
+                  <col className="w-[20.45%]" />
+                </colgroup>
+                <thead>
+                  <tr className="bg-[#f7faf8] text-left text-xs font-semibold text-[#53625c]">
+                    <th className="border-b border-r border-[#dbe4df] bg-[#f7faf8] px-1 py-3" />
+                    <th className="border-b border-r border-[#dbe4df] bg-[#f7faf8] px-2 py-3">
+                      업무
+                    </th>
+                    <th className="border-b border-r border-[#dbe4df] bg-[#f7faf8] px-2 py-3">
+                      담당
+                    </th>
+                    <th className="border-b border-r border-[#dbe4df] px-2 py-3">
+                      진도
+                    </th>
+                    {stages.map((stage) => (
+                      <th
+                        key={stage.stageKey}
+                        className="border-b border-r border-[#dbe4df] px-1 py-3 text-center"
+                        title={`${stage.title} · ${stage.description}`}
                       >
-                        <td className="border-r border-[#dbe4df] bg-inherit px-1 py-2 align-top">
-                          <button
-                            type="button"
-                            draggable
-                            onDragStart={(event) => {
-                              setDraggedId(item.id);
-                              event.dataTransfer.effectAllowed = "move";
-                            }}
-                            onDragEnd={() => setDraggedId(null)}
-                            className="flex h-8 w-full cursor-grab items-center justify-center border border-[#d2ddd7] bg-white text-[#72817a] active:cursor-grabbing"
-                            title="드래그"
-                          >
-                            ⋮
-                          </button>
-                        </td>
-                        <td className="border-r border-[#dbe4df] bg-inherit px-1.5 py-2 align-top">
-                          <input
-                            value={item.title}
-                            onChange={(event) =>
-                              updateLocalItem(item.id, {
-                                title: event.target.value,
-                              })
-                            }
-                            onBlur={(event) =>
-                              updateItem(item.id, {
-                                title: event.target.value,
-                              })
-                            }
-                            className="min-h-8 w-full border border-transparent bg-transparent px-1.5 text-xs font-semibold text-[#1d2320] hover:border-[#cbd8d2] focus:border-[#77b8ae] focus:bg-white xl:text-sm"
-                          />
-                          <div className="mt-1 truncate px-1.5 text-[10px] text-[#6b7772] xl:text-xs">
-                            {done ? "완료" : nextStepTitle(item)} · 수정{" "}
-                            {formatDate(item.updatedAt)}
-                          </div>
-                        </td>
-                        <td className="border-r border-[#dbe4df] bg-inherit px-1.5 py-2 align-top">
-                          <input
-                            value={item.assignee}
-                            onChange={(event) =>
-                              updateLocalItem(item.id, {
-                                assignee: event.target.value,
-                              })
-                            }
-                            onBlur={(event) =>
-                              updateItem(item.id, {
-                                assignee: event.target.value,
-                              })
-                            }
-                            className="min-h-8 w-full border border-transparent bg-transparent px-1.5 text-xs text-[#1d2320] hover:border-[#cbd8d2] focus:border-[#77b8ae] focus:bg-white"
-                          />
-                          {savingItemIds.has(item.id) ? (
-                            <div className="mt-1 px-1.5 text-[10px] font-semibold text-[#1f6f67]">
-                              저장 중
-                            </div>
-                          ) : null}
-                        </td>
-                        <td className="border-r border-[#dbe4df] px-1.5 py-3 align-top">
-                          <div className="flex items-center gap-1.5">
-                            <div className="h-2 flex-1 overflow-hidden bg-[#e2e9e5]">
-                              <div
-                                className="h-full bg-[#248f84]"
-                                style={{ width: `${progress}%` }}
-                              />
-                            </div>
-                            <span className="w-8 text-right text-[11px] font-semibold text-[#1f6f67]">
-                              {progress}%
-                            </span>
-                          </div>
-                        </td>
-                        {item.steps.map((step, index) => {
-                          const checked = step.status === "done";
-                          const saving = savingStepIds.has(step.id);
-                          const previousDone =
-                            index === 0 || item.steps[index - 1]?.status === "done";
-                          const active = checked || previousDone;
+                        <span className="block truncate leading-4">
+                          {compactStageTitle(stage)}
+                        </span>
+                      </th>
+                    ))}
+                    <th className="border-b border-[#dbe4df] px-2 py-3">
+                      메모/일정
+                    </th>
+                  </tr>
+                </thead>
 
-                          return (
-                            <td
-                              key={step.id}
-                              className={`border-r border-[#dbe4df] px-0.5 py-2 text-center align-middle ${
-                                checked
-                                  ? "bg-[#dff3ee]"
-                                  : active
-                                    ? "bg-[#fff8dc]"
-                                    : "bg-white"
-                              }`}
-                            >
+                <tbody>
+                  {loading ? (
+                    <tr>
+                      <td
+                        colSpan={stages.length + 5}
+                        className="px-4 py-12 text-center text-[#63716b]"
+                      >
+                        불러오는 중
+                      </td>
+                    </tr>
+                  ) : null}
+
+                  {!loading && !visibleItems.length ? (
+                    <tr>
+                      <td
+                        colSpan={stages.length + 5}
+                        className="px-4 py-12 text-center text-[#63716b]"
+                      >
+                        표시할 업무가 없습니다.
+                      </td>
+                    </tr>
+                  ) : null}
+
+                  {!loading &&
+                    visibleItems.map((item) => {
+                      const progress = itemProgress(item);
+                      const done = isItemDone(item);
+                      const expanded = expandedIds.has(item.id);
+                      const rowColor = rowAccentColor(
+                        assigneeSettings[assigneeName(item.assignee)]
+                      );
+                      const subProgress = subtaskProgress(item);
+
+                      return (
+                        <>
+                          <tr
+                            key={item.id}
+                            onDragOver={handleDragOver}
+                            onDrop={() => handleDrop(item.id)}
+                            className={`group border-b border-[#e4ebe7] ${
+                              draggedId === item.id ? "bg-[#edf7f4]" : ""
+                            } hover:bg-[#f8fbf9]`}
+                            style={{ backgroundColor: draggedId === item.id ? undefined : rowColor }}
+                          >
+                            <td className="border-r border-[#dbe4df] bg-inherit px-1 py-2 align-top">
                               <button
                                 type="button"
-                                onClick={() =>
-                                  updateStep(step.id, checked ? "todo" : "done")
-                                }
-                                className={`mx-auto flex h-7 w-7 items-center justify-center border text-[11px] font-semibold transition xl:h-8 xl:w-8 ${
-                                  checked
-                                    ? "border-[#248f84] bg-[#248f84] text-white"
-                                    : active
-                                      ? "border-[#e2c75e] bg-[#f7e47d] text-[#4d4626] hover:border-[#248f84]"
-                                      : "border-[#d7e1dc] bg-white text-[#75837d] hover:border-[#248f84]"
-                                }`}
-                                title={step.description}
+                                draggable
+                                onDragStart={(event) => {
+                                  setDraggedId(item.id);
+                                  event.dataTransfer.effectAllowed = "move";
+                                }}
+                                onDragEnd={() => setDraggedId(null)}
+                                className="mb-1 flex h-7 w-full cursor-grab items-center justify-center border border-[#d2ddd7] bg-white text-[#72817a] active:cursor-grabbing"
+                                title="드래그"
                               >
-                                {saving ? "…" : checked ? "✓" : ""}
+                                ⋮
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => toggleExpanded(item.id)}
+                                className="flex h-7 w-full items-center justify-center border border-[#d2ddd7] bg-white text-[#31413b]"
+                                title="세부 체크리스트"
+                              >
+                                {expanded ? "−" : "+"}
                               </button>
                             </td>
-                          );
-                        })}
-                        <td className="px-2 py-2 align-top">
-                          <textarea
-                            value={item.memo}
-                            onChange={(event) =>
-                              updateLocalItem(item.id, {
-                                memo: event.target.value,
-                              })
-                            }
-                            onBlur={(event) =>
-                              updateItem(item.id, {
-                                memo: event.target.value,
-                              })
-                            }
-                            className="min-h-14 w-full resize-y border border-transparent bg-transparent px-1.5 py-1 text-xs leading-5 text-[#1d2320] hover:border-[#cbd8d2] focus:border-[#77b8ae] focus:bg-white xl:text-sm"
-                            placeholder="메모"
-                          />
-                        </td>
-                      </tr>
-                    );
-                  })}
-              </tbody>
+                            <td className="border-r border-[#dbe4df] bg-inherit px-1.5 py-2 align-top">
+                              <input
+                                value={item.title}
+                                onChange={(event) =>
+                                  updateLocalItem(item.id, {
+                                    title: event.target.value,
+                                  })
+                                }
+                                onBlur={(event) =>
+                                  updateItem(item.id, {
+                                    title: event.target.value,
+                                  })
+                                }
+                                className="min-h-8 w-full border border-transparent bg-transparent px-1.5 text-xs font-semibold text-[#1d2320] hover:border-[#cbd8d2] focus:border-[#77b8ae] focus:bg-white xl:text-sm"
+                              />
+                              <div className="mt-1 truncate px-1.5 text-[10px] text-[#6b7772] xl:text-xs">
+                                {done ? "완료" : nextStepTitle(item)}
+                                {subProgress !== null ? ` · 세부 ${subProgress}%` : ""}
+                                {savingItemIds.has(item.id) ? " · 저장 중" : ""}
+                              </div>
+                            </td>
+                            <td className="border-r border-[#dbe4df] bg-inherit px-1.5 py-2 align-top">
+                              <input
+                                value={item.assignee}
+                                onChange={(event) =>
+                                  updateLocalItem(item.id, {
+                                    assignee: event.target.value,
+                                  })
+                                }
+                                onBlur={(event) =>
+                                  updateItem(item.id, {
+                                    assignee: event.target.value,
+                                  })
+                                }
+                                className="min-h-8 w-full border border-transparent bg-transparent px-1.5 text-xs text-[#1d2320] hover:border-[#cbd8d2] focus:border-[#77b8ae] focus:bg-white"
+                              />
+                              <input
+                                type="color"
+                                value={assigneeSettings[assigneeName(item.assignee)] ?? "#e6f4ef"}
+                                onChange={(event) =>
+                                  saveAssigneeColor(
+                                    assigneeName(item.assignee),
+                                    event.target.value
+                                  )
+                                }
+                                className="mt-1 h-6 w-full border border-[#cbd8d2] bg-white"
+                                title="담당자 색상"
+                              />
+                            </td>
+                            <td className="border-r border-[#dbe4df] px-1.5 py-3 align-top">
+                              <div className="flex items-center gap-1.5">
+                                <div className="h-2 flex-1 overflow-hidden bg-[#e2e9e5]">
+                                  <div
+                                    className="h-full"
+                                    style={{
+                                      width: `${progress}%`,
+                                      backgroundColor: progressColor(item),
+                                    }}
+                                  />
+                                </div>
+                                <span className="w-8 text-right text-[11px] font-semibold text-[#1f6f67]">
+                                  {progress}%
+                                </span>
+                              </div>
+                              <input
+                                type="date"
+                                value={item.dueDate ?? ""}
+                                onChange={(event) =>
+                                  updateItem(item.id, { dueDate: event.target.value })
+                                }
+                                className="mt-2 min-h-7 w-full border border-[#d7e1dc] bg-white px-1 text-[10px]"
+                                title="최종 마감일"
+                              />
+                            </td>
+                            {item.steps.map((step, index) => {
+                              const checked = step.status === "done";
+                              const saving = savingStepIds.has(step.id);
+                              const allowed = canToggleStep(item, index);
+                              const state = urgency(step.dueDate);
+                              const disabled = !allowed || saving;
 
-              <tfoot>
-                <tr className="border-t-2 border-[#9fcac1] bg-[#f6fbf8]">
-                  <td className="border-r border-[#dbe4df] bg-[#f6fbf8] px-1 py-3" />
-                  <td
-                    colSpan={stages.length + 4}
-                    className="px-3 py-3"
-                  >
-                    <form
-                      onSubmit={addItem}
-                      className="grid gap-2 lg:grid-cols-[minmax(220px,1fr)_160px_minmax(220px,1fr)_100px]"
-                    >
-                      <input
-                        value={newTitle}
-                        onChange={(event) => setNewTitle(event.target.value)}
-                        className="min-h-10 border border-[#cbd8d2] bg-white px-3 text-sm text-[#1d2320]"
-                        placeholder="새 업무"
-                      />
-                      <input
-                        value={newAssignee}
-                        onChange={(event) => setNewAssignee(event.target.value)}
-                        className="min-h-10 border border-[#cbd8d2] bg-white px-3 text-sm text-[#1d2320]"
-                        placeholder="담당"
-                      />
-                      <input
-                        value={newMemo}
-                        onChange={(event) => setNewMemo(event.target.value)}
-                        className="min-h-10 border border-[#cbd8d2] bg-white px-3 text-sm text-[#1d2320]"
-                        placeholder="메모"
-                      />
-                      <button
-                        type="submit"
-                        disabled={!newTitle.trim() || adding}
-                        className="min-h-10 bg-[#1f6f67] px-4 text-sm font-semibold text-white transition hover:bg-[#185951] disabled:cursor-not-allowed disabled:bg-[#9dbbb4]"
+                              return (
+                                <td
+                                  key={step.id}
+                                  className={`border-r border-[#dbe4df] px-0.5 py-2 text-center align-middle ${
+                                    checked
+                                      ? "bg-[#dff3ee]"
+                                      : state === "overdue" || state === "danger"
+                                        ? "bg-[#ffe5df]"
+                                        : state === "warning"
+                                          ? "bg-[#fff3c2]"
+                                          : allowed
+                                            ? "bg-[#fff8dc]"
+                                            : "bg-[#f6f7f6]"
+                                  }`}
+                                  title={`${step.title} · ${step.description}`}
+                                >
+                                  <button
+                                    type="button"
+                                    disabled={disabled}
+                                    onClick={() =>
+                                      updateStep(
+                                        item,
+                                        step,
+                                        checked ? "todo" : "done"
+                                      )
+                                    }
+                                    className={`mx-auto flex h-7 w-7 items-center justify-center border text-[11px] font-semibold transition xl:h-8 xl:w-8 ${
+                                      checked
+                                        ? "border-[#248f84] bg-[#248f84] text-white"
+                                        : disabled
+                                          ? "border-[#d7e1dc] bg-[#eef2ef] text-[#a0aaa5]"
+                                          : state === "overdue" || state === "danger"
+                                            ? "border-[#d9452f] bg-[#e85d48] text-white"
+                                            : state === "warning"
+                                              ? "border-[#d59a18] bg-[#e5aa25] text-white"
+                                              : "border-[#e2c75e] bg-[#f7e47d] text-[#4d4626]"
+                                    }`}
+                                  >
+                                    {saving
+                                      ? "…"
+                                      : checked
+                                        ? "✓"
+                                        : state === "warning" ||
+                                            state === "danger" ||
+                                            state === "overdue"
+                                          ? urgencyLabel(step.dueDate)
+                                          : ""}
+                                  </button>
+                                  <div className="mt-1 text-[9px] font-semibold text-[#6b4d19]">
+                                    {urgencyLabel(step.dueDate)}
+                                  </div>
+                                  <input
+                                    type="date"
+                                    value={step.dueDate ?? ""}
+                                    onChange={(event) =>
+                                      updateStepDueDate(step, event.target.value)
+                                    }
+                                    className="mt-1 h-5 w-full border border-[#d7e1dc] bg-white px-0.5 text-[9px]"
+                                    title={`${step.title} 목표일`}
+                                  />
+                                </td>
+                              );
+                            })}
+                            <td className="px-2 py-2 align-top">
+                              <textarea
+                                value={item.memo}
+                                onChange={(event) =>
+                                  updateLocalItem(item.id, {
+                                    memo: event.target.value,
+                                  })
+                                }
+                                onBlur={(event) =>
+                                  updateItem(item.id, {
+                                    memo: event.target.value,
+                                  })
+                                }
+                                className="min-h-14 w-full resize-y border border-transparent bg-transparent px-1.5 py-1 text-xs leading-5 text-[#1d2320] hover:border-[#cbd8d2] focus:border-[#77b8ae] focus:bg-white xl:text-sm"
+                                placeholder="메모"
+                              />
+                              <div className="text-[10px] text-[#6b7772]">
+                                수정 {formatDate(item.updatedAt)}
+                              </div>
+                            </td>
+                          </tr>
+
+                          {expanded ? (
+                            <tr className="border-b border-[#dbe4df] bg-[#fbfcfb]">
+                              <td />
+                              <td colSpan={stages.length + 4} className="px-3 py-3">
+                                <div className="grid gap-3 lg:grid-cols-[1fr_320px]">
+                                  <div>
+                                    <div className="mb-2 text-sm font-semibold">
+                                      세부 체크리스트
+                                    </div>
+                                    <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
+                                      {item.subtasks.map((subtask) => (
+                                        <label
+                                          key={subtask.id}
+                                          className="flex min-h-9 items-center gap-2 border border-[#d7e1dc] bg-white px-2"
+                                        >
+                                          <input
+                                            type="checkbox"
+                                            checked={subtask.status === "done"}
+                                            onChange={(event) => {
+                                              updateLocalSubtask(subtask.id, {
+                                                status: event.target.checked
+                                                  ? "done"
+                                                  : "todo",
+                                              });
+                                              void updateSubtask(subtask.id, {
+                                                status: event.target.checked
+                                                  ? "done"
+                                                  : "todo",
+                                              });
+                                            }}
+                                            className="h-4 w-4 accent-[#248f84]"
+                                          />
+                                          <input
+                                            value={subtask.title}
+                                            onChange={(event) =>
+                                              updateLocalSubtask(subtask.id, {
+                                                title: event.target.value,
+                                              })
+                                            }
+                                            onBlur={(event) =>
+                                              updateSubtask(subtask.id, {
+                                                title: event.target.value,
+                                              })
+                                            }
+                                            className="min-h-8 flex-1 border border-transparent bg-transparent text-sm"
+                                          />
+                                          {savingSubtaskIds.has(subtask.id) ? (
+                                            <span className="text-xs text-[#1f6f67]">
+                                              저장
+                                            </span>
+                                          ) : null}
+                                        </label>
+                                      ))}
+                                    </div>
+                                    <form
+                                      onSubmit={(event) => {
+                                        event.preventDefault();
+                                        void addSubtask(item.id);
+                                      }}
+                                      className="mt-3 grid gap-2 md:grid-cols-[1fr_100px]"
+                                    >
+                                      <input
+                                        value={subtaskDrafts[item.id] ?? ""}
+                                        onChange={(event) =>
+                                          setSubtaskDrafts((current) => ({
+                                            ...current,
+                                            [item.id]: event.target.value,
+                                          }))
+                                        }
+                                        className="min-h-10 border border-[#cbd8d2] bg-white px-3 text-sm"
+                                        placeholder="예: 현장 조사, 데이터 분석, 보고서 작성"
+                                      />
+                                      <button
+                                        type="submit"
+                                        className="min-h-10 bg-[#1f6f67] px-4 text-sm font-semibold text-white"
+                                      >
+                                        추가
+                                      </button>
+                                    </form>
+                                  </div>
+
+                                  <div className="border border-[#d7e1dc] bg-white p-3">
+                                    <div className="text-sm font-semibold">
+                                      최근 이력
+                                    </div>
+                                    <div className="mt-2 max-h-40 space-y-2 overflow-auto">
+                                      {history
+                                        .filter((entry) => entry.itemId === item.id)
+                                        .slice(0, 6)
+                                        .map((entry) => (
+                                          <div
+                                            key={entry.id}
+                                            className="text-xs leading-5 text-[#53625c]"
+                                          >
+                                            <span className="font-semibold">
+                                              {formatDate(entry.createdAt)}
+                                            </span>{" "}
+                                            {entry.summary}
+                                          </div>
+                                        ))}
+                                      {!history.some(
+                                        (entry) => entry.itemId === item.id
+                                      ) ? (
+                                        <div className="text-xs text-[#6b7772]">
+                                          아직 기록이 없습니다.
+                                        </div>
+                                      ) : null}
+                                    </div>
+                                  </div>
+                                </div>
+                              </td>
+                            </tr>
+                          ) : null}
+                        </>
+                      );
+                    })}
+                </tbody>
+
+                <tfoot>
+                  <tr className="border-t-2 border-[#9fcac1] bg-[#f6fbf8]">
+                    <td className="border-r border-[#dbe4df] bg-[#f6fbf8] px-1 py-3" />
+                    <td colSpan={stages.length + 4} className="px-3 py-3">
+                      <form
+                        onSubmit={addItem}
+                        className="grid gap-2 lg:grid-cols-[160px_minmax(220px,1fr)_140px_130px_minmax(220px,1fr)_100px]"
                       >
-                        {adding ? "추가 중" : "+ 추가"}
-                      </button>
-                    </form>
-                  </td>
-                </tr>
-              </tfoot>
-            </table>
+                        <select
+                          value={newTemplateKey}
+                          onChange={(event) => setNewTemplateKey(event.target.value)}
+                          className="min-h-10 border border-[#cbd8d2] bg-white px-3 text-sm"
+                        >
+                          {templates.map((template) => (
+                            <option key={template.key} value={template.key}>
+                              {template.name}
+                            </option>
+                          ))}
+                        </select>
+                        <input
+                          value={newTitle}
+                          onChange={(event) => setNewTitle(event.target.value)}
+                          className="min-h-10 border border-[#cbd8d2] bg-white px-3 text-sm text-[#1d2320]"
+                          placeholder="새 업무"
+                        />
+                        <input
+                          value={newAssignee}
+                          onChange={(event) => setNewAssignee(event.target.value)}
+                          className="min-h-10 border border-[#cbd8d2] bg-white px-3 text-sm text-[#1d2320]"
+                          placeholder="담당"
+                        />
+                        <input
+                          type="date"
+                          value={newDueDate}
+                          onChange={(event) => setNewDueDate(event.target.value)}
+                          className="min-h-10 border border-[#cbd8d2] bg-white px-3 text-sm"
+                          title="최종 마감일"
+                        />
+                        <input
+                          value={newMemo}
+                          onChange={(event) => setNewMemo(event.target.value)}
+                          className="min-h-10 border border-[#cbd8d2] bg-white px-3 text-sm text-[#1d2320]"
+                          placeholder="메모"
+                        />
+                        <button
+                          type="submit"
+                          disabled={!newTitle.trim() || adding}
+                          className="min-h-10 bg-[#1f6f67] px-4 text-sm font-semibold text-white transition hover:bg-[#185951] disabled:cursor-not-allowed disabled:bg-[#9dbbb4]"
+                        >
+                          {adding ? "추가 중" : "+ 추가"}
+                        </button>
+                      </form>
+                    </td>
+                  </tr>
+                </tfoot>
+              </table>
+            </div>
           </div>
+        ) : (
+          <div className="border border-[#cfdad4] bg-white p-4 shadow-sm">
+            <div className="grid gap-3">
+              {visibleItems.map((item) => {
+                const progress = itemProgress(item);
+                const next = nextStep(item);
+                const rowColor = rowAccentColor(
+                  assigneeSettings[assigneeName(item.assignee)]
+                );
+
+                return (
+                  <div
+                    key={item.id}
+                    className="grid gap-3 border border-[#dbe4df] p-3 md:grid-cols-[280px_1fr_80px]"
+                    style={{ backgroundColor: rowColor }}
+                  >
+                    <div>
+                      <div className="font-semibold">{item.title}</div>
+                      <div className="text-sm text-[#66746e]">
+                        {assigneeName(item.assignee)} · {next?.title ?? "완료"}
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-1">
+                      {item.steps.map((step) => (
+                        <div
+                          key={step.id}
+                          className={`h-7 flex-1 border ${
+                            step.status === "done"
+                              ? "border-[#248f84] bg-[#248f84]"
+                              : urgency(step.dueDate) === "overdue"
+                                ? "border-[#d9452f] bg-[#ffe5df]"
+                                : urgency(step.dueDate) === "warning" ||
+                                    urgency(step.dueDate) === "danger"
+                                  ? "border-[#e5aa25] bg-[#fff3c2]"
+                                  : "border-[#d7e1dc] bg-white"
+                          }`}
+                          title={`${step.title} ${formatDay(step.dueDate)}`}
+                        />
+                      ))}
+                    </div>
+                    <div className="text-right text-sm font-semibold text-[#1f6f67]">
+                      {progress}%
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        <div className="mt-4 grid gap-4 lg:grid-cols-[1fr_360px]">
+          <section className="border border-[#cfdad4] bg-white p-4">
+            <h2 className="text-base font-semibold">변경 이력</h2>
+            <div className="mt-3 max-h-56 space-y-2 overflow-auto">
+              {history.slice(0, 20).map((entry) => (
+                <div key={entry.id} className="text-sm leading-6 text-[#53625c]">
+                  <span className="font-semibold">{formatDate(entry.createdAt)}</span>{" "}
+                  {entry.summary}
+                </div>
+              ))}
+              {!history.length ? (
+                <div className="text-sm text-[#63716b]">아직 변경 이력이 없습니다.</div>
+              ) : null}
+            </div>
+          </section>
+
+          <section className="border border-[#cfdad4] bg-white p-4">
+            <h2 className="text-base font-semibold">Webhook 알림</h2>
+            <p className="mt-1 text-sm text-[#63716b]">
+              단계 완료 시 Slack, Teams, 잔디 Webhook으로 메시지를 보냅니다.
+            </p>
+            <form onSubmit={saveWebhook} className="mt-3 grid gap-2">
+              <input
+                value={webhookUrl}
+                onChange={(event) => setWebhookUrl(event.target.value)}
+                className="min-h-10 border border-[#cbd8d2] bg-white px-3 text-sm"
+                placeholder="https://..."
+              />
+              <button
+                type="submit"
+                className="min-h-10 bg-[#1f6f67] px-4 text-sm font-semibold text-white"
+              >
+                Webhook 저장
+              </button>
+            </form>
+          </section>
         </div>
       </section>
     </main>

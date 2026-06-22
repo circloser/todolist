@@ -7,6 +7,8 @@ type WorkflowItemRow = {
   title: string;
   assignee: string;
   memo: string;
+  due_date: string | null;
+  template_key: string;
   position: number;
   updated_by: string;
   updated_at: string;
@@ -23,10 +25,39 @@ type WorkflowStepRow = {
   position: number;
   progress_value: number | null;
   status: StepStatus;
+  due_date: string | null;
   completed_at: string | null;
   updated_by: string;
   updated_at: string;
   created_at: string;
+};
+
+type WorkflowSubtaskRow = {
+  id: number;
+  item_id: number;
+  title: string;
+  status: StepStatus;
+  position: number;
+  updated_by: string;
+  updated_at: string;
+  created_at: string;
+};
+
+type HistoryRow = {
+  id: number;
+  item_id: number | null;
+  entity_type: string;
+  entity_id: number | null;
+  action: string;
+  summary: string;
+  actor: string;
+  created_at: string;
+};
+
+type AssigneeSettingRow = {
+  assignee: string;
+  color: string;
+  updated_at: string;
 };
 
 type LegacyWorkflowTaskRow = {
@@ -136,6 +167,24 @@ const defaultStages = [
   },
 ];
 
+const templates = [
+  {
+    key: "general-service",
+    name: "일반 용역",
+    description: "계획, 구매/계약, 착수, 과업 진행, 검수, 지급, 결과 보고",
+  },
+  {
+    key: "goods-purchase",
+    name: "물품 구매",
+    description: "견적, 구매 요청, 계약/구매, 검수, 지급 요청 중심",
+  },
+  {
+    key: "internal-research",
+    name: "자체 연구",
+    description: "계획, 착수, 진행률 점검, 검수, 결과 보고 중심",
+  },
+];
+
 function getActor(request: Request) {
   const encodedName = request.headers.get("oai-authenticated-user-full-name");
   const nameEncoding = request.headers.get(
@@ -164,12 +213,36 @@ function toRouteErrorMessage(error: unknown) {
   return message;
 }
 
-function toItem(row: WorkflowItemRow, steps: WorkflowStepRow[]) {
+function normalizeDate(value: unknown) {
+  if (typeof value !== "string") {
+    return null;
+  }
+
+  const trimmed = value.trim();
+
+  if (!trimmed) {
+    return null;
+  }
+
+  return /^\d{4}-\d{2}-\d{2}$/.test(trimmed) ? trimmed : null;
+}
+
+function getTemplate(key?: string) {
+  return templates.find((template) => template.key === key) ?? templates[0];
+}
+
+function toItem(
+  row: WorkflowItemRow,
+  steps: WorkflowStepRow[],
+  subtasks: WorkflowSubtaskRow[]
+) {
   return {
     id: row.id,
     title: row.title,
     assignee: row.assignee,
     memo: row.memo,
+    dueDate: row.due_date,
+    templateKey: row.template_key,
     position: row.position,
     updatedBy: row.updated_by,
     updatedAt: row.updated_at,
@@ -184,12 +257,35 @@ function toItem(row: WorkflowItemRow, steps: WorkflowStepRow[]) {
       position: step.position,
       progressValue: step.progress_value,
       status: step.status,
+      dueDate: step.due_date,
       completedAt: step.completed_at,
       updatedBy: step.updated_by,
       updatedAt: step.updated_at,
       createdAt: step.created_at,
     })),
+    subtasks: subtasks.map((subtask) => ({
+      id: subtask.id,
+      itemId: subtask.item_id,
+      title: subtask.title,
+      status: subtask.status,
+      position: subtask.position,
+      updatedBy: subtask.updated_by,
+      updatedAt: subtask.updated_at,
+      createdAt: subtask.created_at,
+    })),
   };
+}
+
+async function addColumnIfMissing(sql: string) {
+  try {
+    await getD1().prepare(sql).run();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+
+    if (!message.includes("duplicate column name")) {
+      throw error;
+    }
+  }
 }
 
 async function ensureSchema() {
@@ -201,6 +297,8 @@ async function ensureSchema() {
       title TEXT NOT NULL,
       assignee TEXT NOT NULL DEFAULT '',
       memo TEXT NOT NULL DEFAULT '',
+      due_date TEXT,
+      template_key TEXT NOT NULL DEFAULT 'general-service',
       position INTEGER NOT NULL,
       updated_by TEXT NOT NULL DEFAULT '',
       updated_at TEXT NOT NULL,
@@ -216,11 +314,45 @@ async function ensureSchema() {
       position INTEGER NOT NULL,
       progress_value INTEGER,
       status TEXT NOT NULL DEFAULT 'todo' CHECK(status IN ('todo', 'done')),
+      due_date TEXT,
       completed_at TEXT,
       updated_by TEXT NOT NULL DEFAULT '',
       updated_at TEXT NOT NULL,
       created_at TEXT NOT NULL,
       UNIQUE(item_id, stage_key)
+    )`),
+    d1.prepare(`CREATE TABLE IF NOT EXISTS workflow_subtasks (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      item_id INTEGER NOT NULL,
+      title TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'todo' CHECK(status IN ('todo', 'done')),
+      position INTEGER NOT NULL,
+      updated_by TEXT NOT NULL DEFAULT '',
+      updated_at TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    )`),
+    d1.prepare(`CREATE TABLE IF NOT EXISTS assignee_settings (
+      assignee TEXT PRIMARY KEY,
+      color TEXT NOT NULL DEFAULT '#e6f4ef',
+      updated_at TEXT NOT NULL
+    )`),
+    d1.prepare(`CREATE TABLE IF NOT EXISTS workflow_history (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      item_id INTEGER,
+      entity_type TEXT NOT NULL,
+      entity_id INTEGER,
+      action TEXT NOT NULL,
+      summary TEXT NOT NULL,
+      actor TEXT NOT NULL DEFAULT '팀',
+      created_at TEXT NOT NULL
+    )`),
+    d1.prepare(`CREATE TABLE IF NOT EXISTS webhook_settings (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL DEFAULT '팀 알림',
+      url TEXT NOT NULL,
+      enabled INTEGER NOT NULL DEFAULT 1,
+      updated_at TEXT NOT NULL,
+      created_at TEXT NOT NULL
     )`),
     d1.prepare(
       "CREATE INDEX IF NOT EXISTS workflow_items_assignee_idx ON workflow_items (assignee, position)"
@@ -228,7 +360,77 @@ async function ensureSchema() {
     d1.prepare(
       "CREATE INDEX IF NOT EXISTS workflow_steps_item_position_idx ON workflow_steps (item_id, position)"
     ),
+    d1.prepare(
+      "CREATE INDEX IF NOT EXISTS workflow_subtasks_item_position_idx ON workflow_subtasks (item_id, position)"
+    ),
+    d1.prepare(
+      "CREATE INDEX IF NOT EXISTS workflow_history_created_idx ON workflow_history (created_at)"
+    ),
   ]);
+
+  await addColumnIfMissing("ALTER TABLE workflow_items ADD COLUMN due_date TEXT");
+  await addColumnIfMissing(
+    "ALTER TABLE workflow_items ADD COLUMN template_key TEXT NOT NULL DEFAULT 'general-service'"
+  );
+  await addColumnIfMissing("ALTER TABLE workflow_steps ADD COLUMN due_date TEXT");
+}
+
+async function logHistory({
+  itemId,
+  entityType,
+  entityId,
+  action,
+  summary,
+  actor,
+}: {
+  itemId?: number | null;
+  entityType: string;
+  entityId?: number | null;
+  action: string;
+  summary: string;
+  actor: string;
+}) {
+  await getD1()
+    .prepare(`INSERT INTO workflow_history (
+      item_id,
+      entity_type,
+      entity_id,
+      action,
+      summary,
+      actor,
+      created_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?)`)
+    .bind(
+      itemId ?? null,
+      entityType,
+      entityId ?? null,
+      action,
+      summary,
+      actor,
+      new Date().toISOString()
+    )
+    .run();
+}
+
+async function notifyWebhooks(summary: string, payload: Record<string, unknown>) {
+  const webhooks = await getD1()
+    .prepare("SELECT name, url FROM webhook_settings WHERE enabled = 1")
+    .all<{ name: string; url: string }>();
+
+  await Promise.allSettled(
+    (webhooks.results ?? []).map((webhook) =>
+      fetch(webhook.url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          text: summary,
+          summary,
+          source: "습지복원팀 업무 진행표",
+          ...payload,
+        }),
+      })
+    )
+  );
 }
 
 async function readLegacyStatuses() {
@@ -257,6 +459,8 @@ async function createItemWithDefaultSteps({
   title,
   assignee,
   memo,
+  dueDate,
+  templateKey,
   actor,
   position,
   legacyStatuses,
@@ -264,23 +468,38 @@ async function createItemWithDefaultSteps({
   title: string;
   assignee: string;
   memo: string;
+  dueDate?: string | null;
+  templateKey?: string;
   actor: string;
   position: number;
   legacyStatuses?: Map<string, { status: StepStatus; completedAt: string | null }>;
 }) {
   const d1 = getD1();
   const now = new Date().toISOString();
+  const selectedTemplate = getTemplate(templateKey);
   const insertResult = await d1
     .prepare(`INSERT INTO workflow_items (
       title,
       assignee,
       memo,
+      due_date,
+      template_key,
       position,
       updated_by,
       updated_at,
       created_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?)`)
-    .bind(title, assignee, memo, position, actor, now, now)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+    .bind(
+      title,
+      assignee,
+      memo,
+      dueDate ?? null,
+      selectedTemplate.key,
+      position,
+      actor,
+      now,
+      now
+    )
     .run();
   const itemId = Number(insertResult.meta.last_row_id);
 
@@ -299,11 +518,12 @@ async function createItemWithDefaultSteps({
           position,
           progress_value,
           status,
+          due_date,
           completed_at,
           updated_by,
           updated_at,
           created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
         .bind(
           itemId,
           stage.key,
@@ -313,6 +533,7 @@ async function createItemWithDefaultSteps({
           index + 1,
           stage.progress,
           status,
+          null,
           status === "done" ? legacyStatus?.completedAt ?? now : null,
           actor,
           now,
@@ -320,6 +541,15 @@ async function createItemWithDefaultSteps({
         );
     })
   );
+
+  await logHistory({
+    itemId,
+    entityType: "item",
+    entityId: itemId,
+    action: "create",
+    summary: `${actor}님이 '${title}' 업무를 추가함`,
+    actor,
+  });
 
   return itemId;
 }
@@ -344,24 +574,50 @@ async function ensureDefaultItem() {
   });
 }
 
+async function ensureDefaultSettings() {
+  const d1 = getD1();
+  const now = new Date().toISOString();
+  const assignees = await d1
+    .prepare(
+      "SELECT DISTINCT assignee FROM workflow_items WHERE assignee IS NOT NULL AND assignee != ''"
+    )
+    .all<{ assignee: string }>();
+  const colors = ["#e6f4ef", "#edf2ff", "#fff4d6", "#fbe7df", "#efe8ff"];
+
+  await d1.batch(
+    (assignees.results ?? []).map((row, index) =>
+      d1
+        .prepare(
+          "INSERT OR IGNORE INTO assignee_settings (assignee, color, updated_at) VALUES (?, ?, ?)"
+        )
+        .bind(row.assignee, colors[index % colors.length], now)
+    )
+  );
+}
+
 async function prepareWorkflow() {
   await ensureSchema();
   await ensureDefaultItem();
+  await ensureDefaultSettings();
 }
 
 async function getItems() {
   const d1 = getD1();
-  const [itemsResult, stepsResult] = await Promise.all([
+  const [itemsResult, stepsResult, subtasksResult] = await Promise.all([
     d1
       .prepare(
-        "SELECT * FROM workflow_items ORDER BY assignee COLLATE NOCASE, position, id"
+        "SELECT * FROM workflow_items ORDER BY position, id"
       )
       .all<WorkflowItemRow>(),
     d1
       .prepare("SELECT * FROM workflow_steps ORDER BY item_id, position, id")
       .all<WorkflowStepRow>(),
+    d1
+      .prepare("SELECT * FROM workflow_subtasks ORDER BY item_id, position, id")
+      .all<WorkflowSubtaskRow>(),
   ]);
   const stepsByItem = new Map<number, WorkflowStepRow[]>();
+  const subtasksByItem = new Map<number, WorkflowSubtaskRow[]>();
 
   for (const step of stepsResult.results ?? []) {
     const current = stepsByItem.get(step.item_id) ?? [];
@@ -369,8 +625,18 @@ async function getItems() {
     stepsByItem.set(step.item_id, current);
   }
 
+  for (const subtask of subtasksResult.results ?? []) {
+    const current = subtasksByItem.get(subtask.item_id) ?? [];
+    current.push(subtask);
+    subtasksByItem.set(subtask.item_id, current);
+  }
+
   return (itemsResult.results ?? []).map((item) =>
-    toItem(item, stepsByItem.get(item.id) ?? [])
+    toItem(
+      item,
+      stepsByItem.get(item.id) ?? [],
+      subtasksByItem.get(item.id) ?? []
+    )
   );
 }
 
@@ -385,12 +651,56 @@ async function getItem(itemId: number) {
     return null;
   }
 
-  const steps = await d1
-    .prepare("SELECT * FROM workflow_steps WHERE item_id = ? ORDER BY position, id")
-    .bind(itemId)
-    .all<WorkflowStepRow>();
+  const [steps, subtasks] = await Promise.all([
+    d1
+      .prepare("SELECT * FROM workflow_steps WHERE item_id = ? ORDER BY position, id")
+      .bind(itemId)
+      .all<WorkflowStepRow>(),
+    d1
+      .prepare("SELECT * FROM workflow_subtasks WHERE item_id = ? ORDER BY position, id")
+      .bind(itemId)
+      .all<WorkflowSubtaskRow>(),
+  ]);
 
-  return toItem(item, steps.results ?? []);
+  return toItem(item, steps.results ?? [], subtasks.results ?? []);
+}
+
+async function getHistory() {
+  const history = await getD1()
+    .prepare("SELECT * FROM workflow_history ORDER BY created_at DESC, id DESC LIMIT 80")
+    .all<HistoryRow>();
+
+  return (history.results ?? []).map((entry) => ({
+    id: entry.id,
+    itemId: entry.item_id,
+    entityType: entry.entity_type,
+    entityId: entry.entity_id,
+    action: entry.action,
+    summary: entry.summary,
+    actor: entry.actor,
+    createdAt: entry.created_at,
+  }));
+}
+
+async function getAssigneeSettings() {
+  const settings = await getD1()
+    .prepare("SELECT * FROM assignee_settings")
+    .all<AssigneeSettingRow>();
+
+  return Object.fromEntries(
+    (settings.results ?? []).map((setting) => [
+      setting.assignee,
+      setting.color,
+    ])
+  );
+}
+
+async function getWebhookSummary() {
+  const count = await getD1()
+    .prepare("SELECT COUNT(*) AS count FROM webhook_settings WHERE enabled = 1")
+    .first<{ count: number }>();
+
+  return { enabled: Number(count?.count ?? 0) > 0 };
 }
 
 export async function GET(request: Request) {
@@ -400,6 +710,10 @@ export async function GET(request: Request) {
     return Response.json({
       items: await getItems(),
       stages: defaultStages,
+      templates,
+      assigneeSettings: await getAssigneeSettings(),
+      history: await getHistory(),
+      webhook: await getWebhookSummary(),
       viewer: getActor(request),
     });
   } catch (error) {
@@ -415,19 +729,118 @@ export async function POST(request: Request) {
     await prepareWorkflow();
 
     const payload = (await request.json()) as {
+      action?: string;
+      itemId?: number;
       title?: string;
       assignee?: string;
       memo?: string;
+      dueDate?: string;
+      templateKey?: string;
+      webhookUrl?: string;
+      webhookName?: string;
     };
+    const actor = getActor(request);
+    const d1 = getD1();
+
+    if (payload.action === "create-subtask") {
+      const itemId = Number(payload.itemId);
+      const title = payload.title?.trim().slice(0, 160) ?? "";
+
+      if (!Number.isFinite(itemId) || !title) {
+        return Response.json({ error: "세부 체크리스트 내용이 필요합니다." }, { status: 400 });
+      }
+
+      const item = await d1
+        .prepare("SELECT title FROM workflow_items WHERE id = ?")
+        .bind(itemId)
+        .first<{ title: string }>();
+
+      if (!item) {
+        return Response.json({ error: "업무를 찾을 수 없습니다." }, { status: 404 });
+      }
+
+      const last = await d1
+        .prepare("SELECT MAX(position) AS position FROM workflow_subtasks WHERE item_id = ?")
+        .bind(itemId)
+        .first<{ position: number | null }>();
+      const now = new Date().toISOString();
+
+      await d1
+        .prepare(`INSERT INTO workflow_subtasks (
+          item_id,
+          title,
+          status,
+          position,
+          updated_by,
+          updated_at,
+          created_at
+        ) VALUES (?, ?, 'todo', ?, ?, ?, ?)`)
+        .bind(itemId, title, Number(last?.position ?? 0) + 1, actor, now, now)
+        .run();
+
+      await logHistory({
+        itemId,
+        entityType: "subtask",
+        action: "create",
+        summary: `${actor}님이 '${item.title}'에 세부 체크리스트 '${title}'을 추가함`,
+        actor,
+      });
+
+      return Response.json(
+        {
+          item: await getItem(itemId),
+          history: await getHistory(),
+        },
+        { status: 201 }
+      );
+    }
+
+    if (payload.action === "save-webhook") {
+      const url = payload.webhookUrl?.trim() ?? "";
+      const name = payload.webhookName?.trim().slice(0, 80) || "팀 알림";
+
+      if (!/^https:\/\//.test(url)) {
+        return Response.json({ error: "https:// 로 시작하는 Webhook URL이 필요합니다." }, { status: 400 });
+      }
+
+      const now = new Date().toISOString();
+
+      await d1
+        .prepare(`INSERT INTO webhook_settings (
+          name,
+          url,
+          enabled,
+          updated_at,
+          created_at
+        ) VALUES (?, ?, 1, ?, ?)`)
+        .bind(name, url, now, now)
+        .run();
+
+      await logHistory({
+        entityType: "webhook",
+        action: "create",
+        summary: `${actor}님이 Webhook 알림을 추가함`,
+        actor,
+      });
+
+      return Response.json(
+        {
+          webhook: await getWebhookSummary(),
+          history: await getHistory(),
+        },
+        { status: 201 }
+      );
+    }
+
     const title = payload.title?.trim().slice(0, 120) ?? "";
     const assignee = payload.assignee?.trim().slice(0, 80) ?? "";
     const memo = payload.memo?.trim().slice(0, 1000) ?? "";
+    const dueDate = normalizeDate(payload.dueDate);
 
     if (!title) {
       return Response.json({ error: "업무명을 입력해 주세요." }, { status: 400 });
     }
 
-    const d1 = getD1();
     const last = await d1
       .prepare("SELECT MAX(position) AS position FROM workflow_items")
       .first<{ position: number | null }>();
@@ -435,12 +848,20 @@ export async function POST(request: Request) {
       title,
       assignee: assignee || "미지정",
       memo,
-      actor: getActor(request),
+      dueDate,
+      templateKey: payload.templateKey,
+      actor,
       position: Number(last?.position ?? 0) + 1,
     });
     const item = await getItem(itemId);
 
-    return Response.json({ item }, { status: 201 });
+    return Response.json(
+      {
+        item,
+        history: await getHistory(),
+      },
+      { status: 201 }
+    );
   } catch (error) {
     return Response.json(
       { error: toRouteErrorMessage(error) },
@@ -454,12 +875,16 @@ export async function PATCH(request: Request) {
     await prepareWorkflow();
 
     const payload = (await request.json()) as {
+      action?: string;
       itemId?: number;
       order?: number[];
       stepId?: number;
+      subtaskId?: number;
       title?: string;
       assignee?: string;
       memo?: string;
+      dueDate?: string | null;
+      color?: string;
       status?: StepStatus;
     };
     const now = new Date().toISOString();
@@ -499,48 +924,223 @@ export async function PATCH(request: Request) {
         )
       );
 
-      return Response.json({ items: await getItems() });
+      await logHistory({
+        entityType: "item",
+        action: "reorder",
+        summary: `${actor}님이 업무 순서를 변경함`,
+        actor,
+      });
+
+      return Response.json({ items: await getItems(), history: await getHistory() });
+    }
+
+    if (payload.action === "set-assignee-color") {
+      const assignee = payload.assignee?.trim().slice(0, 80) ?? "";
+      const color = payload.color?.trim() ?? "";
+
+      if (!assignee || !/^#[0-9a-fA-F]{6}$/.test(color)) {
+        return Response.json({ error: "담당자와 색상값이 필요합니다." }, { status: 400 });
+      }
+
+      await d1
+        .prepare(`INSERT INTO assignee_settings (assignee, color, updated_at)
+          VALUES (?, ?, ?)
+          ON CONFLICT(assignee) DO UPDATE SET color = excluded.color, updated_at = excluded.updated_at`)
+        .bind(assignee, color, now)
+        .run();
+
+      await logHistory({
+        entityType: "assignee",
+        action: "color",
+        summary: `${actor}님이 '${assignee}' 담당자 색상을 변경함`,
+        actor,
+      });
+
+      return Response.json({
+        assigneeSettings: await getAssigneeSettings(),
+        history: await getHistory(),
+      });
+    }
+
+    if (Number.isFinite(Number(payload.subtaskId))) {
+      const subtaskId = Number(payload.subtaskId);
+      const subtask = await d1
+        .prepare(`SELECT s.*, i.title AS item_title
+          FROM workflow_subtasks s
+          JOIN workflow_items i ON i.id = s.item_id
+          WHERE s.id = ?`)
+        .bind(subtaskId)
+        .first<WorkflowSubtaskRow & { item_title: string }>();
+
+      if (!subtask) {
+        return Response.json({ error: "세부 체크리스트를 찾을 수 없습니다." }, { status: 404 });
+      }
+
+      const title =
+        typeof payload.title === "string"
+          ? payload.title.trim().slice(0, 160)
+          : subtask.title;
+      const status =
+        payload.status === "done" || payload.status === "todo"
+          ? payload.status
+          : subtask.status;
+
+      if (!title) {
+        return Response.json({ error: "세부 체크리스트 내용이 필요합니다." }, { status: 400 });
+      }
+
+      await d1
+        .prepare(`UPDATE workflow_subtasks
+          SET title = ?,
+            status = ?,
+            updated_by = ?,
+            updated_at = ?
+          WHERE id = ?`)
+        .bind(title, status, actor, now, subtaskId)
+        .run();
+
+      const summary =
+        status !== subtask.status
+          ? `${actor}님이 '${subtask.item_title}' 세부 체크리스트 '${title}'을 ${status === "done" ? "완료" : "미완료"}로 변경함`
+          : `${actor}님이 '${subtask.item_title}' 세부 체크리스트를 수정함`;
+
+      await logHistory({
+        itemId: subtask.item_id,
+        entityType: "subtask",
+        entityId: subtaskId,
+        action: "update",
+        summary,
+        actor,
+      });
+
+      return Response.json({
+        item: await getItem(subtask.item_id),
+        history: await getHistory(),
+      });
     }
 
     if (Number.isFinite(Number(payload.stepId))) {
       const stepId = Number(payload.stepId);
-
-      if (payload.status !== "done" && payload.status !== "todo") {
-        return Response.json({ error: "단계 상태가 필요합니다." }, { status: 400 });
-      }
-
       const step = await d1
-        .prepare("SELECT item_id FROM workflow_steps WHERE id = ?")
+        .prepare(`SELECT s.*, i.title AS item_title
+          FROM workflow_steps s
+          JOIN workflow_items i ON i.id = s.item_id
+          WHERE s.id = ?`)
         .bind(stepId)
-        .first<{ item_id: number }>();
+        .first<WorkflowStepRow & { item_title: string }>();
 
       if (!step) {
         return Response.json({ error: "단계를 찾을 수 없습니다." }, { status: 404 });
       }
 
-      await d1.batch([
-        d1
-          .prepare(`UPDATE workflow_steps
-            SET status = ?,
-              completed_at = ?,
-              updated_by = ?,
-              updated_at = ?
-            WHERE id = ?`)
-          .bind(
-            payload.status,
-            payload.status === "done" ? now : null,
-            actor,
-            now,
-            stepId
-          ),
-        d1
-          .prepare(
-            "UPDATE workflow_items SET updated_by = ?, updated_at = ? WHERE id = ?"
-          )
-          .bind(actor, now, step.item_id),
-      ]);
+      if (typeof payload.dueDate === "string" || payload.dueDate === null) {
+        const dueDate = normalizeDate(payload.dueDate);
 
-      return Response.json({ item: await getItem(step.item_id) });
+        await d1.batch([
+          d1
+            .prepare("UPDATE workflow_steps SET due_date = ?, updated_by = ?, updated_at = ? WHERE id = ?")
+            .bind(dueDate, actor, now, stepId),
+          d1
+            .prepare("UPDATE workflow_items SET updated_by = ?, updated_at = ? WHERE id = ?")
+            .bind(actor, now, step.item_id),
+        ]);
+
+        await logHistory({
+          itemId: step.item_id,
+          entityType: "step",
+          entityId: stepId,
+          action: "due-date",
+          summary: `${actor}님이 '${step.item_title}'의 '${step.title}' 목표일을 ${dueDate ?? "비움"}으로 변경함`,
+          actor,
+        });
+
+        return Response.json({
+          item: await getItem(step.item_id),
+          history: await getHistory(),
+        });
+      }
+
+      if (payload.status !== "done" && payload.status !== "todo") {
+        return Response.json({ error: "단계 상태가 필요합니다." }, { status: 400 });
+      }
+
+      if (payload.status === "done") {
+        const previous = await d1
+          .prepare(`SELECT COUNT(*) AS count
+            FROM workflow_steps
+            WHERE item_id = ? AND position < ? AND status != 'done'`)
+          .bind(step.item_id, step.position)
+          .first<{ count: number }>();
+
+        if (Number(previous?.count ?? 0) > 0) {
+          return Response.json(
+            { error: "이전 단계부터 순서대로 완료해야 합니다." },
+            { status: 400 }
+          );
+        }
+      }
+
+      if (payload.status === "todo") {
+        await d1.batch([
+          d1
+            .prepare(`UPDATE workflow_steps
+              SET status = 'todo',
+                completed_at = NULL,
+                updated_by = ?,
+                updated_at = ?
+              WHERE item_id = ? AND position >= ?`)
+            .bind(actor, now, step.item_id, step.position),
+          d1
+            .prepare(
+              "UPDATE workflow_items SET updated_by = ?, updated_at = ? WHERE id = ?"
+            )
+            .bind(actor, now, step.item_id),
+        ]);
+      } else {
+        await d1.batch([
+          d1
+            .prepare(`UPDATE workflow_steps
+              SET status = 'done',
+                completed_at = ?,
+                updated_by = ?,
+                updated_at = ?
+              WHERE id = ?`)
+            .bind(now, actor, now, stepId),
+          d1
+            .prepare(
+              "UPDATE workflow_items SET updated_by = ?, updated_at = ? WHERE id = ?"
+            )
+            .bind(actor, now, step.item_id),
+        ]);
+      }
+
+      const summary = `${actor}님이 '${step.item_title}'의 '${step.title}' 단계를 ${payload.status === "done" ? "완료" : "미완료"}로 변경함`;
+
+      await logHistory({
+        itemId: step.item_id,
+        entityType: "step",
+        entityId: stepId,
+        action: "status",
+        summary,
+        actor,
+      });
+
+      if (payload.status === "done") {
+        await notifyWebhooks(summary, {
+          event: "step.completed",
+          itemId: step.item_id,
+          itemTitle: step.item_title,
+          stepId,
+          stepTitle: step.title,
+          actor,
+          createdAt: now,
+        });
+      }
+
+      return Response.json({
+        item: await getItem(step.item_id),
+        history: await getHistory(),
+      });
     }
 
     if (Number.isFinite(Number(payload.itemId))) {
@@ -566,6 +1166,10 @@ export async function PATCH(request: Request) {
         typeof payload.memo === "string"
           ? payload.memo.trim().slice(0, 1000)
           : existing.memo;
+      const dueDate =
+        typeof payload.dueDate === "string" || payload.dueDate === null
+          ? normalizeDate(payload.dueDate)
+          : existing.due_date;
 
       if (!title) {
         return Response.json({ error: "업무명을 입력해 주세요." }, { status: 400 });
@@ -576,13 +1180,34 @@ export async function PATCH(request: Request) {
           SET title = ?,
             assignee = ?,
             memo = ?,
+            due_date = ?,
             updated_by = ?,
             updated_at = ?
           WHERE id = ?`)
-        .bind(title, assignee, memo, actor, now, itemId)
+        .bind(title, assignee, memo, dueDate, actor, now, itemId)
         .run();
 
-      return Response.json({ item: await getItem(itemId) });
+      await d1
+        .prepare(
+          "INSERT OR IGNORE INTO assignee_settings (assignee, color, updated_at) VALUES (?, '#e6f4ef', ?)"
+        )
+        .bind(assignee, now)
+        .run();
+
+      await logHistory({
+        itemId,
+        entityType: "item",
+        entityId: itemId,
+        action: "update",
+        summary: `${actor}님이 '${title}' 업무 정보를 수정함`,
+        actor,
+      });
+
+      return Response.json({
+        item: await getItem(itemId),
+        assigneeSettings: await getAssigneeSettings(),
+        history: await getHistory(),
+      });
     }
 
     return Response.json({ error: "변경할 업무가 필요합니다." }, { status: 400 });
