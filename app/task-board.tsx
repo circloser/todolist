@@ -1,9 +1,10 @@
 "use client";
 
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { DragEvent, FormEvent, useEffect, useMemo, useState } from "react";
 
 type StepStatus = "todo" | "done";
 type TaskFilter = "all" | "open" | "done";
+type SortMode = "manual" | "assignee" | "progress" | "updated";
 
 type WorkflowStep = {
   id: number;
@@ -42,8 +43,15 @@ type TaskResponse = {
 
 const filters: Array<{ key: TaskFilter; label: string }> = [
   { key: "all", label: "전체" },
-  { key: "open", label: "진행 중" },
+  { key: "open", label: "진행" },
   { key: "done", label: "완료" },
+];
+
+const sortOptions: Array<{ key: SortMode; label: string }> = [
+  { key: "manual", label: "수동" },
+  { key: "assignee", label: "담당자" },
+  { key: "progress", label: "진도" },
+  { key: "updated", label: "최근" },
 ];
 
 function formatDate(value?: string | null) {
@@ -57,6 +65,10 @@ function formatDate(value?: string | null) {
     hour: "2-digit",
     minute: "2-digit",
   }).format(new Date(value));
+}
+
+function assigneeName(value: string) {
+  return value.trim() || "미지정";
 }
 
 function completionCount(item: WorkflowItem) {
@@ -76,22 +88,38 @@ function isItemDone(item: WorkflowItem) {
 }
 
 function nextStepTitle(item: WorkflowItem) {
-  return item.steps.find((step) => step.status !== "done")?.title ?? "전체 완료";
+  return item.steps.find((step) => step.status !== "done")?.title ?? "완료";
 }
 
-function assigneeName(value: string) {
-  return value.trim() || "미지정";
+function applyManualPositions(items: WorkflowItem[], order: number[]) {
+  const positions = new Map(order.map((id, index) => [id, index + 1]));
+
+  return items.map((item) => ({
+    ...item,
+    position: positions.get(item.id) ?? item.position,
+  }));
+}
+
+function moveItem<T>(list: T[], from: number, to: number) {
+  const next = [...list];
+  const [moved] = next.splice(from, 1);
+  next.splice(to, 0, moved);
+  return next;
 }
 
 export default function TaskBoard() {
   const [items, setItems] = useState<WorkflowItem[]>([]);
   const [viewer, setViewer] = useState("팀");
   const [filter, setFilter] = useState<TaskFilter>("all");
+  const [sortMode, setSortMode] = useState<SortMode>("manual");
+  const [assigneeFilter, setAssigneeFilter] = useState("all");
   const [newTitle, setNewTitle] = useState("");
   const [newAssignee, setNewAssignee] = useState("");
   const [newMemo, setNewMemo] = useState("");
   const [loading, setLoading] = useState(true);
   const [adding, setAdding] = useState(false);
+  const [draggedId, setDraggedId] = useState<number | null>(null);
+  const [savingOrder, setSavingOrder] = useState(false);
   const [savingItemIds, setSavingItemIds] = useState<Set<number>>(new Set());
   const [savingStepIds, setSavingStepIds] = useState<Set<number>>(new Set());
   const [error, setError] = useState("");
@@ -125,55 +153,66 @@ export default function TaskBoard() {
     void loadTasks();
   }, []);
 
-  const sortedItems = useMemo(
+  const assignees = useMemo(
     () =>
-      [...items].sort((first, second) => {
+      [...new Set(items.map((item) => assigneeName(item.assignee)))].sort(
+        (first, second) => first.localeCompare(second, "ko-KR")
+      ),
+    [items]
+  );
+
+  const baseItems = useMemo(() => {
+    return [...items].filter((item) => {
+      if (assigneeFilter !== "all" && assigneeName(item.assignee) !== assigneeFilter) {
+        return false;
+      }
+
+      if (filter === "open") {
+        return !isItemDone(item);
+      }
+
+      if (filter === "done") {
+        return isItemDone(item);
+      }
+
+      return true;
+    });
+  }, [assigneeFilter, filter, items]);
+
+  const visibleItems = useMemo(() => {
+    const next = [...baseItems];
+
+    if (sortMode === "assignee") {
+      return next.sort((first, second) => {
         const assigneeCompare = assigneeName(first.assignee).localeCompare(
           assigneeName(second.assignee),
           "ko-KR"
         );
 
-        if (assigneeCompare !== 0) {
-          return assigneeCompare;
-        }
-
-        return first.position - second.position || first.id - second.id;
-      }),
-    [items]
-  );
-
-  const visibleItems = sortedItems.filter((item) => {
-    if (filter === "open") {
-      return !isItemDone(item);
+        return assigneeCompare || first.position - second.position;
+      });
     }
 
-    if (filter === "done") {
-      return isItemDone(item);
+    if (sortMode === "progress") {
+      return next.sort(
+        (first, second) =>
+          itemProgress(first) - itemProgress(second) ||
+          first.position - second.position
+      );
     }
 
-    return true;
-  });
-
-  const groups = useMemo(() => {
-    const byAssignee = new Map<string, WorkflowItem[]>();
-
-    for (const item of visibleItems) {
-      const key = assigneeName(item.assignee);
-      byAssignee.set(key, [...(byAssignee.get(key) ?? []), item]);
+    if (sortMode === "updated") {
+      return next.sort(
+        (first, second) =>
+          new Date(second.updatedAt).getTime() -
+            new Date(first.updatedAt).getTime() || first.position - second.position
+      );
     }
 
-    return [...byAssignee.entries()].map(([assignee, groupItems]) => ({
-      assignee,
-      items: groupItems,
-      progress: groupItems.length
-        ? Math.round(
-            groupItems.reduce((sum, item) => sum + itemProgress(item), 0) /
-              groupItems.length
-          )
-        : 0,
-    }));
-  }, [visibleItems]);
+    return next.sort((first, second) => first.position - second.position);
+  }, [baseItems, sortMode]);
 
+  const stages = visibleItems[0]?.steps ?? items[0]?.steps ?? [];
   const totalSteps = items.reduce((sum, item) => sum + item.steps.length, 0);
   const completedSteps = items.reduce(
     (sum, item) => sum + completionCount(item),
@@ -183,6 +222,24 @@ export default function TaskBoard() {
     ? Math.round((completedSteps / totalSteps) * 100)
     : 0;
   const openItemCount = items.filter((item) => !isItemDone(item)).length;
+
+  const assigneeStats = useMemo(
+    () =>
+      assignees.map((assignee) => {
+        const assignedItems = items.filter(
+          (item) => assigneeName(item.assignee) === assignee
+        );
+        const progress = assignedItems.length
+          ? Math.round(
+              assignedItems.reduce((sum, item) => sum + itemProgress(item), 0) /
+                assignedItems.length
+            )
+          : 0;
+
+        return { assignee, count: assignedItems.length, progress };
+      }),
+    [assignees, items]
+  );
 
   function replaceItem(nextItem: WorkflowItem) {
     setItems((current) =>
@@ -309,6 +366,7 @@ export default function TaskBoard() {
       setNewTitle("");
       setNewAssignee("");
       setNewMemo("");
+      setSortMode("manual");
     } catch (addError) {
       setError(
         addError instanceof Error ? addError.message : "업무를 추가하지 못했습니다."
@@ -318,361 +376,426 @@ export default function TaskBoard() {
     }
   }
 
+  async function persistOrder(order: number[]) {
+    const previousItems = items;
+    setError("");
+    setSavingOrder(true);
+    setSortMode("manual");
+    setItems((current) => applyManualPositions(current, order));
+
+    try {
+      const response = await fetch("/api/tasks", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ order }),
+      });
+      const data = (await response.json()) as TaskResponse;
+
+      if (!response.ok || !data.items) {
+        throw new Error(data.error ?? "업무 순서를 저장하지 못했습니다.");
+      }
+
+      setItems(data.items);
+    } catch (saveError) {
+      setItems(previousItems);
+      setError(
+        saveError instanceof Error
+          ? saveError.message
+          : "업무 순서를 저장하지 못했습니다."
+      );
+    } finally {
+      setSavingOrder(false);
+    }
+  }
+
+  function handleDrop(targetId: number) {
+    if (!draggedId || draggedId === targetId) {
+      setDraggedId(null);
+      return;
+    }
+
+    const sourceIndex = visibleItems.findIndex((item) => item.id === draggedId);
+    const targetIndex = visibleItems.findIndex((item) => item.id === targetId);
+
+    if (sourceIndex < 0 || targetIndex < 0) {
+      setDraggedId(null);
+      return;
+    }
+
+    const reorderedVisible = moveItem(visibleItems, sourceIndex, targetIndex);
+    const visibleIds = new Set(visibleItems.map((item) => item.id));
+    let visibleIndex = 0;
+    const fullOrder = [...items]
+      .sort((first, second) => first.position - second.position)
+      .map((item) =>
+        visibleIds.has(item.id) ? reorderedVisible[visibleIndex++].id : item.id
+      );
+
+    setDraggedId(null);
+    void persistOrder(fullOrder);
+  }
+
+  function handleDragOver(event: DragEvent<HTMLTableRowElement>) {
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "move";
+  }
+
   return (
-    <main className="min-h-dvh bg-[#f5f7f4] text-[#1d2320]">
-      <section className="border-b border-[#dce4df] bg-white">
-        <div className="mx-auto grid max-w-7xl gap-6 px-4 py-6 sm:px-6 lg:grid-cols-[1fr_360px] lg:px-8">
-          <div className="flex flex-col justify-between gap-6">
-            <div className="space-y-4">
+    <main className="min-h-dvh bg-[#f4f6f3] text-[#1d2320]">
+      <header className="border-b border-[#d9e1dc] bg-white">
+        <div className="mx-auto flex max-w-[1600px] flex-col gap-4 px-4 py-4 sm:px-6 lg:px-8">
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+            <div>
               <div className="flex flex-wrap items-center gap-2 text-sm font-semibold text-[#4f6f68]">
-                <span className="rounded-full bg-[#e6f4ef] px-3 py-1">
-                  담당자별 보드
+                <span className="rounded bg-[#e6f4ef] px-2.5 py-1">
+                  습지복원팀
                 </span>
                 <span>{viewer}</span>
               </div>
-              <div className="max-w-3xl space-y-3">
-                <h1 className="text-3xl font-semibold sm:text-4xl">
-                  팀 진행 체크리스트
-                </h1>
-                <p className="text-base leading-7 text-[#5a665f]">
-                  업무별 진행 단계를 가로로 체크하고 담당자별로 정렬합니다.
-                </p>
-              </div>
+              <h1 className="mt-2 text-2xl font-semibold sm:text-3xl">
+                업무 진행표
+              </h1>
             </div>
 
-            <div className="grid gap-3 sm:grid-cols-3">
-              <div className="rounded-lg border border-[#d8e0db] bg-[#f8faf8] p-4">
-                <p className="text-xs font-semibold text-[#64746d]">전체 진도</p>
-                <p className="mt-2 text-3xl font-semibold">
-                  {overallProgress}%
-                </p>
+            <div className="grid grid-cols-3 gap-2 sm:min-w-[420px]">
+              <div className="border border-[#d8e0db] bg-[#f8faf8] px-3 py-2">
+                <p className="text-xs font-semibold text-[#64746d]">전체</p>
+                <p className="text-xl font-semibold">{overallProgress}%</p>
               </div>
-              <div className="rounded-lg border border-[#d8e0db] bg-[#f8faf8] p-4">
-                <p className="text-xs font-semibold text-[#64746d]">업무 수</p>
-                <p className="mt-2 text-3xl font-semibold">{items.length}</p>
+              <div className="border border-[#d8e0db] bg-[#f8faf8] px-3 py-2">
+                <p className="text-xs font-semibold text-[#64746d]">업무</p>
+                <p className="text-xl font-semibold">{items.length}</p>
               </div>
-              <div className="rounded-lg border border-[#d8e0db] bg-[#f8faf8] p-4">
-                <p className="text-xs font-semibold text-[#64746d]">진행 중</p>
-                <p className="mt-2 text-3xl font-semibold">{openItemCount}</p>
+              <div className="border border-[#d8e0db] bg-[#f8faf8] px-3 py-2">
+                <p className="text-xs font-semibold text-[#64746d]">진행</p>
+                <p className="text-xl font-semibold">{openItemCount}</p>
               </div>
-            </div>
-
-            <div
-              className="h-3 overflow-hidden rounded-full bg-[#dfe7e1]"
-              aria-label={`전체 진도 ${overallProgress}%`}
-            >
-              <div
-                className="h-full rounded-full bg-[#248f84] transition-all"
-                style={{ width: `${overallProgress}%` }}
-              />
             </div>
           </div>
 
-          <div className="min-h-[220px] overflow-hidden rounded-lg border border-[#d6ded8] bg-[#edf3f1]">
-            <img
-              src="/workflow-board.png"
-              alt=""
-              className="h-full min-h-[220px] w-full object-cover"
-            />
-          </div>
-        </div>
-      </section>
-
-      <section className="mx-auto grid max-w-7xl gap-6 px-4 py-6 sm:px-6 lg:grid-cols-[320px_1fr] lg:px-8">
-        <aside className="space-y-4">
-          <form
-            onSubmit={addItem}
-            className="rounded-lg border border-[#d6ded8] bg-white p-4 shadow-sm"
-          >
-            <h2 className="text-base font-semibold">업무 추가</h2>
-            <label className="mt-4 block text-sm font-medium text-[#4b5d56]">
-              업무명
-              <input
-                value={newTitle}
-                onChange={(event) => setNewTitle(event.target.value)}
-                className="mt-2 w-full rounded-md border border-[#cbd8d2] bg-white px-3 py-2 text-sm text-[#1d2320]"
-                placeholder="예: 홍보물 제작"
-              />
-            </label>
-            <label className="mt-3 block text-sm font-medium text-[#4b5d56]">
-              담당
-              <input
-                value={newAssignee}
-                onChange={(event) => setNewAssignee(event.target.value)}
-                className="mt-2 w-full rounded-md border border-[#cbd8d2] bg-white px-3 py-2 text-sm text-[#1d2320]"
-                placeholder="담당자"
-              />
-            </label>
-            <label className="mt-3 block text-sm font-medium text-[#4b5d56]">
-              메모
-              <textarea
-                value={newMemo}
-                onChange={(event) => setNewMemo(event.target.value)}
-                className="mt-2 min-h-20 w-full resize-y rounded-md border border-[#cbd8d2] bg-white px-3 py-2 text-sm leading-6 text-[#1d2320]"
-                placeholder="참고 사항"
-              />
-            </label>
-            <button
-              type="submit"
-              disabled={!newTitle.trim() || adding}
-              className="mt-4 inline-flex min-h-10 w-full items-center justify-center rounded-md bg-[#1f6f67] px-4 text-sm font-semibold text-white transition hover:bg-[#185951] disabled:cursor-not-allowed disabled:bg-[#9dbbb4]"
-            >
-              {adding ? "추가 중" : "+ 추가"}
-            </button>
-          </form>
-
-          <div className="rounded-lg border border-[#d6ded8] bg-white p-4 shadow-sm">
-            <h2 className="text-base font-semibold">담당자 현황</h2>
-            <div className="mt-4 space-y-3">
-              {groups.length ? (
-                groups.map((group) => (
-                  <div key={group.assignee}>
-                    <div className="flex items-center justify-between gap-3 text-sm">
-                      <span className="truncate font-semibold">
-                        {group.assignee}
-                      </span>
-                      <span className="shrink-0 text-[#66746e]">
-                        {group.items.length}건 · {group.progress}%
-                      </span>
-                    </div>
-                    <div className="mt-2 h-2 overflow-hidden rounded-full bg-[#e2e9e5]">
-                      <div
-                        className="h-full rounded-full bg-[#248f84]"
-                        style={{ width: `${group.progress}%` }}
-                      />
-                    </div>
-                  </div>
-                ))
-              ) : (
-                <p className="text-sm text-[#63716b]">표시할 업무가 없습니다.</p>
-              )}
-            </div>
-          </div>
-        </aside>
-
-        <div className="space-y-4">
-          <div className="flex flex-col gap-3 rounded-lg border border-[#d6ded8] bg-white p-4 shadow-sm sm:flex-row sm:items-center sm:justify-between">
-            <div>
-              <h2 className="text-lg font-semibold">업무별 가로 진도</h2>
-              <p className="mt-1 text-sm text-[#63716b]">
-                담당자 이름순으로 정렬
-              </p>
-            </div>
-            <div className="grid grid-cols-3 overflow-hidden rounded-md border border-[#cbd8d2] bg-[#f3f6f4] p-1">
-              {filters.map((item) => (
-                <button
-                  key={item.key}
-                  type="button"
-                  onClick={() => setFilter(item.key)}
-                  className={`min-h-9 px-4 text-sm font-semibold transition ${
-                    filter === item.key
-                      ? "rounded bg-white text-[#1f6f67] shadow-sm"
-                      : "text-[#5f6f68] hover:text-[#1d2320]"
-                  }`}
+          <div className="grid gap-3 lg:grid-cols-[1fr_auto_auto] lg:items-end">
+            <div className="grid gap-2 sm:grid-cols-[minmax(180px,260px)_minmax(180px,220px)_1fr]">
+              <label className="text-sm font-medium text-[#4b5d56]">
+                담당자
+                <select
+                  value={assigneeFilter}
+                  onChange={(event) => setAssigneeFilter(event.target.value)}
+                  className="mt-1 min-h-10 w-full border border-[#cbd8d2] bg-white px-3 text-sm text-[#1d2320]"
                 >
-                  {item.label}
+                  <option value="all">전체</option>
+                  {assignees.map((assignee) => (
+                    <option key={assignee} value={assignee}>
+                      {assignee}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <label className="text-sm font-medium text-[#4b5d56]">
+                정렬
+                <select
+                  value={sortMode}
+                  onChange={(event) => setSortMode(event.target.value as SortMode)}
+                  className="mt-1 min-h-10 w-full border border-[#cbd8d2] bg-white px-3 text-sm text-[#1d2320]"
+                >
+                  {sortOptions.map((option) => (
+                    <option key={option.key} value={option.key}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <div className="flex items-end">
+                <div className="grid w-full grid-cols-3 overflow-hidden border border-[#cbd8d2] bg-[#f3f6f4] p-1">
+                  {filters.map((item) => (
+                    <button
+                      key={item.key}
+                      type="button"
+                      onClick={() => setFilter(item.key)}
+                      className={`min-h-9 px-3 text-sm font-semibold transition ${
+                        filter === item.key
+                          ? "bg-white text-[#1f6f67] shadow-sm"
+                          : "text-[#5f6f68] hover:text-[#1d2320]"
+                      }`}
+                    >
+                      {item.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            <div className="flex flex-wrap gap-2">
+              {assigneeStats.slice(0, 5).map((stat) => (
+                <button
+                  key={stat.assignee}
+                  type="button"
+                  onClick={() => setAssigneeFilter(stat.assignee)}
+                  className="min-h-10 border border-[#d4ded8] bg-white px-3 text-left text-sm hover:border-[#8fbfb5]"
+                >
+                  <span className="font-semibold">{stat.assignee}</span>
+                  <span className="ml-2 text-[#66746e]">
+                    {stat.count}건 · {stat.progress}%
+                  </span>
                 </button>
               ))}
             </div>
+
+            <div className="text-sm font-semibold text-[#4f6f68]">
+              {savingOrder ? "순서 저장 중" : `${visibleItems.length}건 표시`}
+            </div>
           </div>
+        </div>
+      </header>
 
-          {error ? (
-            <div className="rounded-lg border border-[#e5b5a4] bg-[#fff3ee] px-4 py-3 text-sm font-medium text-[#8c3f2a]">
-              {error}
-            </div>
-          ) : null}
+      <section className="mx-auto max-w-[1600px] px-4 py-4 sm:px-6 lg:px-8">
+        {error ? (
+          <div className="mb-3 border border-[#e5b5a4] bg-[#fff3ee] px-4 py-3 text-sm font-medium text-[#8c3f2a]">
+            {error}
+          </div>
+        ) : null}
 
-          {loading ? (
-            <div className="rounded-lg border border-[#d6ded8] bg-white p-8 text-center text-sm text-[#63716b]">
-              불러오는 중
-            </div>
-          ) : (
-            <div className="space-y-6">
-              {groups.map((group) => (
-                <section key={group.assignee} className="space-y-3">
-                  <div className="flex items-center justify-between gap-3">
-                    <h3 className="text-base font-semibold">
-                      {group.assignee}
-                    </h3>
-                    <span className="rounded bg-white px-3 py-1 text-sm font-semibold text-[#4f6f68] shadow-sm">
-                      {group.items.length}건
-                    </span>
-                  </div>
+        <div className="overflow-hidden border border-[#cfdad4] bg-white shadow-sm">
+          <div className="overflow-auto">
+            <table className="min-w-[1680px] border-collapse text-sm">
+              <thead>
+                <tr className="bg-[#f7faf8] text-left text-xs font-semibold text-[#53625c]">
+                  <th className="sticky left-0 z-30 w-12 border-b border-r border-[#dbe4df] bg-[#f7faf8] px-2 py-3" />
+                  <th className="sticky left-12 z-30 w-64 border-b border-r border-[#dbe4df] bg-[#f7faf8] px-3 py-3">
+                    업무
+                  </th>
+                  <th className="sticky left-[304px] z-30 w-36 border-b border-r border-[#dbe4df] bg-[#f7faf8] px-3 py-3">
+                    담당
+                  </th>
+                  <th className="w-32 border-b border-r border-[#dbe4df] px-3 py-3">
+                    진도
+                  </th>
+                  {stages.map((stage) => (
+                    <th
+                      key={stage.stageKey}
+                      className="w-24 border-b border-r border-[#dbe4df] px-2 py-3 text-center"
+                      title={stage.description}
+                    >
+                      <span className="block leading-4">{stage.title}</span>
+                      <span className="mt-1 block text-[11px] font-medium text-[#75837d]">
+                        {stage.phaseGroup}
+                      </span>
+                    </th>
+                  ))}
+                  <th className="w-60 border-b border-[#dbe4df] px-3 py-3">
+                    메모
+                  </th>
+                </tr>
+              </thead>
 
-                  <div className="space-y-3">
-                    {group.items.map((item) => {
-                      const progress = itemProgress(item);
-                      const done = isItemDone(item);
+              <tbody>
+                {loading ? (
+                  <tr>
+                    <td
+                      colSpan={stages.length + 5}
+                      className="px-4 py-12 text-center text-[#63716b]"
+                    >
+                      불러오는 중
+                    </td>
+                  </tr>
+                ) : null}
 
-                      return (
-                        <article
-                          key={item.id}
-                          className="rounded-lg border border-[#d6ded8] bg-white p-4 shadow-sm"
-                        >
-                          <div className="grid gap-4 xl:grid-cols-[300px_minmax(0,1fr)]">
-                            <div className="space-y-3">
-                              <label className="block text-sm font-medium text-[#4b5d56]">
-                                업무명
-                                <input
-                                  value={item.title}
-                                  onChange={(event) =>
-                                    updateLocalItem(item.id, {
-                                      title: event.target.value,
-                                    })
-                                  }
-                                  onBlur={(event) =>
-                                    updateItem(item.id, {
-                                      title: event.target.value,
-                                    })
-                                  }
-                                  className="mt-2 w-full rounded-md border border-[#cbd8d2] bg-white px-3 py-2 text-sm font-semibold text-[#1d2320]"
-                                />
-                              </label>
-                              <label className="block text-sm font-medium text-[#4b5d56]">
-                                담당
-                                <input
-                                  value={item.assignee}
-                                  onChange={(event) =>
-                                    updateLocalItem(item.id, {
-                                      assignee: event.target.value,
-                                    })
-                                  }
-                                  onBlur={(event) =>
-                                    updateItem(item.id, {
-                                      assignee: event.target.value,
-                                    })
-                                  }
-                                  className="mt-2 w-full rounded-md border border-[#cbd8d2] bg-white px-3 py-2 text-sm text-[#1d2320]"
-                                />
-                              </label>
-                              <label className="block text-sm font-medium text-[#4b5d56]">
-                                메모
-                                <textarea
-                                  value={item.memo}
-                                  onChange={(event) =>
-                                    updateLocalItem(item.id, {
-                                      memo: event.target.value,
-                                    })
-                                  }
-                                  onBlur={(event) =>
-                                    updateItem(item.id, {
-                                      memo: event.target.value,
-                                    })
-                                  }
-                                  className="mt-2 min-h-20 w-full resize-y rounded-md border border-[#cbd8d2] bg-white px-3 py-2 text-sm leading-6 text-[#1d2320]"
-                                  placeholder="상태 메모"
-                                />
-                              </label>
-                              <div className="flex flex-wrap gap-3 text-xs text-[#6b7772]">
-                                <span>{done ? "완료" : nextStepTitle(item)}</span>
-                                <span>수정 {formatDate(item.updatedAt)}</span>
-                                {savingItemIds.has(item.id) ? (
-                                  <span className="font-semibold text-[#1f6f67]">
-                                    저장 중
-                                  </span>
-                                ) : null}
-                              </div>
-                            </div>
+                {!loading && !visibleItems.length ? (
+                  <tr>
+                    <td
+                      colSpan={stages.length + 5}
+                      className="px-4 py-12 text-center text-[#63716b]"
+                    >
+                      표시할 업무가 없습니다.
+                    </td>
+                  </tr>
+                ) : null}
 
-                            <div className="min-w-0 space-y-4">
-                              <div className="flex items-center gap-3">
-                                <div className="h-3 flex-1 overflow-hidden rounded-full bg-[#e2e9e5]">
-                                  <div
-                                    className="h-full rounded-full bg-[#248f84] transition-all"
-                                    style={{ width: `${progress}%` }}
-                                  />
-                                </div>
-                                <span className="w-12 text-right text-sm font-semibold text-[#1f6f67]">
-                                  {progress}%
-                                </span>
-                              </div>
+                {!loading &&
+                  visibleItems.map((item) => {
+                    const progress = itemProgress(item);
+                    const done = isItemDone(item);
 
-                              <div className="overflow-x-auto pb-2">
-                                <div className="flex min-w-max items-start">
-                                  {item.steps.map((step, index) => {
-                                    const checked = step.status === "done";
-                                    const saving = savingStepIds.has(step.id);
-
-                                    return (
-                                      <div
-                                        key={step.id}
-                                        className="relative w-36 shrink-0 px-2"
-                                      >
-                                        {index > 0 ? (
-                                          <div
-                                            className={`absolute left-0 top-5 h-0.5 w-1/2 ${
-                                              checked
-                                                ? "bg-[#69afa5]"
-                                                : "bg-[#cbd8d2]"
-                                            }`}
-                                          />
-                                        ) : null}
-                                        {index < item.steps.length - 1 ? (
-                                          <div
-                                            className={`absolute right-0 top-5 h-0.5 w-1/2 ${
-                                              checked
-                                                ? "bg-[#69afa5]"
-                                                : "bg-[#cbd8d2]"
-                                            }`}
-                                          />
-                                        ) : null}
-                                        <button
-                                          type="button"
-                                          onClick={() =>
-                                            updateStep(
-                                              step.id,
-                                              checked ? "todo" : "done"
-                                            )
-                                          }
-                                          className={`relative z-10 mx-auto flex h-10 w-10 items-center justify-center rounded-full border text-sm font-bold transition ${
-                                            checked
-                                              ? "border-[#248f84] bg-[#248f84] text-white"
-                                              : "border-[#b9cbc4] bg-white text-[#7b8882] hover:border-[#248f84]"
-                                          }`}
-                                          aria-label={`${item.title} ${step.title}`}
-                                        >
-                                          {checked ? "✓" : step.position}
-                                        </button>
-                                        <div className="mt-3 min-h-20 text-center">
-                                          <p
-                                            className={`text-xs font-semibold leading-5 ${
-                                              checked
-                                                ? "text-[#1f6f67]"
-                                                : "text-[#31413b]"
-                                            }`}
-                                          >
-                                            {step.title}
-                                          </p>
-                                          <p className="mt-1 text-[11px] leading-4 text-[#6b7772]">
-                                            {step.phaseGroup}
-                                          </p>
-                                          {saving ? (
-                                            <p className="mt-1 text-[11px] font-semibold text-[#1f6f67]">
-                                              저장 중
-                                            </p>
-                                          ) : null}
-                                        </div>
-                                      </div>
-                                    );
-                                  })}
-                                </div>
-                              </div>
-                            </div>
+                    return (
+                      <tr
+                        key={item.id}
+                        onDragOver={handleDragOver}
+                        onDrop={() => handleDrop(item.id)}
+                        className={`group border-b border-[#e4ebe7] ${
+                          draggedId === item.id ? "bg-[#edf7f4]" : "bg-white"
+                        } hover:bg-[#f8fbf9]`}
+                      >
+                        <td className="sticky left-0 z-20 border-r border-[#dbe4df] bg-inherit px-2 py-2 align-top">
+                          <button
+                            type="button"
+                            draggable
+                            onDragStart={(event) => {
+                              setDraggedId(item.id);
+                              event.dataTransfer.effectAllowed = "move";
+                            }}
+                            onDragEnd={() => setDraggedId(null)}
+                            className="flex h-9 w-8 cursor-grab items-center justify-center border border-[#d2ddd7] bg-white text-[#72817a] active:cursor-grabbing"
+                            title="드래그"
+                          >
+                            ⋮⋮
+                          </button>
+                        </td>
+                        <td className="sticky left-12 z-20 border-r border-[#dbe4df] bg-inherit px-2 py-2 align-top">
+                          <input
+                            value={item.title}
+                            onChange={(event) =>
+                              updateLocalItem(item.id, {
+                                title: event.target.value,
+                              })
+                            }
+                            onBlur={(event) =>
+                              updateItem(item.id, {
+                                title: event.target.value,
+                              })
+                            }
+                            className="min-h-9 w-full border border-transparent bg-transparent px-2 text-sm font-semibold text-[#1d2320] hover:border-[#cbd8d2] focus:border-[#77b8ae] focus:bg-white"
+                          />
+                          <div className="mt-1 px-2 text-xs text-[#6b7772]">
+                            {done ? "완료" : nextStepTitle(item)} · 수정{" "}
+                            {formatDate(item.updatedAt)}
                           </div>
-                        </article>
-                      );
-                    })}
-                  </div>
-                </section>
-              ))}
+                        </td>
+                        <td className="sticky left-[304px] z-20 border-r border-[#dbe4df] bg-inherit px-2 py-2 align-top">
+                          <input
+                            value={item.assignee}
+                            onChange={(event) =>
+                              updateLocalItem(item.id, {
+                                assignee: event.target.value,
+                              })
+                            }
+                            onBlur={(event) =>
+                              updateItem(item.id, {
+                                assignee: event.target.value,
+                              })
+                            }
+                            className="min-h-9 w-full border border-transparent bg-transparent px-2 text-sm text-[#1d2320] hover:border-[#cbd8d2] focus:border-[#77b8ae] focus:bg-white"
+                          />
+                          {savingItemIds.has(item.id) ? (
+                            <div className="mt-1 px-2 text-xs font-semibold text-[#1f6f67]">
+                              저장 중
+                            </div>
+                          ) : null}
+                        </td>
+                        <td className="border-r border-[#dbe4df] px-3 py-3 align-top">
+                          <div className="flex items-center gap-2">
+                            <div className="h-2 flex-1 overflow-hidden bg-[#e2e9e5]">
+                              <div
+                                className="h-full bg-[#248f84]"
+                                style={{ width: `${progress}%` }}
+                              />
+                            </div>
+                            <span className="w-9 text-right text-xs font-semibold text-[#1f6f67]">
+                              {progress}%
+                            </span>
+                          </div>
+                        </td>
+                        {item.steps.map((step, index) => {
+                          const checked = step.status === "done";
+                          const saving = savingStepIds.has(step.id);
+                          const previousDone =
+                            index === 0 || item.steps[index - 1]?.status === "done";
+                          const active = checked || previousDone;
 
-              {!groups.length ? (
-                <div className="rounded-lg border border-[#d6ded8] bg-white p-8 text-center text-sm text-[#63716b]">
-                  표시할 업무가 없습니다.
-                </div>
-              ) : null}
-            </div>
-          )}
+                          return (
+                            <td
+                              key={step.id}
+                              className={`border-r border-[#dbe4df] px-1.5 py-2 text-center align-middle ${
+                                checked
+                                  ? "bg-[#dff3ee]"
+                                  : active
+                                    ? "bg-[#fff8dc]"
+                                    : "bg-white"
+                              }`}
+                            >
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  updateStep(step.id, checked ? "todo" : "done")
+                                }
+                                className={`min-h-8 w-full border px-2 text-xs font-semibold transition ${
+                                  checked
+                                    ? "border-[#248f84] bg-[#248f84] text-white"
+                                    : active
+                                      ? "border-[#e2c75e] bg-[#f7e47d] text-[#4d4626] hover:border-[#248f84]"
+                                      : "border-[#d7e1dc] bg-white text-[#75837d] hover:border-[#248f84]"
+                                }`}
+                                title={step.description}
+                              >
+                                {saving ? "..." : checked ? "완료" : "대기"}
+                              </button>
+                            </td>
+                          );
+                        })}
+                        <td className="px-2 py-2 align-top">
+                          <textarea
+                            value={item.memo}
+                            onChange={(event) =>
+                              updateLocalItem(item.id, {
+                                memo: event.target.value,
+                              })
+                            }
+                            onBlur={(event) =>
+                              updateItem(item.id, {
+                                memo: event.target.value,
+                              })
+                            }
+                            className="min-h-16 w-full resize-y border border-transparent bg-transparent px-2 py-1 text-sm leading-6 text-[#1d2320] hover:border-[#cbd8d2] focus:border-[#77b8ae] focus:bg-white"
+                            placeholder="메모"
+                          />
+                        </td>
+                      </tr>
+                    );
+                  })}
+              </tbody>
+
+              <tfoot>
+                <tr className="border-t-2 border-[#9fcac1] bg-[#f6fbf8]">
+                  <td className="sticky left-0 z-20 border-r border-[#dbe4df] bg-[#f6fbf8] px-2 py-3" />
+                  <td
+                    colSpan={stages.length + 4}
+                    className="px-3 py-3"
+                  >
+                    <form
+                      onSubmit={addItem}
+                      className="grid gap-2 lg:grid-cols-[minmax(220px,1fr)_160px_minmax(220px,1fr)_100px]"
+                    >
+                      <input
+                        value={newTitle}
+                        onChange={(event) => setNewTitle(event.target.value)}
+                        className="min-h-10 border border-[#cbd8d2] bg-white px-3 text-sm text-[#1d2320]"
+                        placeholder="새 업무"
+                      />
+                      <input
+                        value={newAssignee}
+                        onChange={(event) => setNewAssignee(event.target.value)}
+                        className="min-h-10 border border-[#cbd8d2] bg-white px-3 text-sm text-[#1d2320]"
+                        placeholder="담당"
+                      />
+                      <input
+                        value={newMemo}
+                        onChange={(event) => setNewMemo(event.target.value)}
+                        className="min-h-10 border border-[#cbd8d2] bg-white px-3 text-sm text-[#1d2320]"
+                        placeholder="메모"
+                      />
+                      <button
+                        type="submit"
+                        disabled={!newTitle.trim() || adding}
+                        className="min-h-10 bg-[#1f6f67] px-4 text-sm font-semibold text-white transition hover:bg-[#185951] disabled:cursor-not-allowed disabled:bg-[#9dbbb4]"
+                      >
+                        {adding ? "추가 중" : "+ 추가"}
+                      </button>
+                    </form>
+                  </td>
+                </tr>
+              </tfoot>
+            </table>
+          </div>
         </div>
       </section>
     </main>

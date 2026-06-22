@@ -455,6 +455,7 @@ export async function PATCH(request: Request) {
 
     const payload = (await request.json()) as {
       itemId?: number;
+      order?: number[];
       stepId?: number;
       title?: string;
       assignee?: string;
@@ -464,6 +465,42 @@ export async function PATCH(request: Request) {
     const now = new Date().toISOString();
     const actor = getActor(request);
     const d1 = getD1();
+
+    if (Array.isArray(payload.order)) {
+      const order = payload.order.map(Number);
+      const uniqueOrder = new Set(order);
+
+      if (!order.length || order.some((id) => !Number.isFinite(id))) {
+        return Response.json({ error: "저장할 순서가 필요합니다." }, { status: 400 });
+      }
+
+      if (uniqueOrder.size !== order.length) {
+        return Response.json({ error: "중복된 업무 순서가 있습니다." }, { status: 400 });
+      }
+
+      const existing = await d1
+        .prepare("SELECT id FROM workflow_items")
+        .all<{ id: number }>();
+      const existingIds = new Set((existing.results ?? []).map((item) => item.id));
+
+      if (order.some((id) => !existingIds.has(id))) {
+        return Response.json({ error: "업무 순서를 확인해 주세요." }, { status: 400 });
+      }
+
+      await d1.batch(
+        order.map((id, index) =>
+          d1
+            .prepare(`UPDATE workflow_items
+              SET position = ?,
+                updated_by = ?,
+                updated_at = ?
+              WHERE id = ?`)
+            .bind(index + 1, actor, now, id)
+        )
+      );
+
+      return Response.json({ items: await getItems() });
+    }
 
     if (Number.isFinite(Number(payload.stepId))) {
       const stepId = Number(payload.stepId);
