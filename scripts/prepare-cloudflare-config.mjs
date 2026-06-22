@@ -3,7 +3,9 @@ import { readFile, writeFile } from "node:fs/promises";
 const configPath = new URL("../dist/server/wrangler.json", import.meta.url);
 const databaseName =
   process.env.CLOUDFLARE_D1_DATABASE_NAME ?? "team-progress-checklist-db";
-const databaseId = process.env.CLOUDFLARE_D1_DATABASE_ID;
+const databaseId =
+  process.env.CLOUDFLARE_D1_DATABASE_ID ??
+  "f6269837-168c-4774-922f-b04ca08eb9cf";
 
 if (!databaseId) {
   console.error(

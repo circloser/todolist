@@ -31,11 +31,16 @@ Save the `database_id` shown by Wrangler.
 ## 3. Deploy from Local PowerShell
 
 ```powershell
-$env:CLOUDFLARE_D1_DATABASE_ID="your_database_id"
 npm.cmd run deploy
 ```
 
 Wrangler may open a browser window for Cloudflare login on the first deploy.
+
+Current production URL:
+
+```text
+https://team-progress-checklist.singlena.workers.dev
+```
 
 ## 4. Deploy with GitHub Actions
 
