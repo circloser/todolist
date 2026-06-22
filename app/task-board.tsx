@@ -54,6 +54,27 @@ const sortOptions: Array<{ key: SortMode; label: string }> = [
   { key: "updated", label: "최근" },
 ];
 
+const compactStageLabels: Record<string, string> = {
+  "plan-draft": "초안",
+  estimate: "견적",
+  "plan-approval": "결재",
+  "purchase-request": "구매",
+  contract: "계약",
+  kickoff: "착수",
+  "progress-25": "25%",
+  "progress-50": "50%",
+  "progress-75": "75%",
+  "progress-100": "100%",
+  "completion-receipt": "완료계",
+  inspection: "검수",
+  "payment-request": "지급",
+  "result-report": "보고",
+};
+
+function compactStageTitle(step: Pick<WorkflowStep, "stageKey" | "title">) {
+  return compactStageLabels[step.stageKey] ?? step.title;
+}
+
 function formatDate(value?: string | null) {
   if (!value) {
     return "기록 없음";
@@ -557,33 +578,42 @@ export default function TaskBoard() {
         ) : null}
 
         <div className="overflow-hidden border border-[#cfdad4] bg-white shadow-sm">
-          <div className="overflow-auto">
-            <table className="min-w-[1680px] border-collapse text-sm">
+          <div className="overflow-x-hidden">
+            <table className="w-full table-fixed border-collapse text-[11px] xl:text-xs">
+              <colgroup>
+                <col className="w-[2.75%]" />
+                <col className="w-[15.5%]" />
+                <col className="w-[8.5%]" />
+                <col className="w-[8%]" />
+                {stages.map((stage) => (
+                  <col key={stage.stageKey} className="w-[3.2%]" />
+                ))}
+                <col className="w-[20.45%]" />
+              </colgroup>
               <thead>
                 <tr className="bg-[#f7faf8] text-left text-xs font-semibold text-[#53625c]">
-                  <th className="sticky left-0 z-30 w-12 border-b border-r border-[#dbe4df] bg-[#f7faf8] px-2 py-3" />
-                  <th className="sticky left-12 z-30 w-64 border-b border-r border-[#dbe4df] bg-[#f7faf8] px-3 py-3">
+                  <th className="border-b border-r border-[#dbe4df] bg-[#f7faf8] px-1 py-3" />
+                  <th className="border-b border-r border-[#dbe4df] bg-[#f7faf8] px-2 py-3">
                     업무
                   </th>
-                  <th className="sticky left-[304px] z-30 w-36 border-b border-r border-[#dbe4df] bg-[#f7faf8] px-3 py-3">
+                  <th className="border-b border-r border-[#dbe4df] bg-[#f7faf8] px-2 py-3">
                     담당
                   </th>
-                  <th className="w-32 border-b border-r border-[#dbe4df] px-3 py-3">
+                  <th className="border-b border-r border-[#dbe4df] px-2 py-3">
                     진도
                   </th>
                   {stages.map((stage) => (
                     <th
                       key={stage.stageKey}
-                      className="w-24 border-b border-r border-[#dbe4df] px-2 py-3 text-center"
-                      title={stage.description}
+                      className="border-b border-r border-[#dbe4df] px-1 py-3 text-center"
+                      title={`${stage.title} · ${stage.description}`}
                     >
-                      <span className="block leading-4">{stage.title}</span>
-                      <span className="mt-1 block text-[11px] font-medium text-[#75837d]">
-                        {stage.phaseGroup}
+                      <span className="block truncate leading-4">
+                        {compactStageTitle(stage)}
                       </span>
                     </th>
                   ))}
-                  <th className="w-60 border-b border-[#dbe4df] px-3 py-3">
+                  <th className="border-b border-[#dbe4df] px-2 py-3">
                     메모
                   </th>
                 </tr>
@@ -626,7 +656,7 @@ export default function TaskBoard() {
                           draggedId === item.id ? "bg-[#edf7f4]" : "bg-white"
                         } hover:bg-[#f8fbf9]`}
                       >
-                        <td className="sticky left-0 z-20 border-r border-[#dbe4df] bg-inherit px-2 py-2 align-top">
+                        <td className="border-r border-[#dbe4df] bg-inherit px-1 py-2 align-top">
                           <button
                             type="button"
                             draggable
@@ -635,13 +665,13 @@ export default function TaskBoard() {
                               event.dataTransfer.effectAllowed = "move";
                             }}
                             onDragEnd={() => setDraggedId(null)}
-                            className="flex h-9 w-8 cursor-grab items-center justify-center border border-[#d2ddd7] bg-white text-[#72817a] active:cursor-grabbing"
+                            className="flex h-8 w-full cursor-grab items-center justify-center border border-[#d2ddd7] bg-white text-[#72817a] active:cursor-grabbing"
                             title="드래그"
                           >
-                            ⋮⋮
+                            ⋮
                           </button>
                         </td>
-                        <td className="sticky left-12 z-20 border-r border-[#dbe4df] bg-inherit px-2 py-2 align-top">
+                        <td className="border-r border-[#dbe4df] bg-inherit px-1.5 py-2 align-top">
                           <input
                             value={item.title}
                             onChange={(event) =>
@@ -654,14 +684,14 @@ export default function TaskBoard() {
                                 title: event.target.value,
                               })
                             }
-                            className="min-h-9 w-full border border-transparent bg-transparent px-2 text-sm font-semibold text-[#1d2320] hover:border-[#cbd8d2] focus:border-[#77b8ae] focus:bg-white"
+                            className="min-h-8 w-full border border-transparent bg-transparent px-1.5 text-xs font-semibold text-[#1d2320] hover:border-[#cbd8d2] focus:border-[#77b8ae] focus:bg-white xl:text-sm"
                           />
-                          <div className="mt-1 px-2 text-xs text-[#6b7772]">
+                          <div className="mt-1 truncate px-1.5 text-[10px] text-[#6b7772] xl:text-xs">
                             {done ? "완료" : nextStepTitle(item)} · 수정{" "}
                             {formatDate(item.updatedAt)}
                           </div>
                         </td>
-                        <td className="sticky left-[304px] z-20 border-r border-[#dbe4df] bg-inherit px-2 py-2 align-top">
+                        <td className="border-r border-[#dbe4df] bg-inherit px-1.5 py-2 align-top">
                           <input
                             value={item.assignee}
                             onChange={(event) =>
@@ -674,23 +704,23 @@ export default function TaskBoard() {
                                 assignee: event.target.value,
                               })
                             }
-                            className="min-h-9 w-full border border-transparent bg-transparent px-2 text-sm text-[#1d2320] hover:border-[#cbd8d2] focus:border-[#77b8ae] focus:bg-white"
+                            className="min-h-8 w-full border border-transparent bg-transparent px-1.5 text-xs text-[#1d2320] hover:border-[#cbd8d2] focus:border-[#77b8ae] focus:bg-white"
                           />
                           {savingItemIds.has(item.id) ? (
-                            <div className="mt-1 px-2 text-xs font-semibold text-[#1f6f67]">
+                            <div className="mt-1 px-1.5 text-[10px] font-semibold text-[#1f6f67]">
                               저장 중
                             </div>
                           ) : null}
                         </td>
-                        <td className="border-r border-[#dbe4df] px-3 py-3 align-top">
-                          <div className="flex items-center gap-2">
+                        <td className="border-r border-[#dbe4df] px-1.5 py-3 align-top">
+                          <div className="flex items-center gap-1.5">
                             <div className="h-2 flex-1 overflow-hidden bg-[#e2e9e5]">
                               <div
                                 className="h-full bg-[#248f84]"
                                 style={{ width: `${progress}%` }}
                               />
                             </div>
-                            <span className="w-9 text-right text-xs font-semibold text-[#1f6f67]">
+                            <span className="w-8 text-right text-[11px] font-semibold text-[#1f6f67]">
                               {progress}%
                             </span>
                           </div>
@@ -705,7 +735,7 @@ export default function TaskBoard() {
                           return (
                             <td
                               key={step.id}
-                              className={`border-r border-[#dbe4df] px-1.5 py-2 text-center align-middle ${
+                              className={`border-r border-[#dbe4df] px-0.5 py-2 text-center align-middle ${
                                 checked
                                   ? "bg-[#dff3ee]"
                                   : active
@@ -718,7 +748,7 @@ export default function TaskBoard() {
                                 onClick={() =>
                                   updateStep(step.id, checked ? "todo" : "done")
                                 }
-                                className={`min-h-8 w-full border px-2 text-xs font-semibold transition ${
+                                className={`mx-auto flex h-7 w-7 items-center justify-center border text-[11px] font-semibold transition xl:h-8 xl:w-8 ${
                                   checked
                                     ? "border-[#248f84] bg-[#248f84] text-white"
                                     : active
@@ -727,7 +757,7 @@ export default function TaskBoard() {
                                 }`}
                                 title={step.description}
                               >
-                                {saving ? "..." : checked ? "완료" : "대기"}
+                                {saving ? "…" : checked ? "✓" : ""}
                               </button>
                             </td>
                           );
@@ -745,7 +775,7 @@ export default function TaskBoard() {
                                 memo: event.target.value,
                               })
                             }
-                            className="min-h-16 w-full resize-y border border-transparent bg-transparent px-2 py-1 text-sm leading-6 text-[#1d2320] hover:border-[#cbd8d2] focus:border-[#77b8ae] focus:bg-white"
+                            className="min-h-14 w-full resize-y border border-transparent bg-transparent px-1.5 py-1 text-xs leading-5 text-[#1d2320] hover:border-[#cbd8d2] focus:border-[#77b8ae] focus:bg-white xl:text-sm"
                             placeholder="메모"
                           />
                         </td>
@@ -756,7 +786,7 @@ export default function TaskBoard() {
 
               <tfoot>
                 <tr className="border-t-2 border-[#9fcac1] bg-[#f6fbf8]">
-                  <td className="sticky left-0 z-20 border-r border-[#dbe4df] bg-[#f6fbf8] px-2 py-3" />
+                  <td className="border-r border-[#dbe4df] bg-[#f6fbf8] px-1 py-3" />
                   <td
                     colSpan={stages.length + 4}
                     className="px-3 py-3"
