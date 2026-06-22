@@ -8,6 +8,20 @@
       "when": 1782098005181,
       "tag": "0000_past_nick_fury",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1782100652105,
+      "tag": "0001_salty_tempest",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1782100715227,
+      "tag": "0002_hot_nomad",
+      "breakpoints": true
     }
   ]
 }

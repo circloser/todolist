@@ -1,8 +1,41 @@
-import { asc, eq, max } from "drizzle-orm";
-import { getD1, getDb } from "../../../db";
-import { workflowTasks } from "../../../db/schema";
+import { getD1 } from "../../../db";
 
-const defaultWorkflow = [
+type StepStatus = "todo" | "done";
+
+type WorkflowItemRow = {
+  id: number;
+  title: string;
+  assignee: string;
+  memo: string;
+  position: number;
+  updated_by: string;
+  updated_at: string;
+  created_at: string;
+};
+
+type WorkflowStepRow = {
+  id: number;
+  item_id: number;
+  stage_key: string;
+  title: string;
+  description: string;
+  phase_group: string;
+  position: number;
+  progress_value: number | null;
+  status: StepStatus;
+  completed_at: string | null;
+  updated_by: string;
+  updated_at: string;
+  created_at: string;
+};
+
+type LegacyWorkflowTaskRow = {
+  template_key: string;
+  status: StepStatus;
+  completed_at: string | null;
+};
+
+const defaultStages = [
   {
     key: "plan-draft",
     title: "계획(초안)",
@@ -125,92 +158,250 @@ function toRouteErrorMessage(error: unknown) {
   const combined = `${message}\n${cause}`;
 
   if (combined.includes("no such table")) {
-    return "진행 보드 테이블이 아직 준비되지 않았습니다. 마이그레이션을 생성한 뒤 다시 배포해 주세요.";
+    return "진행 보드 테이블이 아직 준비되지 않았습니다. 다시 배포해 주세요.";
   }
 
   return message;
+}
+
+function toItem(row: WorkflowItemRow, steps: WorkflowStepRow[]) {
+  return {
+    id: row.id,
+    title: row.title,
+    assignee: row.assignee,
+    memo: row.memo,
+    position: row.position,
+    updatedBy: row.updated_by,
+    updatedAt: row.updated_at,
+    createdAt: row.created_at,
+    steps: steps.map((step) => ({
+      id: step.id,
+      itemId: step.item_id,
+      stageKey: step.stage_key,
+      title: step.title,
+      description: step.description,
+      phaseGroup: step.phase_group,
+      position: step.position,
+      progressValue: step.progress_value,
+      status: step.status,
+      completedAt: step.completed_at,
+      updatedBy: step.updated_by,
+      updatedAt: step.updated_at,
+      createdAt: step.created_at,
+    })),
+  };
 }
 
 async function ensureSchema() {
   const d1 = getD1();
 
   await d1.batch([
-    d1.prepare(`CREATE TABLE IF NOT EXISTS workflow_tasks (
+    d1.prepare(`CREATE TABLE IF NOT EXISTS workflow_items (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
-      template_key TEXT NOT NULL UNIQUE,
+      title TEXT NOT NULL,
+      assignee TEXT NOT NULL DEFAULT '',
+      memo TEXT NOT NULL DEFAULT '',
+      position INTEGER NOT NULL,
+      updated_by TEXT NOT NULL DEFAULT '',
+      updated_at TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    )`),
+    d1.prepare(`CREATE TABLE IF NOT EXISTS workflow_steps (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      item_id INTEGER NOT NULL,
+      stage_key TEXT NOT NULL,
       title TEXT NOT NULL,
       description TEXT NOT NULL DEFAULT '',
       phase_group TEXT NOT NULL DEFAULT '',
       position INTEGER NOT NULL,
       progress_value INTEGER,
       status TEXT NOT NULL DEFAULT 'todo' CHECK(status IN ('todo', 'done')),
-      assignee TEXT NOT NULL DEFAULT '',
-      memo TEXT NOT NULL DEFAULT '',
       completed_at TEXT,
       updated_by TEXT NOT NULL DEFAULT '',
       updated_at TEXT NOT NULL,
-      created_at TEXT NOT NULL
+      created_at TEXT NOT NULL,
+      UNIQUE(item_id, stage_key)
     )`),
     d1.prepare(
-      "CREATE UNIQUE INDEX IF NOT EXISTS workflow_tasks_template_key_idx ON workflow_tasks (template_key)"
+      "CREATE INDEX IF NOT EXISTS workflow_items_assignee_idx ON workflow_items (assignee, position)"
     ),
     d1.prepare(
-      "CREATE INDEX IF NOT EXISTS workflow_tasks_position_idx ON workflow_tasks (position)"
+      "CREATE INDEX IF NOT EXISTS workflow_steps_item_position_idx ON workflow_steps (item_id, position)"
     ),
   ]);
 }
 
-async function ensureDefaultWorkflow() {
+async function readLegacyStatuses() {
+  try {
+    const legacy = await getD1()
+      .prepare(
+        "SELECT template_key, status, completed_at FROM workflow_tasks ORDER BY position"
+      )
+      .all<LegacyWorkflowTaskRow>();
+
+    return new Map(
+      (legacy.results ?? []).map((task) => [
+        task.template_key,
+        {
+          status: task.status === "done" ? "done" : "todo",
+          completedAt: task.completed_at,
+        },
+      ])
+    );
+  } catch {
+    return new Map<string, { status: StepStatus; completedAt: string | null }>();
+  }
+}
+
+async function createItemWithDefaultSteps({
+  title,
+  assignee,
+  memo,
+  actor,
+  position,
+  legacyStatuses,
+}: {
+  title: string;
+  assignee: string;
+  memo: string;
+  actor: string;
+  position: number;
+  legacyStatuses?: Map<string, { status: StepStatus; completedAt: string | null }>;
+}) {
   const d1 = getD1();
   const now = new Date().toISOString();
-  const inserts = defaultWorkflow.map((task, index) =>
-    d1
-      .prepare(`INSERT OR IGNORE INTO workflow_tasks (
-        template_key,
-        title,
-        description,
-        phase_group,
-        position,
-        progress_value,
-        status,
-        assignee,
-        memo,
-        completed_at,
-        updated_by,
-        updated_at,
-        created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, 'todo', '', '', NULL, '템플릿', ?, ?)`)
-      .bind(
-        task.key,
-        task.title,
-        task.description,
-        task.group,
-        index + 1,
-        task.progress,
-        now,
-        now
-      )
+  const insertResult = await d1
+    .prepare(`INSERT INTO workflow_items (
+      title,
+      assignee,
+      memo,
+      position,
+      updated_by,
+      updated_at,
+      created_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?)`)
+    .bind(title, assignee, memo, position, actor, now, now)
+    .run();
+  const itemId = Number(insertResult.meta.last_row_id);
+
+  await d1.batch(
+    defaultStages.map((stage, index) => {
+      const legacyStatus = legacyStatuses?.get(stage.key);
+      const status = legacyStatus?.status ?? "todo";
+
+      return d1
+        .prepare(`INSERT INTO workflow_steps (
+          item_id,
+          stage_key,
+          title,
+          description,
+          phase_group,
+          position,
+          progress_value,
+          status,
+          completed_at,
+          updated_by,
+          updated_at,
+          created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+        .bind(
+          itemId,
+          stage.key,
+          stage.title,
+          stage.description,
+          stage.group,
+          index + 1,
+          stage.progress,
+          status,
+          status === "done" ? legacyStatus?.completedAt ?? now : null,
+          actor,
+          now,
+          now
+        );
+    })
   );
 
-  await d1.batch(inserts);
+  return itemId;
+}
+
+async function ensureDefaultItem() {
+  const d1 = getD1();
+  const countResult = await d1
+    .prepare("SELECT COUNT(*) AS count FROM workflow_items")
+    .first<{ count: number }>();
+
+  if (Number(countResult?.count ?? 0) > 0) {
+    return;
+  }
+
+  await createItemWithDefaultSteps({
+    title: "기본 업무",
+    assignee: "미지정",
+    memo: "",
+    actor: "템플릿",
+    position: 1,
+    legacyStatuses: await readLegacyStatuses(),
+  });
 }
 
 async function prepareWorkflow() {
   await ensureSchema();
-  await ensureDefaultWorkflow();
+  await ensureDefaultItem();
+}
+
+async function getItems() {
+  const d1 = getD1();
+  const [itemsResult, stepsResult] = await Promise.all([
+    d1
+      .prepare(
+        "SELECT * FROM workflow_items ORDER BY assignee COLLATE NOCASE, position, id"
+      )
+      .all<WorkflowItemRow>(),
+    d1
+      .prepare("SELECT * FROM workflow_steps ORDER BY item_id, position, id")
+      .all<WorkflowStepRow>(),
+  ]);
+  const stepsByItem = new Map<number, WorkflowStepRow[]>();
+
+  for (const step of stepsResult.results ?? []) {
+    const current = stepsByItem.get(step.item_id) ?? [];
+    current.push(step);
+    stepsByItem.set(step.item_id, current);
+  }
+
+  return (itemsResult.results ?? []).map((item) =>
+    toItem(item, stepsByItem.get(item.id) ?? [])
+  );
+}
+
+async function getItem(itemId: number) {
+  const d1 = getD1();
+  const item = await d1
+    .prepare("SELECT * FROM workflow_items WHERE id = ?")
+    .bind(itemId)
+    .first<WorkflowItemRow>();
+
+  if (!item) {
+    return null;
+  }
+
+  const steps = await d1
+    .prepare("SELECT * FROM workflow_steps WHERE item_id = ? ORDER BY position, id")
+    .bind(itemId)
+    .all<WorkflowStepRow>();
+
+  return toItem(item, steps.results ?? []);
 }
 
 export async function GET(request: Request) {
   try {
     await prepareWorkflow();
 
-    const db = getDb();
-    const tasks = await db
-      .select()
-      .from(workflowTasks)
-      .orderBy(asc(workflowTasks.position), asc(workflowTasks.id));
-
-    return Response.json({ tasks, viewer: getActor(request) });
+    return Response.json({
+      items: await getItems(),
+      stages: defaultStages,
+      viewer: getActor(request),
+    });
   } catch (error) {
     return Response.json(
       { error: toRouteErrorMessage(error) },
@@ -226,40 +417,30 @@ export async function POST(request: Request) {
     const payload = (await request.json()) as {
       title?: string;
       assignee?: string;
+      memo?: string;
     };
-    const title = payload.title?.trim() ?? "";
+    const title = payload.title?.trim().slice(0, 120) ?? "";
     const assignee = payload.assignee?.trim().slice(0, 80) ?? "";
+    const memo = payload.memo?.trim().slice(0, 1000) ?? "";
 
     if (!title) {
       return Response.json({ error: "업무명을 입력해 주세요." }, { status: 400 });
     }
 
-    const db = getDb();
-    const now = new Date().toISOString();
-    const [lastPosition] = await db
-      .select({ value: max(workflowTasks.position) })
-      .from(workflowTasks);
+    const d1 = getD1();
+    const last = await d1
+      .prepare("SELECT MAX(position) AS position FROM workflow_items")
+      .first<{ position: number | null }>();
+    const itemId = await createItemWithDefaultSteps({
+      title,
+      assignee: assignee || "미지정",
+      memo,
+      actor: getActor(request),
+      position: Number(last?.position ?? 0) + 1,
+    });
+    const item = await getItem(itemId);
 
-    const [task] = await db
-      .insert(workflowTasks)
-      .values({
-        templateKey: `custom-${globalThis.crypto.randomUUID()}`,
-        title: title.slice(0, 120),
-        description: "팀에서 추가한 업무입니다.",
-        phaseGroup: "추가 업무",
-        position: Number(lastPosition?.value ?? defaultWorkflow.length) + 1,
-        progressValue: null,
-        status: "todo",
-        assignee,
-        memo: "",
-        completedAt: null,
-        updatedBy: getActor(request),
-        updatedAt: now,
-        createdAt: now,
-      })
-      .returning();
-
-    return Response.json({ task }, { status: 201 });
+    return Response.json({ item }, { status: 201 });
   } catch (error) {
     return Response.json(
       { error: toRouteErrorMessage(error) },
@@ -273,63 +454,101 @@ export async function PATCH(request: Request) {
     await prepareWorkflow();
 
     const payload = (await request.json()) as {
-      id?: number;
-      status?: string;
+      itemId?: number;
+      stepId?: number;
+      title?: string;
       assignee?: string;
       memo?: string;
+      status?: StepStatus;
     };
-    const id = Number(payload.id);
-
-    if (!Number.isFinite(id)) {
-      return Response.json({ error: "업무 ID가 필요합니다." }, { status: 400 });
-    }
-
     const now = new Date().toISOString();
-    const values: {
-      assignee?: string;
-      completedAt?: string | null;
-      memo?: string;
-      status?: "todo" | "done";
-      updatedAt: string;
-      updatedBy: string;
-    } = {
-      updatedAt: now,
-      updatedBy: getActor(request),
-    };
+    const actor = getActor(request);
+    const d1 = getD1();
 
-    if (payload.status === "done" || payload.status === "todo") {
-      values.status = payload.status;
-      values.completedAt = payload.status === "done" ? now : null;
+    if (Number.isFinite(Number(payload.stepId))) {
+      const stepId = Number(payload.stepId);
+
+      if (payload.status !== "done" && payload.status !== "todo") {
+        return Response.json({ error: "단계 상태가 필요합니다." }, { status: 400 });
+      }
+
+      const step = await d1
+        .prepare("SELECT item_id FROM workflow_steps WHERE id = ?")
+        .bind(stepId)
+        .first<{ item_id: number }>();
+
+      if (!step) {
+        return Response.json({ error: "단계를 찾을 수 없습니다." }, { status: 404 });
+      }
+
+      await d1.batch([
+        d1
+          .prepare(`UPDATE workflow_steps
+            SET status = ?,
+              completed_at = ?,
+              updated_by = ?,
+              updated_at = ?
+            WHERE id = ?`)
+          .bind(
+            payload.status,
+            payload.status === "done" ? now : null,
+            actor,
+            now,
+            stepId
+          ),
+        d1
+          .prepare(
+            "UPDATE workflow_items SET updated_by = ?, updated_at = ? WHERE id = ?"
+          )
+          .bind(actor, now, step.item_id),
+      ]);
+
+      return Response.json({ item: await getItem(step.item_id) });
     }
 
-    if (typeof payload.assignee === "string") {
-      values.assignee = payload.assignee.trim().slice(0, 80);
+    if (Number.isFinite(Number(payload.itemId))) {
+      const itemId = Number(payload.itemId);
+      const existing = await d1
+        .prepare("SELECT * FROM workflow_items WHERE id = ?")
+        .bind(itemId)
+        .first<WorkflowItemRow>();
+
+      if (!existing) {
+        return Response.json({ error: "업무를 찾을 수 없습니다." }, { status: 404 });
+      }
+
+      const title =
+        typeof payload.title === "string"
+          ? payload.title.trim().slice(0, 120)
+          : existing.title;
+      const assignee =
+        typeof payload.assignee === "string"
+          ? payload.assignee.trim().slice(0, 80) || "미지정"
+          : existing.assignee;
+      const memo =
+        typeof payload.memo === "string"
+          ? payload.memo.trim().slice(0, 1000)
+          : existing.memo;
+
+      if (!title) {
+        return Response.json({ error: "업무명을 입력해 주세요." }, { status: 400 });
+      }
+
+      await d1
+        .prepare(`UPDATE workflow_items
+          SET title = ?,
+            assignee = ?,
+            memo = ?,
+            updated_by = ?,
+            updated_at = ?
+          WHERE id = ?`)
+        .bind(title, assignee, memo, actor, now, itemId)
+        .run();
+
+      return Response.json({ item: await getItem(itemId) });
     }
 
-    if (typeof payload.memo === "string") {
-      values.memo = payload.memo.trim().slice(0, 1000);
-    }
-
-    if (
-      !("status" in values) &&
-      !("assignee" in values) &&
-      !("memo" in values)
-    ) {
-      return Response.json({ error: "변경할 내용이 없습니다." }, { status: 400 });
-    }
-
-    const db = getDb();
-    const [task] = await db
-      .update(workflowTasks)
-      .set(values)
-      .where(eq(workflowTasks.id, id))
-      .returning();
-
-    if (!task) {
-      return Response.json({ error: "업무를 찾을 수 없습니다." }, { status: 404 });
-    }
-
-    return Response.json({ task });
+    return Response.json({ error: "변경할 업무가 필요합니다." }, { status: 400 });
   } catch (error) {
     return Response.json(
       { error: toRouteErrorMessage(error) },
