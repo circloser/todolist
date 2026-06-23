@@ -51,6 +51,8 @@ type WorkflowItem = {
   assignee: string;
   category: string;
   memo: string;
+  allocatedBudget: number | null;
+  requiredBudget: number | null;
   dueDate: string | null;
   templateKey: string;
   position: number;
@@ -186,6 +188,14 @@ function formatDay(value?: string | null) {
     month: "2-digit",
     day: "2-digit",
   }).format(new Date(`${value}T00:00:00`));
+}
+
+function formatBudget(value?: number | null) {
+  if (!value) {
+    return "";
+  }
+
+  return new Intl.NumberFormat("ko-KR").format(value);
 }
 
 function daysUntil(value?: string | null) {
@@ -368,6 +378,8 @@ export default function TaskBoard() {
   const [newCategory, setNewCategory] = useState("일반 업무");
   const [newAssignee, setNewAssignee] = useState("");
   const [newMemo, setNewMemo] = useState("");
+  const [newAllocatedBudget, setNewAllocatedBudget] = useState("");
+  const [newRequiredBudget, setNewRequiredBudget] = useState("");
   const [newDueDate, setNewDueDate] = useState("");
   const [newTemplateKey, setNewTemplateKey] = useState(
     "external-research-outsourcing"
@@ -683,7 +695,16 @@ export default function TaskBoard() {
   function updateLocalItem(
     id: number,
     patch: Partial<
-      Pick<WorkflowItem, "title" | "assignee" | "category" | "memo" | "dueDate">
+      Pick<
+        WorkflowItem,
+        | "title"
+        | "assignee"
+        | "category"
+        | "memo"
+        | "allocatedBudget"
+        | "requiredBudget"
+        | "dueDate"
+      >
     >
   ) {
     setItems((current) =>
@@ -710,7 +731,16 @@ export default function TaskBoard() {
   async function updateItem(
     id: number,
     patch: Partial<
-      Pick<WorkflowItem, "title" | "assignee" | "category" | "memo" | "dueDate">
+      Pick<
+        WorkflowItem,
+        | "title"
+        | "assignee"
+        | "category"
+        | "memo"
+        | "allocatedBudget"
+        | "requiredBudget"
+        | "dueDate"
+      >
     >
   ) {
     const previousItems = items;
@@ -941,6 +971,8 @@ export default function TaskBoard() {
           category: newCategory,
           assignee: newAssignee,
           memo: newMemo,
+          allocatedBudget: newAllocatedBudget,
+          requiredBudget: newRequiredBudget,
           dueDate: newDueDate,
           templateKey: newTemplateKey,
         }),
@@ -956,6 +988,8 @@ export default function TaskBoard() {
       setNewCategory("일반 업무");
       setNewAssignee("");
       setNewMemo("");
+      setNewAllocatedBudget("");
+      setNewRequiredBudget("");
       setNewDueDate("");
       setSortMode("manual");
       setTemplateFilter(newTemplateKey);
@@ -1632,6 +1666,63 @@ export default function TaskBoard() {
                                 className="min-h-14 w-full resize-y border border-transparent bg-transparent px-1.5 py-1 text-xs leading-5 text-[#1d2320] hover:border-[#cbd8d2] focus:border-[#77b8ae] focus:bg-white xl:text-sm"
                                 placeholder="메모"
                               />
+                              <div className="mt-2 grid gap-1 sm:grid-cols-2">
+                                <label className="grid gap-0.5 text-[10px] font-semibold text-[#63716b]">
+                                  편성 예산
+                                  <input
+                                    type="number"
+                                    min="0"
+                                    step="1000"
+                                    value={item.allocatedBudget ?? ""}
+                                    onChange={(event) =>
+                                      updateLocalItem(item.id, {
+                                        allocatedBudget: event.target.value
+                                          ? Number(event.target.value)
+                                          : null,
+                                      })
+                                    }
+                                    onBlur={(event) =>
+                                      updateItem(item.id, {
+                                        allocatedBudget: event.target.value
+                                          ? Number(event.target.value)
+                                          : null,
+                                      })
+                                    }
+                                    className="h-7 w-full border border-[#d7e1dc] bg-white px-1.5 text-xs font-normal text-[#1d2320]"
+                                    placeholder="원"
+                                  />
+                                </label>
+                                <label className="grid gap-0.5 text-[10px] font-semibold text-[#63716b]">
+                                  소요 예산
+                                  <input
+                                    type="number"
+                                    min="0"
+                                    step="1000"
+                                    value={item.requiredBudget ?? ""}
+                                    onChange={(event) =>
+                                      updateLocalItem(item.id, {
+                                        requiredBudget: event.target.value
+                                          ? Number(event.target.value)
+                                          : null,
+                                      })
+                                    }
+                                    onBlur={(event) =>
+                                      updateItem(item.id, {
+                                        requiredBudget: event.target.value
+                                          ? Number(event.target.value)
+                                          : null,
+                                      })
+                                    }
+                                    className="h-7 w-full border border-[#d7e1dc] bg-white px-1.5 text-xs font-normal text-[#1d2320]"
+                                    placeholder="원"
+                                  />
+                                </label>
+                              </div>
+                              <div className="mt-1 text-[10px] text-[#6b7772]">
+                                {item.allocatedBudget || item.requiredBudget
+                                  ? `편성 ${formatBudget(item.allocatedBudget)} / 소요 ${formatBudget(item.requiredBudget)}`
+                                  : "예산 미입력"}
+                              </div>
                               <div className="text-[10px] text-[#6b7772]">
                                 수정 {formatDate(item.updatedAt)}
                               </div>
@@ -1844,7 +1935,7 @@ export default function TaskBoard() {
                     <td colSpan={stages.length + 4} className="px-3 py-3">
                       <form
                         onSubmit={addItem}
-                        className="grid gap-2 lg:grid-cols-[150px_150px_minmax(220px,1fr)_130px_120px_minmax(190px,1fr)_90px]"
+                        className="grid gap-2 md:grid-cols-2 xl:grid-cols-[150px_130px_minmax(180px,1fr)_110px_110px_110px_110px_minmax(160px,1fr)_80px]"
                       >
                         <select
                           value={newTemplateKey}
@@ -1887,6 +1978,28 @@ export default function TaskBoard() {
                           title="최종 마감일"
                         />
                         <input
+                          type="number"
+                          min="0"
+                          step="1000"
+                          value={newAllocatedBudget}
+                          onChange={(event) =>
+                            setNewAllocatedBudget(event.target.value)
+                          }
+                          className="min-h-10 border border-[#cbd8d2] bg-white px-3 text-sm"
+                          placeholder="편성 예산"
+                        />
+                        <input
+                          type="number"
+                          min="0"
+                          step="1000"
+                          value={newRequiredBudget}
+                          onChange={(event) =>
+                            setNewRequiredBudget(event.target.value)
+                          }
+                          className="min-h-10 border border-[#cbd8d2] bg-white px-3 text-sm"
+                          placeholder="소요 예산"
+                        />
+                        <input
                           value={newMemo}
                           onChange={(event) => setNewMemo(event.target.value)}
                           className="min-h-10 border border-[#cbd8d2] bg-white px-3 text-sm text-[#1d2320]"
@@ -1926,6 +2039,10 @@ export default function TaskBoard() {
                       <div className="font-semibold">{item.title}</div>
                       <div className="text-sm text-[#66746e]">
                         {assigneeName(item.assignee)} · {next?.title ?? "완료"}
+                      </div>
+                      <div className="mt-1 text-xs text-[#66746e]">
+                        편성 {formatBudget(item.allocatedBudget) || "-"} · 소요{" "}
+                        {formatBudget(item.requiredBudget) || "-"}
                       </div>
                     </div>
                     <div className="flex items-center gap-1">

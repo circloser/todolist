@@ -43,6 +43,13 @@
       "when": 1782175559126,
       "tag": "0005_slim_vengeance",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1782189491346,
+      "tag": "0006_steady_spencer_smythe",
+      "breakpoints": true
     }
   ]
 }

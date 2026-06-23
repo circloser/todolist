@@ -8,6 +8,8 @@ type WorkflowItemRow = {
   assignee: string;
   category: string;
   memo: string;
+  allocated_budget: number | null;
+  required_budget: number | null;
   due_date: string | null;
   template_key: string;
   position: number;
@@ -337,6 +339,25 @@ function normalizeDate(value: unknown) {
   return /^\d{4}-\d{2}-\d{2}$/.test(trimmed) ? trimmed : null;
 }
 
+function normalizeBudget(value: unknown) {
+  if (value === null || value === undefined || value === "") {
+    return null;
+  }
+
+  const amount =
+    typeof value === "number"
+      ? value
+      : typeof value === "string"
+        ? Number(value.replaceAll(",", "").trim())
+        : Number.NaN;
+
+  if (!Number.isFinite(amount) || amount < 0) {
+    return null;
+  }
+
+  return Math.round(amount);
+}
+
 function getTemplate(key?: string) {
   return templates.find((template) => template.key === key) ?? templates[0];
 }
@@ -352,6 +373,8 @@ function toItem(
     assignee: row.assignee,
     category: row.category || "일반 업무",
     memo: row.memo,
+    allocatedBudget: row.allocated_budget,
+    requiredBudget: row.required_budget,
     dueDate: row.due_date,
     templateKey: row.template_key,
     position: row.position,
@@ -411,6 +434,8 @@ async function ensureSchema() {
       assignee TEXT NOT NULL DEFAULT '',
       category TEXT NOT NULL DEFAULT '일반 업무',
       memo TEXT NOT NULL DEFAULT '',
+      allocated_budget INTEGER,
+      required_budget INTEGER,
       due_date TEXT,
       template_key TEXT NOT NULL DEFAULT 'general-service',
       position INTEGER NOT NULL,
@@ -482,6 +507,12 @@ async function ensureSchema() {
   ]);
 
   await addColumnIfMissing("ALTER TABLE workflow_items ADD COLUMN due_date TEXT");
+  await addColumnIfMissing(
+    "ALTER TABLE workflow_items ADD COLUMN allocated_budget INTEGER"
+  );
+  await addColumnIfMissing(
+    "ALTER TABLE workflow_items ADD COLUMN required_budget INTEGER"
+  );
   await addColumnIfMissing(
     "ALTER TABLE workflow_items ADD COLUMN category TEXT NOT NULL DEFAULT '일반 업무'"
   );
@@ -559,6 +590,8 @@ async function createItemWithDefaultSteps({
   assignee,
   category,
   memo,
+  allocatedBudget,
+  requiredBudget,
   dueDate,
   templateKey,
   actor,
@@ -569,6 +602,8 @@ async function createItemWithDefaultSteps({
   assignee: string;
   category: string;
   memo: string;
+  allocatedBudget?: number | null;
+  requiredBudget?: number | null;
   dueDate?: string | null;
   templateKey?: string;
   actor: string;
@@ -584,18 +619,22 @@ async function createItemWithDefaultSteps({
       assignee,
       category,
       memo,
+      allocated_budget,
+      required_budget,
       due_date,
       template_key,
       position,
       updated_by,
       updated_at,
       created_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
     .bind(
       title,
       assignee,
       category,
       memo,
+      allocatedBudget ?? null,
+      requiredBudget ?? null,
       dueDate ?? null,
       selectedTemplate.key,
       position,
@@ -672,6 +711,8 @@ async function ensureDefaultItem() {
     assignee: "미지정",
     category: "일반 업무",
     memo: "",
+    allocatedBudget: null,
+    requiredBudget: null,
     actor: "템플릿",
     position: 1,
     legacyStatuses: await readLegacyStatuses(),
@@ -856,6 +897,8 @@ export async function POST(request: Request) {
       assignee?: string;
       category?: string;
       memo?: string;
+      allocatedBudget?: number | string | null;
+      requiredBudget?: number | string | null;
       dueDate?: string;
       templateKey?: string;
       blockers?: string;
@@ -933,6 +976,8 @@ export async function POST(request: Request) {
     const assignee = payload.assignee?.trim().slice(0, 80) ?? "";
     const category = payload.category?.trim().slice(0, 80) || "일반 업무";
     const memo = payload.memo?.trim().slice(0, 1000) ?? "";
+    const allocatedBudget = normalizeBudget(payload.allocatedBudget);
+    const requiredBudget = normalizeBudget(payload.requiredBudget);
     const dueDate = normalizeDate(payload.dueDate);
 
     if (!title) {
@@ -947,6 +992,8 @@ export async function POST(request: Request) {
       assignee: assignee || "미지정",
       category,
       memo,
+      allocatedBudget,
+      requiredBudget,
       dueDate,
       templateKey: payload.templateKey,
       actor,
@@ -984,6 +1031,8 @@ export async function PATCH(request: Request) {
       assignee?: string;
       category?: string;
       memo?: string;
+      allocatedBudget?: number | string | null;
+      requiredBudget?: number | string | null;
       dueDate?: string | null;
       blockers?: string;
       color?: string;
@@ -1315,6 +1364,14 @@ export async function PATCH(request: Request) {
         typeof payload.memo === "string"
           ? payload.memo.trim().slice(0, 1000)
           : existing.memo;
+      const allocatedBudget =
+        "allocatedBudget" in payload
+          ? normalizeBudget(payload.allocatedBudget)
+          : existing.allocated_budget;
+      const requiredBudget =
+        "requiredBudget" in payload
+          ? normalizeBudget(payload.requiredBudget)
+          : existing.required_budget;
       const dueDate =
         typeof payload.dueDate === "string" || payload.dueDate === null
           ? normalizeDate(payload.dueDate)
@@ -1330,11 +1387,24 @@ export async function PATCH(request: Request) {
             assignee = ?,
             category = ?,
             memo = ?,
+            allocated_budget = ?,
+            required_budget = ?,
             due_date = ?,
             updated_by = ?,
             updated_at = ?
           WHERE id = ?`)
-        .bind(title, assignee, category, memo, dueDate, actor, now, itemId)
+        .bind(
+          title,
+          assignee,
+          category,
+          memo,
+          allocatedBudget,
+          requiredBudget,
+          dueDate,
+          actor,
+          now,
+          itemId
+        )
         .run();
 
       await d1

@@ -14,6 +14,8 @@ export const workflowItems = sqliteTable(
     assignee: text("assignee").notNull().default(""),
     category: text("category").notNull().default("일반 업무"),
     memo: text("memo").notNull().default(""),
+    allocatedBudget: integer("allocated_budget"),
+    requiredBudget: integer("required_budget"),
     dueDate: text("due_date"),
     templateKey: text("template_key").notNull().default("general-service"),
     position: integer("position").notNull(),
