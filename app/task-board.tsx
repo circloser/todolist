@@ -208,6 +208,11 @@ function urgencyLabel(value?: string | null) {
   return `D-${days}`;
 }
 
+function shortDueLabel(value?: string | null) {
+  const label = urgencyLabel(value);
+  return label || "일정";
+}
+
 function assigneeName(value: string) {
   return value.trim() || "미지정";
 }
@@ -1357,15 +1362,22 @@ export default function TaskBoard() {
                                   {progress}%
                                 </span>
                               </div>
-                              <input
-                                type="date"
-                                value={item.dueDate ?? ""}
-                                onChange={(event) =>
-                                  updateItem(item.id, { dueDate: event.target.value })
-                                }
-                                className="mt-2 min-h-7 w-full border border-[#d7e1dc] bg-white px-1 text-[10px]"
+                              <label
+                                className="relative mt-2 flex h-7 w-full cursor-pointer items-center justify-center border border-[#d7e1dc] bg-white px-1 text-[10px] font-semibold text-[#53625c]"
                                 title="최종 마감일"
-                              />
+                              >
+                                {item.dueDate ? `마감 ${formatDay(item.dueDate)}` : "+ 마감"}
+                                <input
+                                  type="date"
+                                  value={item.dueDate ?? ""}
+                                  onChange={(event) =>
+                                    updateItem(item.id, {
+                                      dueDate: event.target.value,
+                                    })
+                                  }
+                                  className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
+                                />
+                              </label>
                             </td>
                             {item.steps.map((step, index) => {
                               const checked = step.status === "done";
@@ -1377,7 +1389,7 @@ export default function TaskBoard() {
                               return (
                                 <td
                                   key={step.id}
-                                  className={`border-r border-[#dbe4df] px-0.5 py-2 text-center align-middle ${
+                                  className={`border-r border-[#dbe4df] px-0.5 py-1.5 text-center align-middle ${
                                     checked
                                       ? "bg-[#dff3ee]"
                                       : state === "overdue" || state === "danger"
@@ -1388,52 +1400,56 @@ export default function TaskBoard() {
                                             ? "bg-[#fff8dc]"
                                             : "bg-[#f6f7f6]"
                                   }`}
-                                  title={`${step.title} · ${step.description}`}
+                                  title={`${step.title} · ${step.description}${
+                                    step.dueDate ? ` · 목표일 ${formatDay(step.dueDate)}` : ""
+                                  }`}
                                 >
-                                  <button
-                                    type="button"
-                                    disabled={disabled}
-                                    onClick={() =>
-                                      updateStep(
-                                        item,
-                                        step,
-                                        checked ? "todo" : "done"
-                                      )
-                                    }
-                                    className={`mx-auto flex h-7 w-7 items-center justify-center border text-[11px] font-semibold transition xl:h-8 xl:w-8 ${
-                                      checked
-                                        ? "border-[#248f84] bg-[#248f84] text-white"
-                                        : disabled
-                                          ? "border-[#d7e1dc] bg-[#eef2ef] text-[#a0aaa5]"
-                                          : state === "overdue" || state === "danger"
-                                            ? "border-[#d9452f] bg-[#e85d48] text-white"
-                                            : state === "warning"
-                                              ? "border-[#d59a18] bg-[#e5aa25] text-white"
-                                              : "border-[#e2c75e] bg-[#f7e47d] text-[#4d4626]"
-                                    }`}
-                                  >
-                                    {saving
-                                      ? "…"
-                                      : checked
-                                        ? "✓"
-                                        : state === "warning" ||
-                                            state === "danger" ||
-                                            state === "overdue"
-                                          ? urgencyLabel(step.dueDate)
-                                          : ""}
-                                  </button>
-                                  <div className="mt-1 text-[9px] font-semibold text-[#6b4d19]">
-                                    {urgencyLabel(step.dueDate)}
+                                  <div className="flex flex-col items-center gap-1">
+                                    <button
+                                      type="button"
+                                      disabled={disabled}
+                                      onClick={() =>
+                                        updateStep(
+                                          item,
+                                          step,
+                                          checked ? "todo" : "done"
+                                        )
+                                      }
+                                      className={`mx-auto flex h-8 w-8 items-center justify-center border text-[9px] font-semibold leading-none transition ${
+                                        checked
+                                          ? "border-[#248f84] bg-[#248f84] text-white"
+                                          : disabled
+                                            ? "border-[#d7e1dc] bg-[#eef2ef] text-[#a0aaa5]"
+                                            : state === "overdue" || state === "danger"
+                                              ? "border-[#d9452f] bg-[#e85d48] text-white"
+                                              : state === "warning"
+                                                ? "border-[#d59a18] bg-[#e5aa25] text-white"
+                                                : "border-[#e2c75e] bg-[#f7e47d] text-[#4d4626]"
+                                      }`}
+                                    >
+                                      {saving
+                                        ? "…"
+                                        : checked
+                                          ? "✓"
+                                          : step.dueDate
+                                            ? shortDueLabel(step.dueDate)
+                                            : ""}
+                                    </button>
+                                    <label
+                                      className="relative flex h-4 w-4 cursor-pointer items-center justify-center border border-[#d7e1dc] bg-white text-[9px] font-semibold text-[#6b7772]"
+                                      title={`${step.title} 목표일 설정`}
+                                    >
+                                      +
+                                      <input
+                                        type="date"
+                                        value={step.dueDate ?? ""}
+                                        onChange={(event) =>
+                                          updateStepDueDate(step, event.target.value)
+                                        }
+                                        className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
+                                      />
+                                    </label>
                                   </div>
-                                  <input
-                                    type="date"
-                                    value={step.dueDate ?? ""}
-                                    onChange={(event) =>
-                                      updateStepDueDate(step, event.target.value)
-                                    }
-                                    className="mt-1 h-5 w-full border border-[#d7e1dc] bg-white px-0.5 text-[9px]"
-                                    title={`${step.title} 목표일`}
-                                  />
                                 </td>
                               );
                             })}
