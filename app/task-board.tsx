@@ -130,23 +130,6 @@ const dueFilters: Array<{ key: DueFilter; label: string }> = [
   { key: "overdue", label: "지연" },
 ];
 
-const compactStageLabels: Record<string, string> = {
-  "plan-draft": "초안",
-  estimate: "견적",
-  "plan-approval": "결재",
-  "purchase-request": "구매",
-  contract: "계약",
-  kickoff: "착수",
-  "progress-25": "25%",
-  "progress-50": "50%",
-  "progress-75": "75%",
-  "progress-100": "100%",
-  "completion-receipt": "완료계",
-  inspection: "검수",
-  "payment-request": "지급",
-  "result-report": "보고",
-};
-
 const defaultTemplates: TemplateOption[] = [
   {
     key: "external-research-outsourcing",
@@ -160,11 +143,6 @@ const defaultSettings: AppSettings = {
   organizationName: "습지복원팀",
   boardTitle: "Workflow Command Center",
 };
-
-function compactStageTitle(step: { stageKey?: string; key?: string; title: string }) {
-  const stageKey = step.stageKey ?? step.key ?? "";
-  return compactStageLabels[stageKey] ?? step.title;
-}
 
 function formatDate(value?: string | null) {
   if (!value) {
@@ -394,6 +372,7 @@ export default function TaskBoard() {
   const [draggedId, setDraggedId] = useState<number | null>(null);
   const [savingOrder, setSavingOrder] = useState(false);
   const [savingItemIds, setSavingItemIds] = useState<Set<number>>(new Set());
+  const [deletingItemIds, setDeletingItemIds] = useState<Set<number>>(new Set());
   const [savingStepIds, setSavingStepIds] = useState<Set<number>>(new Set());
   const [savingSubtaskIds, setSavingSubtaskIds] = useState<Set<number>>(new Set());
   const [error, setError] = useState("");
@@ -614,22 +593,6 @@ export default function TaskBoard() {
     return next.sort((first, second) => first.position - second.position);
   }, [baseItems, sortMode]);
 
-  const visibleGroups = useMemo(() => {
-    const groups = new Map<string, WorkflowItem[]>();
-
-    for (const item of visibleItems) {
-      const name = categoryName(item.category);
-      const group = groups.get(name) ?? [];
-      group.push(item);
-      groups.set(name, group);
-    }
-
-    return [...groups.entries()].map(([category, groupItems]) => ({
-      category,
-      items: groupItems,
-    }));
-  }, [visibleItems]);
-
   const stages =
     selectedTemplate?.stages.map((stage) => ({
       stageKey: stage.key,
@@ -773,6 +736,56 @@ export default function TaskBoard() {
       setSavingItemIds((current) => {
         const next = new Set(current);
         next.delete(id);
+        return next;
+      });
+    }
+  }
+
+  async function deleteItem(item: WorkflowItem) {
+    if (!window.confirm(`'${item.title}' 업무를 삭제할까요?`)) {
+      return;
+    }
+
+    const previousItems = items;
+    setError("");
+    setDeletingItemIds((current) => new Set(current).add(item.id));
+    setItems((current) => current.filter((currentItem) => currentItem.id !== item.id));
+    setExpandedIds((current) => {
+      const next = new Set(current);
+      next.delete(item.id);
+      return next;
+    });
+
+    try {
+      const response = await fetch("/api/tasks", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ itemId: item.id, actor: currentActor }),
+      });
+      const data = (await response.json()) as TaskResponse;
+
+      if (!response.ok || !data.items) {
+        throw new Error(data.error ?? "업무를 삭제하지 못했습니다.");
+      }
+
+      setItems(data.items);
+      setHistory(data.history ?? history);
+      setSubtaskDrafts((current) => {
+        const next = { ...current };
+        delete next[item.id];
+        return next;
+      });
+    } catch (deleteError) {
+      setItems(previousItems);
+      setError(
+        deleteError instanceof Error
+          ? deleteError.message
+          : "업무를 삭제하지 못했습니다."
+      );
+    } finally {
+      setDeletingItemIds((current) => {
+        const next = new Set(current);
+        next.delete(item.id);
         return next;
       });
     }
@@ -1364,17 +1377,21 @@ export default function TaskBoard() {
             <div className="overflow-x-hidden">
               <table className="w-full table-fixed border-collapse text-[11px] xl:text-xs">
                 <colgroup>
-                  <col className="w-[2.75%]" />
-                  <col className="w-[15.5%]" />
-                  <col className="w-[8.5%]" />
                   <col className="w-[8%]" />
+                  <col className="w-[2.5%]" />
+                  <col className="w-[13%]" />
+                  <col className="w-[7%]" />
+                  <col className="w-[7%]" />
                   {stages.map((stage) => (
-                    <col key={stage.stageKey} className="w-[3.2%]" />
+                    <col key={stage.stageKey} className="w-[2.8%]" />
                   ))}
-                  <col className="w-[20.45%]" />
+                  <col className="w-[23.3%]" />
                 </colgroup>
                 <thead>
                   <tr className="bg-[#f7faf8] text-left text-xs font-semibold text-[#53625c]">
+                    <th className="border-b border-r border-[#dbe4df] bg-[#f7faf8] px-2 py-3">
+                      대분류
+                    </th>
                     <th className="border-b border-r border-[#dbe4df] bg-[#f7faf8] px-1 py-3" />
                     <th className="border-b border-r border-[#dbe4df] bg-[#f7faf8] px-2 py-3">
                       업무
@@ -1388,11 +1405,14 @@ export default function TaskBoard() {
                     {stages.map((stage) => (
                       <th
                         key={stage.stageKey}
-                        className="border-b border-r border-[#dbe4df] px-1 py-3 text-center"
+                        className="border-b border-r border-[#dbe4df] px-0.5 py-2 text-center"
                         title={`${stage.title} · ${stage.description}`}
                       >
-                        <span className="block truncate leading-4">
-                          {compactStageTitle(stage)}
+                        <span
+                          className="mx-auto flex min-h-24 items-center justify-center whitespace-nowrap text-[10px] leading-none text-[#40524b]"
+                          style={{ writingMode: "vertical-rl" }}
+                        >
+                          {stage.title}
                         </span>
                       </th>
                     ))}
@@ -1406,7 +1426,7 @@ export default function TaskBoard() {
                   {loading ? (
                     <tr>
                       <td
-                        colSpan={stages.length + 5}
+                        colSpan={stages.length + 6}
                         className="px-4 py-12 text-center text-[#63716b]"
                       >
                         불러오는 중
@@ -1417,7 +1437,7 @@ export default function TaskBoard() {
                   {!loading && !visibleItems.length ? (
                     <tr>
                       <td
-                        colSpan={stages.length + 5}
+                        colSpan={stages.length + 6}
                         className="px-4 py-12 text-center text-[#63716b]"
                       >
                         표시할 업무가 없습니다.
@@ -1426,19 +1446,7 @@ export default function TaskBoard() {
                   ) : null}
 
                   {!loading &&
-                    visibleGroups.map((group) => (
-                      <Fragment key={group.category}>
-                        <tr className="border-y border-[#c7d8d0] bg-[#eef6f3]">
-                          <td colSpan={stages.length + 5} className="px-3 py-2">
-                            <div className="flex items-center gap-2 text-sm font-semibold text-[#245f57]">
-                              <span>{group.category}</span>
-                              <span className="text-xs font-medium text-[#66746e]">
-                                {group.items.length}건
-                              </span>
-                            </div>
-                          </td>
-                        </tr>
-                        {group.items.map((item) => {
+                    visibleItems.map((item) => {
                       const progress = itemProgress(item);
                       const done = isItemDone(item);
                       const expanded = expandedIds.has(item.id);
@@ -1457,6 +1465,23 @@ export default function TaskBoard() {
                             } hover:bg-[#f8fbf9]`}
                             style={{ backgroundColor: draggedId === item.id ? undefined : rowColor }}
                           >
+                            <td className="border-r border-[#dbe4df] bg-inherit px-1.5 py-2 align-top">
+                              <input
+                                value={item.category}
+                                onChange={(event) =>
+                                  updateLocalItem(item.id, {
+                                    category: event.target.value,
+                                  })
+                                }
+                                onBlur={(event) =>
+                                  updateItem(item.id, {
+                                    category: event.target.value,
+                                  })
+                                }
+                                className="min-h-8 w-full border border-transparent bg-transparent px-1.5 text-xs font-semibold text-[#245f57] hover:border-[#cbd8d2] focus:border-[#77b8ae] focus:bg-white"
+                                placeholder="대분류"
+                              />
+                            </td>
                             <td className="border-r border-[#dbe4df] bg-inherit px-1 py-2 align-top">
                               <button
                                 type="button"
@@ -1479,6 +1504,15 @@ export default function TaskBoard() {
                               >
                                 {expanded ? "−" : "+"}
                               </button>
+                              <button
+                                type="button"
+                                disabled={deletingItemIds.has(item.id)}
+                                onClick={() => void deleteItem(item)}
+                                className="mt-1 flex h-7 w-full items-center justify-center border border-[#ead1c8] bg-white text-[#9b3f2f] transition hover:bg-[#fff2ee] disabled:cursor-not-allowed disabled:text-[#c99c91]"
+                                title="업무 삭제"
+                              >
+                                ×
+                              </button>
                             </td>
                             <td className="border-r border-[#dbe4df] bg-inherit px-1.5 py-2 align-top">
                               <input
@@ -1494,21 +1528,6 @@ export default function TaskBoard() {
                                   })
                                 }
                                 className="min-h-8 w-full border border-transparent bg-transparent px-1.5 text-xs font-semibold text-[#1d2320] hover:border-[#cbd8d2] focus:border-[#77b8ae] focus:bg-white xl:text-sm"
-                              />
-                              <input
-                                value={item.category}
-                                onChange={(event) =>
-                                  updateLocalItem(item.id, {
-                                    category: event.target.value,
-                                  })
-                                }
-                                onBlur={(event) =>
-                                  updateItem(item.id, {
-                                    category: event.target.value,
-                                  })
-                                }
-                                className="mt-1 min-h-6 w-full border border-[#d9e5df] bg-white/70 px-1.5 text-[10px] font-semibold text-[#245f57] focus:border-[#77b8ae]"
-                                placeholder="대분류"
                               />
                               <div className="mt-1 truncate px-1.5 text-[10px] text-[#6b7772] xl:text-xs">
                                 {done ? "완료" : nextStepTitle(item)}
@@ -1612,7 +1631,7 @@ export default function TaskBoard() {
                                           checked ? "todo" : "done"
                                         )
                                       }
-                                      className={`mx-auto flex h-8 w-8 items-center justify-center border text-[9px] font-semibold leading-none transition ${
+                                      className={`mx-auto flex h-7 w-full max-w-7 items-center justify-center border text-[9px] font-semibold leading-none transition ${
                                         checked
                                           ? "border-[#248f84] bg-[#248f84] text-white"
                                           : disabled
@@ -1633,7 +1652,7 @@ export default function TaskBoard() {
                                             : ""}
                                     </button>
                                     <label
-                                      className="relative flex h-4 w-4 cursor-pointer items-center justify-center border border-[#d7e1dc] bg-white text-[9px] font-semibold text-[#6b7772]"
+                                      className="relative flex h-4 w-full max-w-4 cursor-pointer items-center justify-center border border-[#d7e1dc] bg-white text-[9px] font-semibold text-[#6b7772]"
                                       title={`${step.title} 목표일 설정`}
                                     >
                                       +
@@ -1731,7 +1750,7 @@ export default function TaskBoard() {
 
                           {expanded ? (
                             <tr className="border-b border-[#dbe4df] bg-[#fbfcfb]">
-                              <td />
+                              <td colSpan={2} />
                               <td colSpan={stages.length + 4} className="px-3 py-3">
                                 <div className="grid gap-3 lg:grid-cols-[1fr_320px]">
                                   <div>
@@ -1924,14 +1943,15 @@ export default function TaskBoard() {
                           ) : null}
                         </Fragment>
                       );
-                        })}
-                      </Fragment>
-                    ))}
+                    })}
                 </tbody>
 
                 <tfoot>
                   <tr className="border-t-2 border-[#9fcac1] bg-[#f6fbf8]">
-                    <td className="border-r border-[#dbe4df] bg-[#f6fbf8] px-1 py-3" />
+                    <td
+                      colSpan={2}
+                      className="border-r border-[#dbe4df] bg-[#f6fbf8] px-1 py-3"
+                    />
                     <td colSpan={stages.length + 4} className="px-3 py-3">
                       <form
                         onSubmit={addItem}

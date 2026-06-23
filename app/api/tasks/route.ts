@@ -216,23 +216,6 @@ const templates = [
     ],
   },
   {
-    key: "digital-3d-data",
-    name: "디지털 데이터 구축 / 3D 모델링",
-    description: "LiDAR, 3D 모델링, 공간 데이터 가공 및 업로드 파이프라인",
-    stages: [
-      ["target-planning", "대상선정/기획", "기획", "구축 대상과 산출물을 정의합니다.", null],
-      ["equipment-gcp", "장비세팅/GCP설정", "준비", "장비와 기준점을 설정합니다.", null],
-      ["field-scan", "현장스캔/데이터취득", "취득", "현장 스캔과 원천 데이터를 확보합니다.", null],
-      ["preprocess", "전처리(Point Cloud 등)", "가공", "포인트 클라우드 등 원천 데이터를 정리합니다.", null],
-      ["model-merge", "3D모델링/병합(50%)", "모델링", "모델링과 병합을 진행합니다.", 50],
-      ["texture-optimize", "텍스처링/최적화", "모델링", "텍스처와 모델 성능을 최적화합니다.", null],
-      ["quality-review", "품질검토(90%)", "검수", "정확도와 품질을 검토합니다.", 90],
-      ["metadata", "메타데이터입력", "등록", "표준 메타데이터를 입력합니다.", null],
-      ["platform-upload", "DB/플랫폼업로드", "등록", "DB와 플랫폼에 업로드합니다.", null],
-      ["completion-report", "완료보고", "보고", "완료 결과를 보고합니다.", 100],
-    ],
-  },
-  {
     key: "ecological-restoration-construction",
     name: "생태 복원 및 조성 공사",
     description: "습지 복원, 서식처 조성, 시공, 준공, 유지관리 이관",
@@ -698,11 +681,25 @@ async function createItemWithDefaultSteps({
 
 async function ensureDefaultItem() {
   const d1 = getD1();
+  const seeded = await d1
+    .prepare("SELECT value FROM app_settings WHERE key = 'defaultItemSeeded'")
+    .first<{ value: string }>();
+
+  if (seeded) {
+    return;
+  }
+
   const countResult = await d1
     .prepare("SELECT COUNT(*) AS count FROM workflow_items")
     .first<{ count: number }>();
 
   if (Number(countResult?.count ?? 0) > 0) {
+    await d1
+      .prepare(`INSERT INTO app_settings (key, value, updated_at)
+        VALUES ('defaultItemSeeded', 'true', ?)
+        ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`)
+      .bind(new Date().toISOString())
+      .run();
     return;
   }
 
@@ -717,6 +714,12 @@ async function ensureDefaultItem() {
     position: 1,
     legacyStatuses: await readLegacyStatuses(),
   });
+  await d1
+    .prepare(`INSERT INTO app_settings (key, value, updated_at)
+      VALUES ('defaultItemSeeded', 'true', ?)
+      ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`)
+    .bind(new Date().toISOString())
+    .run();
 }
 
 async function ensureDefaultSettings() {
@@ -1431,6 +1434,58 @@ export async function PATCH(request: Request) {
     }
 
     return Response.json({ error: "변경할 업무가 필요합니다." }, { status: 400 });
+  } catch (error) {
+    return Response.json(
+      { error: toRouteErrorMessage(error) },
+      { status: 500 }
+    );
+  }
+}
+
+export async function DELETE(request: Request) {
+  try {
+    await prepareWorkflow();
+
+    const payload = (await request.json().catch(() => ({}))) as {
+      actor?: string;
+      itemId?: number;
+    };
+    const itemId = Number(payload.itemId);
+    const actor = getActor(request, payload.actor);
+    const d1 = getD1();
+
+    if (!Number.isFinite(itemId)) {
+      return Response.json({ error: "삭제할 업무를 선택해 주세요." }, { status: 400 });
+    }
+
+    const item = await d1
+      .prepare("SELECT title FROM workflow_items WHERE id = ?")
+      .bind(itemId)
+      .first<{ title: string }>();
+
+    if (!item) {
+      return Response.json({ error: "업무를 찾을 수 없습니다." }, { status: 404 });
+    }
+
+    await d1.batch([
+      d1.prepare("DELETE FROM workflow_steps WHERE item_id = ?").bind(itemId),
+      d1.prepare("DELETE FROM workflow_subtasks WHERE item_id = ?").bind(itemId),
+      d1.prepare("DELETE FROM workflow_items WHERE id = ?").bind(itemId),
+    ]);
+
+    await logHistory({
+      itemId,
+      entityType: "item",
+      entityId: itemId,
+      action: "delete",
+      summary: `${actor}님이 '${item.title}' 업무를 삭제함`,
+      actor,
+    });
+
+    return Response.json({
+      items: await getItems(),
+      history: await getHistory(),
+    });
   } catch (error) {
     return Response.json(
       { error: toRouteErrorMessage(error) },
