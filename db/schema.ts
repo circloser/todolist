@@ -102,6 +102,12 @@ export const webhookSettings = sqliteTable("webhook_settings", {
   createdAt: text("created_at").notNull(),
 });
 
+export const appSettings = sqliteTable("app_settings", {
+  key: text("key").primaryKey(),
+  value: text("value").notNull(),
+  updatedAt: text("updated_at").notNull(),
+});
+
 export const workflowTasks = sqliteTable("workflow_tasks", {
   id: integer("id").primaryKey({ autoIncrement: true }),
   templateKey: text("template_key").notNull().unique(),

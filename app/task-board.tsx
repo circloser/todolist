@@ -68,13 +68,18 @@ type HistoryEntry = {
   createdAt: string;
 };
 
+type AppSettings = {
+  organizationName: string;
+  boardTitle: string;
+};
+
 type TaskResponse = {
   item?: WorkflowItem | null;
   items?: WorkflowItem[];
   templates?: TemplateOption[];
   assigneeSettings?: Record<string, string>;
   history?: HistoryEntry[];
-  webhook?: { enabled: boolean };
+  settings?: AppSettings;
   viewer?: string;
   error?: string;
 };
@@ -122,6 +127,11 @@ const defaultTemplates: TemplateOption[] = [
     description: "일반 행정/용역 프로세스",
   },
 ];
+
+const defaultSettings: AppSettings = {
+  organizationName: "습지복원팀",
+  boardTitle: "Workflow Command Center",
+};
 
 function compactStageTitle(step: Pick<WorkflowStep, "stageKey" | "title">) {
   return compactStageLabels[step.stageKey] ?? step.title;
@@ -304,8 +314,11 @@ export default function TaskBoard() {
   const [assigneeSettings, setAssigneeSettings] = useState<Record<string, string>>(
     {}
   );
-  const [webhookEnabled, setWebhookEnabled] = useState(false);
-  const [viewer, setViewer] = useState("팀");
+  const [organizationName, setOrganizationName] = useState(
+    defaultSettings.organizationName
+  );
+  const [boardTitle, setBoardTitle] = useState(defaultSettings.boardTitle);
+  const [userName, setUserName] = useState("사용자");
   const [filter, setFilter] = useState<TaskFilter>("all");
   const [dueFilter, setDueFilter] = useState<DueFilter>("all");
   const [sortMode, setSortMode] = useState<SortMode>("manual");
@@ -318,17 +331,18 @@ export default function TaskBoard() {
   const [newMemo, setNewMemo] = useState("");
   const [newDueDate, setNewDueDate] = useState("");
   const [newTemplateKey, setNewTemplateKey] = useState("general-service");
-  const [webhookUrl, setWebhookUrl] = useState("");
   const [expandedIds, setExpandedIds] = useState<Set<number>>(new Set());
   const [subtaskDrafts, setSubtaskDrafts] = useState<Record<number, string>>({});
   const [loading, setLoading] = useState(true);
   const [adding, setAdding] = useState(false);
+  const [savingSettings, setSavingSettings] = useState(false);
   const [draggedId, setDraggedId] = useState<number | null>(null);
   const [savingOrder, setSavingOrder] = useState(false);
   const [savingItemIds, setSavingItemIds] = useState<Set<number>>(new Set());
   const [savingStepIds, setSavingStepIds] = useState<Set<number>>(new Set());
   const [savingSubtaskIds, setSavingSubtaskIds] = useState<Set<number>>(new Set());
   const [error, setError] = useState("");
+  const currentActor = userName.trim() || "사용자";
 
   async function loadTasks() {
     setLoading(true);
@@ -346,8 +360,15 @@ export default function TaskBoard() {
       setTemplates(data.templates?.length ? data.templates : defaultTemplates);
       setHistory(data.history ?? []);
       setAssigneeSettings(data.assigneeSettings ?? {});
-      setWebhookEnabled(Boolean(data.webhook?.enabled));
-      setViewer(data.viewer ?? "팀");
+      setOrganizationName(
+        data.settings?.organizationName ?? defaultSettings.organizationName
+      );
+      setBoardTitle(data.settings?.boardTitle ?? defaultSettings.boardTitle);
+
+      const storedUserName = window.localStorage
+        .getItem("team-progress-user-name")
+        ?.trim();
+      setUserName(storedUserName || data.viewer || "사용자");
     } catch (loadError) {
       setError(
         loadError instanceof Error
@@ -366,6 +387,57 @@ export default function TaskBoard() {
 
     return () => window.clearTimeout(timer);
   }, []);
+
+  function saveUserName(value: string) {
+    const nextUserName = value.trim() || "사용자";
+    setUserName(nextUserName);
+    window.localStorage.setItem("team-progress-user-name", nextUserName);
+  }
+
+  async function saveBoardSettings(nextSettings?: Partial<AppSettings>) {
+    const nextOrganizationName = (
+      nextSettings?.organizationName ?? organizationName
+    ).trim();
+    const nextBoardTitle = (nextSettings?.boardTitle ?? boardTitle).trim();
+
+    if (!nextOrganizationName || !nextBoardTitle) {
+      setError("조직명과 보드명을 입력해 주세요.");
+      return;
+    }
+
+    setSavingSettings(true);
+    setError("");
+
+    try {
+      const response = await fetch("/api/tasks", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "update-settings",
+          actor: currentActor,
+          organizationName: nextOrganizationName,
+          boardTitle: nextBoardTitle,
+        }),
+      });
+      const data = (await response.json()) as TaskResponse;
+
+      if (!response.ok || !data.settings) {
+        throw new Error(data.error ?? "보드 설정을 저장하지 못했습니다.");
+      }
+
+      setOrganizationName(data.settings.organizationName);
+      setBoardTitle(data.settings.boardTitle);
+      setHistory(data.history ?? history);
+    } catch (saveError) {
+      setError(
+        saveError instanceof Error
+          ? saveError.message
+          : "보드 설정을 저장하지 못했습니다."
+      );
+    } finally {
+      setSavingSettings(false);
+    }
+  }
 
   const assignees = useMemo(
     () =>
@@ -544,7 +616,7 @@ export default function TaskBoard() {
       const response = await fetch("/api/tasks", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ itemId: id, ...patch }),
+        body: JSON.stringify({ itemId: id, actor: currentActor, ...patch }),
       });
       const data = (await response.json()) as TaskResponse;
 
@@ -596,7 +668,7 @@ export default function TaskBoard() {
       const response = await fetch("/api/tasks", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ stepId: step.id, status }),
+        body: JSON.stringify({ stepId: step.id, actor: currentActor, status }),
       });
       const data = (await response.json()) as TaskResponse;
 
@@ -630,7 +702,7 @@ export default function TaskBoard() {
       const response = await fetch("/api/tasks", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ stepId: step.id, dueDate }),
+        body: JSON.stringify({ stepId: step.id, actor: currentActor, dueDate }),
       });
       const data = (await response.json()) as TaskResponse;
 
@@ -667,7 +739,7 @@ export default function TaskBoard() {
       const response = await fetch("/api/tasks", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ subtaskId, ...patch }),
+        body: JSON.stringify({ subtaskId, actor: currentActor, ...patch }),
       });
       const data = (await response.json()) as TaskResponse;
 
@@ -706,7 +778,12 @@ export default function TaskBoard() {
       const response = await fetch("/api/tasks", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "create-subtask", itemId, title }),
+        body: JSON.stringify({
+          action: "create-subtask",
+          actor: currentActor,
+          itemId,
+          title,
+        }),
       });
       const data = (await response.json()) as TaskResponse;
 
@@ -743,6 +820,7 @@ export default function TaskBoard() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           title,
+          actor: currentActor,
           assignee: newAssignee,
           memo: newMemo,
           dueDate: newDueDate,
@@ -771,43 +849,6 @@ export default function TaskBoard() {
     }
   }
 
-  async function saveWebhook(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-
-    if (!webhookUrl.trim()) {
-      return;
-    }
-
-    setError("");
-
-    try {
-      const response = await fetch("/api/tasks", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          action: "save-webhook",
-          webhookName: "팀 알림",
-          webhookUrl,
-        }),
-      });
-      const data = (await response.json()) as TaskResponse;
-
-      if (!response.ok) {
-        throw new Error(data.error ?? "Webhook을 저장하지 못했습니다.");
-      }
-
-      setWebhookEnabled(Boolean(data.webhook?.enabled));
-      setWebhookUrl("");
-      setHistory(data.history ?? history);
-    } catch (saveError) {
-      setError(
-        saveError instanceof Error
-          ? saveError.message
-          : "Webhook을 저장하지 못했습니다."
-      );
-    }
-  }
-
   async function saveAssigneeColor(assignee: string, color: string) {
     setError("");
 
@@ -817,6 +858,7 @@ export default function TaskBoard() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           action: "set-assignee-color",
+          actor: currentActor,
           assignee,
           color,
         }),
@@ -849,7 +891,7 @@ export default function TaskBoard() {
       const response = await fetch("/api/tasks", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ order }),
+        body: JSON.stringify({ actor: currentActor, order }),
       });
       const data = (await response.json()) as TaskResponse;
 
@@ -933,18 +975,42 @@ export default function TaskBoard() {
         <div className="mx-auto flex max-w-[1600px] flex-col gap-4 px-4 py-4 sm:px-6 lg:px-8">
           <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
             <div>
-              <div className="flex flex-wrap items-center gap-2 text-sm font-semibold text-[#4f6f68]">
-                <span className="rounded bg-[#e6f4ef] px-2.5 py-1">
-                  습지복원팀
-                </span>
-                <span>{viewer}</span>
-                <span className="rounded bg-[#f7faf8] px-2.5 py-1">
-                  Webhook {webhookEnabled ? "ON" : "OFF"}
-                </span>
+              <div className="flex flex-wrap items-end gap-2 text-sm font-semibold text-[#4f6f68]">
+                <label className="grid gap-1 text-[11px] uppercase tracking-wide text-[#6b7772]">
+                  조직
+                  <input
+                    value={organizationName}
+                    onChange={(event) => setOrganizationName(event.target.value)}
+                    onBlur={(event) =>
+                      void saveBoardSettings({
+                        organizationName: event.target.value,
+                      })
+                    }
+                    className="min-h-8 w-36 border border-[#cbd8d2] bg-[#e6f4ef] px-2 text-sm font-semibold normal-case tracking-normal text-[#1f4f49]"
+                  />
+                </label>
+                <label className="grid gap-1 text-[11px] uppercase tracking-wide text-[#6b7772]">
+                  사용자
+                  <input
+                    value={userName}
+                    onChange={(event) => setUserName(event.target.value)}
+                    onBlur={(event) => saveUserName(event.target.value)}
+                    className="min-h-8 w-32 border border-[#dce5e0] bg-white px-2 text-sm font-semibold normal-case tracking-normal text-[#1d2320]"
+                    placeholder="이름"
+                  />
+                </label>
+                {savingSettings ? (
+                  <span className="pb-1 text-xs text-[#1f6f67]">저장 중</span>
+                ) : null}
               </div>
-              <h1 className="mt-2 text-2xl font-semibold sm:text-3xl">
-                업무 진행표
-              </h1>
+              <input
+                value={boardTitle}
+                onChange={(event) => setBoardTitle(event.target.value)}
+                onBlur={(event) =>
+                  void saveBoardSettings({ boardTitle: event.target.value })
+                }
+                className="mt-2 min-h-11 w-full max-w-[560px] border border-transparent bg-transparent px-0 text-2xl font-semibold text-[#1d2320] hover:border-[#cbd8d2] focus:border-[#77b8ae] focus:bg-white focus:px-2 sm:text-3xl"
+              />
             </div>
 
             <div className="grid grid-cols-3 gap-2 sm:min-w-[420px]">
@@ -1636,24 +1702,43 @@ export default function TaskBoard() {
           </section>
 
           <section className="border border-[#cfdad4] bg-white p-4">
-            <h2 className="text-base font-semibold">Webhook 알림</h2>
-            <p className="mt-1 text-sm text-[#63716b]">
-              단계 완료 시 Slack, Teams, 잔디 Webhook으로 메시지를 보냅니다.
-            </p>
-            <form onSubmit={saveWebhook} className="mt-3 grid gap-2">
-              <input
-                value={webhookUrl}
-                onChange={(event) => setWebhookUrl(event.target.value)}
-                className="min-h-10 border border-[#cbd8d2] bg-white px-3 text-sm"
-                placeholder="https://..."
-              />
-              <button
-                type="submit"
-                className="min-h-10 bg-[#1f6f67] px-4 text-sm font-semibold text-white"
-              >
-                Webhook 저장
-              </button>
-            </form>
+            <h2 className="text-base font-semibold">보드 설정</h2>
+            <div className="mt-3 grid gap-3">
+              <label className="text-sm font-medium text-[#4b5d56]">
+                조직명
+                <input
+                  value={organizationName}
+                  onChange={(event) => setOrganizationName(event.target.value)}
+                  onBlur={(event) =>
+                    void saveBoardSettings({
+                      organizationName: event.target.value,
+                    })
+                  }
+                  className="mt-1 min-h-10 w-full border border-[#cbd8d2] bg-white px-3 text-sm"
+                />
+              </label>
+              <label className="text-sm font-medium text-[#4b5d56]">
+                보드명
+                <input
+                  value={boardTitle}
+                  onChange={(event) => setBoardTitle(event.target.value)}
+                  onBlur={(event) =>
+                    void saveBoardSettings({ boardTitle: event.target.value })
+                  }
+                  className="mt-1 min-h-10 w-full border border-[#cbd8d2] bg-white px-3 text-sm"
+                />
+              </label>
+              <label className="text-sm font-medium text-[#4b5d56]">
+                사용자명
+                <input
+                  value={userName}
+                  onChange={(event) => setUserName(event.target.value)}
+                  onBlur={(event) => saveUserName(event.target.value)}
+                  className="mt-1 min-h-10 w-full border border-[#cbd8d2] bg-white px-3 text-sm"
+                  placeholder="이름"
+                />
+              </label>
+            </div>
           </section>
         </div>
       </section>

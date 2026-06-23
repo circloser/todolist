@@ -60,6 +60,12 @@ type AssigneeSettingRow = {
   updated_at: string;
 };
 
+type AppSettingRow = {
+  key: string;
+  value: string;
+  updated_at: string;
+};
+
 type LegacyWorkflowTaskRow = {
   template_key: string;
   status: StepStatus;
@@ -185,7 +191,26 @@ const templates = [
   },
 ];
 
-function getActor(request: Request) {
+const defaultAppSettings = {
+  organizationName: "습지복원팀",
+  boardTitle: "Workflow Command Center",
+};
+
+function normalizeActor(value: unknown) {
+  if (typeof value !== "string") {
+    return "";
+  }
+
+  return value.trim().slice(0, 80);
+}
+
+function getActor(request: Request, override?: unknown) {
+  const overrideName = normalizeActor(override);
+
+  if (overrideName) {
+    return overrideName;
+  }
+
   const encodedName = request.headers.get("oai-authenticated-user-full-name");
   const nameEncoding = request.headers.get(
     "oai-authenticated-user-full-name-encoding"
@@ -195,7 +220,7 @@ function getActor(request: Request) {
     return decodeURIComponent(encodedName);
   }
 
-  return request.headers.get("oai-authenticated-user-email") ?? "팀";
+  return request.headers.get("oai-authenticated-user-email") ?? "사용자";
 }
 
 function toRouteErrorMessage(error: unknown) {
@@ -346,13 +371,10 @@ async function ensureSchema() {
       actor TEXT NOT NULL DEFAULT '팀',
       created_at TEXT NOT NULL
     )`),
-    d1.prepare(`CREATE TABLE IF NOT EXISTS webhook_settings (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      name TEXT NOT NULL DEFAULT '팀 알림',
-      url TEXT NOT NULL,
-      enabled INTEGER NOT NULL DEFAULT 1,
-      updated_at TEXT NOT NULL,
-      created_at TEXT NOT NULL
+    d1.prepare(`CREATE TABLE IF NOT EXISTS app_settings (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL,
+      updated_at TEXT NOT NULL
     )`),
     d1.prepare(
       "CREATE INDEX IF NOT EXISTS workflow_items_assignee_idx ON workflow_items (assignee, position)"
@@ -410,27 +432,6 @@ async function logHistory({
       new Date().toISOString()
     )
     .run();
-}
-
-async function notifyWebhooks(summary: string, payload: Record<string, unknown>) {
-  const webhooks = await getD1()
-    .prepare("SELECT name, url FROM webhook_settings WHERE enabled = 1")
-    .all<{ name: string; url: string }>();
-
-  await Promise.allSettled(
-    (webhooks.results ?? []).map((webhook) =>
-      fetch(webhook.url, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          text: summary,
-          summary,
-          source: "습지복원팀 업무 진행표",
-          ...payload,
-        }),
-      })
-    )
-  );
 }
 
 async function readLegacyStatuses() {
@@ -593,6 +594,16 @@ async function ensureDefaultSettings() {
         .bind(row.assignee, colors[index % colors.length], now)
     )
   );
+
+  await d1.batch(
+    Object.entries(defaultAppSettings).map(([key, value]) =>
+      d1
+        .prepare(
+          "INSERT OR IGNORE INTO app_settings (key, value, updated_at) VALUES (?, ?, ?)"
+        )
+        .bind(key, value, now)
+    )
+  );
 }
 
 async function prepareWorkflow() {
@@ -695,12 +706,17 @@ async function getAssigneeSettings() {
   );
 }
 
-async function getWebhookSummary() {
-  const count = await getD1()
-    .prepare("SELECT COUNT(*) AS count FROM webhook_settings WHERE enabled = 1")
-    .first<{ count: number }>();
+async function getAppSettings() {
+  const settings = await getD1()
+    .prepare("SELECT * FROM app_settings")
+    .all<AppSettingRow>();
 
-  return { enabled: Number(count?.count ?? 0) > 0 };
+  return {
+    ...defaultAppSettings,
+    ...Object.fromEntries(
+      (settings.results ?? []).map((setting) => [setting.key, setting.value])
+    ),
+  };
 }
 
 export async function GET(request: Request) {
@@ -713,7 +729,7 @@ export async function GET(request: Request) {
       templates,
       assigneeSettings: await getAssigneeSettings(),
       history: await getHistory(),
-      webhook: await getWebhookSummary(),
+      settings: await getAppSettings(),
       viewer: getActor(request),
     });
   } catch (error) {
@@ -730,16 +746,15 @@ export async function POST(request: Request) {
 
     const payload = (await request.json()) as {
       action?: string;
+      actor?: string;
       itemId?: number;
       title?: string;
       assignee?: string;
       memo?: string;
       dueDate?: string;
       templateKey?: string;
-      webhookUrl?: string;
-      webhookName?: string;
     };
-    const actor = getActor(request);
+    const actor = getActor(request, payload.actor);
     const d1 = getD1();
 
     if (payload.action === "create-subtask") {
@@ -795,43 +810,6 @@ export async function POST(request: Request) {
       );
     }
 
-    if (payload.action === "save-webhook") {
-      const url = payload.webhookUrl?.trim() ?? "";
-      const name = payload.webhookName?.trim().slice(0, 80) || "팀 알림";
-
-      if (!/^https:\/\//.test(url)) {
-        return Response.json({ error: "https:// 로 시작하는 Webhook URL이 필요합니다." }, { status: 400 });
-      }
-
-      const now = new Date().toISOString();
-
-      await d1
-        .prepare(`INSERT INTO webhook_settings (
-          name,
-          url,
-          enabled,
-          updated_at,
-          created_at
-        ) VALUES (?, ?, 1, ?, ?)`)
-        .bind(name, url, now, now)
-        .run();
-
-      await logHistory({
-        entityType: "webhook",
-        action: "create",
-        summary: `${actor}님이 Webhook 알림을 추가함`,
-        actor,
-      });
-
-      return Response.json(
-        {
-          webhook: await getWebhookSummary(),
-          history: await getHistory(),
-        },
-        { status: 201 }
-      );
-    }
-
     const title = payload.title?.trim().slice(0, 120) ?? "";
     const assignee = payload.assignee?.trim().slice(0, 80) ?? "";
     const memo = payload.memo?.trim().slice(0, 1000) ?? "";
@@ -876,6 +854,7 @@ export async function PATCH(request: Request) {
 
     const payload = (await request.json()) as {
       action?: string;
+      actor?: string;
       itemId?: number;
       order?: number[];
       stepId?: number;
@@ -885,11 +864,56 @@ export async function PATCH(request: Request) {
       memo?: string;
       dueDate?: string | null;
       color?: string;
+      organizationName?: string;
+      boardTitle?: string;
       status?: StepStatus;
     };
     const now = new Date().toISOString();
-    const actor = getActor(request);
+    const actor = getActor(request, payload.actor);
     const d1 = getD1();
+
+    if (payload.action === "update-settings") {
+      const organizationName =
+        typeof payload.organizationName === "string"
+          ? payload.organizationName.trim().slice(0, 80)
+          : "";
+      const boardTitle =
+        typeof payload.boardTitle === "string"
+          ? payload.boardTitle.trim().slice(0, 80)
+          : "";
+
+      if (!organizationName || !boardTitle) {
+        return Response.json(
+          { error: "조직명과 보드명을 입력해 주세요." },
+          { status: 400 }
+        );
+      }
+
+      await d1.batch([
+        d1
+          .prepare(`INSERT INTO app_settings (key, value, updated_at)
+            VALUES ('organizationName', ?, ?)
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`)
+          .bind(organizationName, now),
+        d1
+          .prepare(`INSERT INTO app_settings (key, value, updated_at)
+            VALUES ('boardTitle', ?, ?)
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`)
+          .bind(boardTitle, now),
+      ]);
+
+      await logHistory({
+        entityType: "settings",
+        action: "update",
+        summary: `${actor}님이 보드 설정을 변경함`,
+        actor,
+      });
+
+      return Response.json({
+        settings: await getAppSettings(),
+        history: await getHistory(),
+      });
+    }
 
     if (Array.isArray(payload.order)) {
       const order = payload.order.map(Number);
@@ -1124,18 +1148,6 @@ export async function PATCH(request: Request) {
         summary,
         actor,
       });
-
-      if (payload.status === "done") {
-        await notifyWebhooks(summary, {
-          event: "step.completed",
-          itemId: step.item_id,
-          itemTitle: step.item_title,
-          stepId,
-          stepTitle: step.title,
-          actor,
-          createdAt: now,
-        });
-      }
 
       return Response.json({
         item: await getItem(step.item_id),
