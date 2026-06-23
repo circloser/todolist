@@ -6,6 +6,7 @@ type WorkflowItemRow = {
   id: number;
   title: string;
   assignee: string;
+  category: string;
   memo: string;
   due_date: string | null;
   template_key: string;
@@ -37,6 +38,8 @@ type WorkflowSubtaskRow = {
   item_id: number;
   title: string;
   status: StepStatus;
+  due_date: string | null;
+  blockers: string;
   position: number;
   updated_by: string;
   updated_at: string;
@@ -265,6 +268,7 @@ function toItem(
     id: row.id,
     title: row.title,
     assignee: row.assignee,
+    category: row.category || "일반 업무",
     memo: row.memo,
     dueDate: row.due_date,
     templateKey: row.template_key,
@@ -293,6 +297,8 @@ function toItem(
       itemId: subtask.item_id,
       title: subtask.title,
       status: subtask.status,
+      dueDate: subtask.due_date,
+      blockers: subtask.blockers ?? "",
       position: subtask.position,
       updatedBy: subtask.updated_by,
       updatedAt: subtask.updated_at,
@@ -321,6 +327,7 @@ async function ensureSchema() {
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       title TEXT NOT NULL,
       assignee TEXT NOT NULL DEFAULT '',
+      category TEXT NOT NULL DEFAULT '일반 업무',
       memo TEXT NOT NULL DEFAULT '',
       due_date TEXT,
       template_key TEXT NOT NULL DEFAULT 'general-service',
@@ -351,6 +358,8 @@ async function ensureSchema() {
       item_id INTEGER NOT NULL,
       title TEXT NOT NULL,
       status TEXT NOT NULL DEFAULT 'todo' CHECK(status IN ('todo', 'done')),
+      due_date TEXT,
+      blockers TEXT NOT NULL DEFAULT '',
       position INTEGER NOT NULL,
       updated_by TEXT NOT NULL DEFAULT '',
       updated_at TEXT NOT NULL,
@@ -392,9 +401,16 @@ async function ensureSchema() {
 
   await addColumnIfMissing("ALTER TABLE workflow_items ADD COLUMN due_date TEXT");
   await addColumnIfMissing(
+    "ALTER TABLE workflow_items ADD COLUMN category TEXT NOT NULL DEFAULT '일반 업무'"
+  );
+  await addColumnIfMissing(
     "ALTER TABLE workflow_items ADD COLUMN template_key TEXT NOT NULL DEFAULT 'general-service'"
   );
   await addColumnIfMissing("ALTER TABLE workflow_steps ADD COLUMN due_date TEXT");
+  await addColumnIfMissing("ALTER TABLE workflow_subtasks ADD COLUMN due_date TEXT");
+  await addColumnIfMissing(
+    "ALTER TABLE workflow_subtasks ADD COLUMN blockers TEXT NOT NULL DEFAULT ''"
+  );
 }
 
 async function logHistory({
@@ -459,6 +475,7 @@ async function readLegacyStatuses() {
 async function createItemWithDefaultSteps({
   title,
   assignee,
+  category,
   memo,
   dueDate,
   templateKey,
@@ -468,6 +485,7 @@ async function createItemWithDefaultSteps({
 }: {
   title: string;
   assignee: string;
+  category: string;
   memo: string;
   dueDate?: string | null;
   templateKey?: string;
@@ -482,6 +500,7 @@ async function createItemWithDefaultSteps({
     .prepare(`INSERT INTO workflow_items (
       title,
       assignee,
+      category,
       memo,
       due_date,
       template_key,
@@ -489,10 +508,11 @@ async function createItemWithDefaultSteps({
       updated_by,
       updated_at,
       created_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
     .bind(
       title,
       assignee,
+      category,
       memo,
       dueDate ?? null,
       selectedTemplate.key,
@@ -568,6 +588,7 @@ async function ensureDefaultItem() {
   await createItemWithDefaultSteps({
     title: "기본 업무",
     assignee: "미지정",
+    category: "일반 업무",
     memo: "",
     actor: "템플릿",
     position: 1,
@@ -750,9 +771,11 @@ export async function POST(request: Request) {
       itemId?: number;
       title?: string;
       assignee?: string;
+      category?: string;
       memo?: string;
       dueDate?: string;
       templateKey?: string;
+      blockers?: string;
     };
     const actor = getActor(request, payload.actor);
     const d1 = getD1();
@@ -760,6 +783,8 @@ export async function POST(request: Request) {
     if (payload.action === "create-subtask") {
       const itemId = Number(payload.itemId);
       const title = payload.title?.trim().slice(0, 160) ?? "";
+      const dueDate = normalizeDate(payload.dueDate);
+      const blockers = payload.blockers?.trim().slice(0, 500) ?? "";
 
       if (!Number.isFinite(itemId) || !title) {
         return Response.json({ error: "세부 체크리스트 내용이 필요합니다." }, { status: 400 });
@@ -784,13 +809,24 @@ export async function POST(request: Request) {
         .prepare(`INSERT INTO workflow_subtasks (
           item_id,
           title,
+          due_date,
+          blockers,
           status,
           position,
           updated_by,
           updated_at,
           created_at
-        ) VALUES (?, ?, 'todo', ?, ?, ?, ?)`)
-        .bind(itemId, title, Number(last?.position ?? 0) + 1, actor, now, now)
+        ) VALUES (?, ?, ?, ?, 'todo', ?, ?, ?, ?)`)
+        .bind(
+          itemId,
+          title,
+          dueDate,
+          blockers,
+          Number(last?.position ?? 0) + 1,
+          actor,
+          now,
+          now
+        )
         .run();
 
       await logHistory({
@@ -812,6 +848,7 @@ export async function POST(request: Request) {
 
     const title = payload.title?.trim().slice(0, 120) ?? "";
     const assignee = payload.assignee?.trim().slice(0, 80) ?? "";
+    const category = payload.category?.trim().slice(0, 80) || "일반 업무";
     const memo = payload.memo?.trim().slice(0, 1000) ?? "";
     const dueDate = normalizeDate(payload.dueDate);
 
@@ -825,6 +862,7 @@ export async function POST(request: Request) {
     const itemId = await createItemWithDefaultSteps({
       title,
       assignee: assignee || "미지정",
+      category,
       memo,
       dueDate,
       templateKey: payload.templateKey,
@@ -861,8 +899,10 @@ export async function PATCH(request: Request) {
       subtaskId?: number;
       title?: string;
       assignee?: string;
+      category?: string;
       memo?: string;
       dueDate?: string | null;
+      blockers?: string;
       color?: string;
       organizationName?: string;
       boardTitle?: string;
@@ -1004,6 +1044,14 @@ export async function PATCH(request: Request) {
         typeof payload.title === "string"
           ? payload.title.trim().slice(0, 160)
           : subtask.title;
+      const dueDate =
+        typeof payload.dueDate === "string" || payload.dueDate === null
+          ? normalizeDate(payload.dueDate)
+          : subtask.due_date;
+      const blockers =
+        typeof payload.blockers === "string"
+          ? payload.blockers.trim().slice(0, 500)
+          : subtask.blockers;
       const status =
         payload.status === "done" || payload.status === "todo"
           ? payload.status
@@ -1016,11 +1064,13 @@ export async function PATCH(request: Request) {
       await d1
         .prepare(`UPDATE workflow_subtasks
           SET title = ?,
+            due_date = ?,
+            blockers = ?,
             status = ?,
             updated_by = ?,
             updated_at = ?
           WHERE id = ?`)
-        .bind(title, status, actor, now, subtaskId)
+        .bind(title, dueDate, blockers, status, actor, now, subtaskId)
         .run();
 
       const summary =
@@ -1174,6 +1224,10 @@ export async function PATCH(request: Request) {
         typeof payload.assignee === "string"
           ? payload.assignee.trim().slice(0, 80) || "미지정"
           : existing.assignee;
+      const category =
+        typeof payload.category === "string"
+          ? payload.category.trim().slice(0, 80) || "일반 업무"
+          : existing.category;
       const memo =
         typeof payload.memo === "string"
           ? payload.memo.trim().slice(0, 1000)
@@ -1191,12 +1245,13 @@ export async function PATCH(request: Request) {
         .prepare(`UPDATE workflow_items
           SET title = ?,
             assignee = ?,
+            category = ?,
             memo = ?,
             due_date = ?,
             updated_by = ?,
             updated_at = ?
           WHERE id = ?`)
-        .bind(title, assignee, memo, dueDate, actor, now, itemId)
+        .bind(title, assignee, category, memo, dueDate, actor, now, itemId)
         .run();
 
       await d1

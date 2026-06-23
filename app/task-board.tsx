@@ -1,6 +1,13 @@
 "use client";
 
-import { DragEvent, FormEvent, useEffect, useMemo, useState } from "react";
+import {
+  DragEvent,
+  FormEvent,
+  Fragment,
+  useEffect,
+  useMemo,
+  useState,
+} from "react";
 
 type StepStatus = "todo" | "done";
 type TaskFilter = "all" | "open" | "done";
@@ -13,6 +20,8 @@ type WorkflowSubtask = {
   itemId: number;
   title: string;
   status: StepStatus;
+  dueDate: string | null;
+  blockers: string;
   position: number;
   updatedBy: string;
   updatedAt: string;
@@ -40,6 +49,7 @@ type WorkflowItem = {
   id: number;
   title: string;
   assignee: string;
+  category: string;
   memo: string;
   dueDate: string | null;
   templateKey: string;
@@ -82,6 +92,12 @@ type TaskResponse = {
   settings?: AppSettings;
   viewer?: string;
   error?: string;
+};
+
+type SubtaskDraft = {
+  title: string;
+  dueDate: string;
+  blockers: string;
 };
 
 const filters: Array<{ key: TaskFilter; label: string }> = [
@@ -217,6 +233,10 @@ function assigneeName(value: string) {
   return value.trim() || "미지정";
 }
 
+function categoryName(value: string) {
+  return value.trim() || "일반 업무";
+}
+
 function completionCount(item: WorkflowItem) {
   return item.steps.filter((step) => step.status === "done").length;
 }
@@ -329,15 +349,19 @@ export default function TaskBoard() {
   const [sortMode, setSortMode] = useState<SortMode>("manual");
   const [viewMode, setViewMode] = useState<ViewMode>("grid");
   const [assigneeFilter, setAssigneeFilter] = useState("all");
+  const [categoryFilter, setCategoryFilter] = useState("all");
   const [stageFilter, setStageFilter] = useState("all");
   const [keyword, setKeyword] = useState("");
   const [newTitle, setNewTitle] = useState("");
+  const [newCategory, setNewCategory] = useState("일반 업무");
   const [newAssignee, setNewAssignee] = useState("");
   const [newMemo, setNewMemo] = useState("");
   const [newDueDate, setNewDueDate] = useState("");
   const [newTemplateKey, setNewTemplateKey] = useState("general-service");
   const [expandedIds, setExpandedIds] = useState<Set<number>>(new Set());
-  const [subtaskDrafts, setSubtaskDrafts] = useState<Record<number, string>>({});
+  const [subtaskDrafts, setSubtaskDrafts] = useState<
+    Record<number, SubtaskDraft>
+  >({});
   const [loading, setLoading] = useState(true);
   const [adding, setAdding] = useState(false);
   const [savingSettings, setSavingSettings] = useState(false);
@@ -452,6 +476,14 @@ export default function TaskBoard() {
     [items]
   );
 
+  const categories = useMemo(
+    () =>
+      [...new Set(items.map((item) => categoryName(item.category)))].sort(
+        (first, second) => first.localeCompare(second, "ko-KR")
+      ),
+    [items]
+  );
+
   const stages = items[0]?.steps ?? [];
 
   const baseItems = useMemo(() => {
@@ -459,6 +491,10 @@ export default function TaskBoard() {
 
     return [...items].filter((item) => {
       if (assigneeFilter !== "all" && assigneeName(item.assignee) !== assigneeFilter) {
+        return false;
+      }
+
+      if (categoryFilter !== "all" && categoryName(item.category) !== categoryFilter) {
         return false;
       }
 
@@ -485,9 +521,11 @@ export default function TaskBoard() {
       if (query) {
         const haystack = [
           item.title,
+          item.category,
           item.assignee,
           item.memo,
           ...item.subtasks.map((subtask) => subtask.title),
+          ...item.subtasks.map((subtask) => subtask.blockers),
         ]
           .join(" ")
           .toLocaleLowerCase("ko-KR");
@@ -499,7 +537,15 @@ export default function TaskBoard() {
 
       return true;
     });
-  }, [assigneeFilter, dueFilter, filter, items, keyword, stageFilter]);
+  }, [
+    assigneeFilter,
+    categoryFilter,
+    dueFilter,
+    filter,
+    items,
+    keyword,
+    stageFilter,
+  ]);
 
   const visibleItems = useMemo(() => {
     const next = [...baseItems];
@@ -533,6 +579,22 @@ export default function TaskBoard() {
 
     return next.sort((first, second) => first.position - second.position);
   }, [baseItems, sortMode]);
+
+  const visibleGroups = useMemo(() => {
+    const groups = new Map<string, WorkflowItem[]>();
+
+    for (const item of visibleItems) {
+      const name = categoryName(item.category);
+      const group = groups.get(name) ?? [];
+      group.push(item);
+      groups.set(name, group);
+    }
+
+    return [...groups.entries()].map(([category, groupItems]) => ({
+      category,
+      items: groupItems,
+    }));
+  }, [visibleItems]);
 
   const totalSteps = items.reduce((sum, item) => sum + item.steps.length, 0);
   const completedSteps = items.reduce(
@@ -588,7 +650,9 @@ export default function TaskBoard() {
 
   function updateLocalItem(
     id: number,
-    patch: Partial<Pick<WorkflowItem, "title" | "assignee" | "memo" | "dueDate">>
+    patch: Partial<
+      Pick<WorkflowItem, "title" | "assignee" | "category" | "memo" | "dueDate">
+    >
   ) {
     setItems((current) =>
       current.map((item) => (item.id === id ? { ...item, ...patch } : item))
@@ -597,7 +661,9 @@ export default function TaskBoard() {
 
   function updateLocalSubtask(
     subtaskId: number,
-    patch: Partial<Pick<WorkflowSubtask, "title" | "status">>
+    patch: Partial<
+      Pick<WorkflowSubtask, "title" | "status" | "dueDate" | "blockers">
+    >
   ) {
     setItems((current) =>
       current.map((item) => ({
@@ -611,7 +677,9 @@ export default function TaskBoard() {
 
   async function updateItem(
     id: number,
-    patch: Partial<Pick<WorkflowItem, "title" | "assignee" | "memo" | "dueDate">>
+    patch: Partial<
+      Pick<WorkflowItem, "title" | "assignee" | "category" | "memo" | "dueDate">
+    >
   ) {
     const previousItems = items;
     setError("");
@@ -734,7 +802,9 @@ export default function TaskBoard() {
 
   async function updateSubtask(
     subtaskId: number,
-    patch: Partial<Pick<WorkflowSubtask, "title" | "status">>
+    patch: Partial<
+      Pick<WorkflowSubtask, "title" | "status" | "dueDate" | "blockers">
+    >
   ) {
     const previousItems = items;
     setError("");
@@ -771,7 +841,12 @@ export default function TaskBoard() {
   }
 
   async function addSubtask(itemId: number) {
-    const title = subtaskDrafts[itemId]?.trim();
+    const draft = subtaskDrafts[itemId] ?? {
+      title: "",
+      dueDate: "",
+      blockers: "",
+    };
+    const title = draft.title.trim();
 
     if (!title) {
       return;
@@ -788,6 +863,8 @@ export default function TaskBoard() {
           actor: currentActor,
           itemId,
           title,
+          dueDate: draft.dueDate,
+          blockers: draft.blockers,
         }),
       });
       const data = (await response.json()) as TaskResponse;
@@ -797,7 +874,10 @@ export default function TaskBoard() {
       }
 
       replaceItem(data.item);
-      setSubtaskDrafts((current) => ({ ...current, [itemId]: "" }));
+      setSubtaskDrafts((current) => ({
+        ...current,
+        [itemId]: { title: "", dueDate: "", blockers: "" },
+      }));
       setHistory(data.history ?? history);
     } catch (addError) {
       setError(
@@ -826,6 +906,7 @@ export default function TaskBoard() {
         body: JSON.stringify({
           title,
           actor: currentActor,
+          category: newCategory,
           assignee: newAssignee,
           memo: newMemo,
           dueDate: newDueDate,
@@ -840,6 +921,7 @@ export default function TaskBoard() {
 
       setItems((current) => [...current, data.item!]);
       setNewTitle("");
+      setNewCategory("일반 업무");
       setNewAssignee("");
       setNewMemo("");
       setNewDueDate("");
@@ -981,29 +1063,12 @@ export default function TaskBoard() {
           <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
             <div>
               <div className="flex flex-wrap items-end gap-2 text-sm font-semibold text-[#4f6f68]">
-                <label className="grid gap-1 text-[11px] uppercase tracking-wide text-[#6b7772]">
-                  조직
-                  <input
-                    value={organizationName}
-                    onChange={(event) => setOrganizationName(event.target.value)}
-                    onBlur={(event) =>
-                      void saveBoardSettings({
-                        organizationName: event.target.value,
-                      })
-                    }
-                    className="min-h-8 w-36 border border-[#cbd8d2] bg-[#e6f4ef] px-2 text-sm font-semibold normal-case tracking-normal text-[#1f4f49]"
-                  />
-                </label>
-                <label className="grid gap-1 text-[11px] uppercase tracking-wide text-[#6b7772]">
-                  사용자
-                  <input
-                    value={userName}
-                    onChange={(event) => setUserName(event.target.value)}
-                    onBlur={(event) => saveUserName(event.target.value)}
-                    className="min-h-8 w-32 border border-[#dce5e0] bg-white px-2 text-sm font-semibold normal-case tracking-normal text-[#1d2320]"
-                    placeholder="이름"
-                  />
-                </label>
+                <span className="border border-[#cbd8d2] bg-[#e6f4ef] px-2.5 py-1 text-sm text-[#1f4f49]">
+                  {organizationName}
+                </span>
+                <span className="border border-[#dce5e0] bg-white px-2.5 py-1 text-sm text-[#53625c]">
+                  {currentActor}
+                </span>
                 {savingSettings ? (
                   <span className="pb-1 text-xs text-[#1f6f67]">저장 중</span>
                 ) : null}
@@ -1035,7 +1100,7 @@ export default function TaskBoard() {
           </div>
 
           <div className="grid gap-3 xl:grid-cols-[1fr_360px]">
-            <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-[130px_145px_145px_130px_130px_130px_1fr]">
+            <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-[120px_140px_145px_145px_120px_120px_120px_1fr]">
               <label className="text-sm font-medium text-[#4b5d56]">
                 상태
                 <select
@@ -1046,6 +1111,22 @@ export default function TaskBoard() {
                   {filters.map((option) => (
                     <option key={option.key} value={option.key}>
                       {option.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <label className="text-sm font-medium text-[#4b5d56]">
+                대분류
+                <select
+                  value={categoryFilter}
+                  onChange={(event) => setCategoryFilter(event.target.value)}
+                  className="mt-1 min-h-10 w-full border border-[#cbd8d2] bg-white px-3 text-sm text-[#1d2320]"
+                >
+                  <option value="all">전체</option>
+                  {categories.map((category) => (
+                    <option key={category} value={category}>
+                      {category}
                     </option>
                   ))}
                 </select>
@@ -1255,7 +1336,19 @@ export default function TaskBoard() {
                   ) : null}
 
                   {!loading &&
-                    visibleItems.map((item) => {
+                    visibleGroups.map((group) => (
+                      <Fragment key={group.category}>
+                        <tr className="border-y border-[#c7d8d0] bg-[#eef6f3]">
+                          <td colSpan={stages.length + 5} className="px-3 py-2">
+                            <div className="flex items-center gap-2 text-sm font-semibold text-[#245f57]">
+                              <span>{group.category}</span>
+                              <span className="text-xs font-medium text-[#66746e]">
+                                {group.items.length}건
+                              </span>
+                            </div>
+                          </td>
+                        </tr>
+                        {group.items.map((item) => {
                       const progress = itemProgress(item);
                       const done = isItemDone(item);
                       const expanded = expandedIds.has(item.id);
@@ -1265,9 +1358,8 @@ export default function TaskBoard() {
                       const subProgress = subtaskProgress(item);
 
                       return (
-                        <>
+                        <Fragment key={item.id}>
                           <tr
-                            key={item.id}
                             onDragOver={handleDragOver}
                             onDrop={() => handleDrop(item.id)}
                             className={`group border-b border-[#e4ebe7] ${
@@ -1312,6 +1404,21 @@ export default function TaskBoard() {
                                   })
                                 }
                                 className="min-h-8 w-full border border-transparent bg-transparent px-1.5 text-xs font-semibold text-[#1d2320] hover:border-[#cbd8d2] focus:border-[#77b8ae] focus:bg-white xl:text-sm"
+                              />
+                              <input
+                                value={item.category}
+                                onChange={(event) =>
+                                  updateLocalItem(item.id, {
+                                    category: event.target.value,
+                                  })
+                                }
+                                onBlur={(event) =>
+                                  updateItem(item.id, {
+                                    category: event.target.value,
+                                  })
+                                }
+                                className="mt-1 min-h-6 w-full border border-[#d9e5df] bg-white/70 px-1.5 text-[10px] font-semibold text-[#245f57] focus:border-[#77b8ae]"
+                                placeholder="대분류"
                               />
                               <div className="mt-1 truncate px-1.5 text-[10px] text-[#6b7772] xl:text-xs">
                                 {done ? "완료" : nextStepTitle(item)}
@@ -1484,11 +1591,18 @@ export default function TaskBoard() {
                                     <div className="mb-2 text-sm font-semibold">
                                       세부 체크리스트
                                     </div>
-                                    <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
+                                    <div className="space-y-2">
+                                      <div className="hidden grid-cols-[34px_minmax(180px,1.2fr)_130px_minmax(180px,1fr)_54px] gap-2 px-2 text-xs font-semibold text-[#63716b] md:grid">
+                                        <span />
+                                        <span>내용</span>
+                                        <span>기한</span>
+                                        <span>애로사항</span>
+                                        <span />
+                                      </div>
                                       {item.subtasks.map((subtask) => (
-                                        <label
+                                        <div
                                           key={subtask.id}
-                                          className="flex min-h-9 items-center gap-2 border border-[#d7e1dc] bg-white px-2"
+                                          className="grid gap-2 border border-[#d7e1dc] bg-white p-2 md:grid-cols-[34px_minmax(180px,1.2fr)_130px_minmax(180px,1fr)_54px] md:items-center"
                                         >
                                           <input
                                             type="checkbox"
@@ -1505,28 +1619,67 @@ export default function TaskBoard() {
                                                   : "todo",
                                               });
                                             }}
-                                            className="h-4 w-4 accent-[#248f84]"
+                                            className="h-4 w-4 accent-[#248f84] md:mx-auto"
                                           />
-                                          <input
-                                            value={subtask.title}
-                                            onChange={(event) =>
-                                              updateLocalSubtask(subtask.id, {
-                                                title: event.target.value,
-                                              })
-                                            }
-                                            onBlur={(event) =>
-                                              updateSubtask(subtask.id, {
-                                                title: event.target.value,
-                                              })
-                                            }
-                                            className="min-h-8 flex-1 border border-transparent bg-transparent text-sm"
-                                          />
+                                          <label className="grid gap-1 text-xs font-semibold text-[#63716b] md:block">
+                                            <span className="md:hidden">내용</span>
+                                            <input
+                                              value={subtask.title}
+                                              onChange={(event) =>
+                                                updateLocalSubtask(subtask.id, {
+                                                  title: event.target.value,
+                                                })
+                                              }
+                                              onBlur={(event) =>
+                                                updateSubtask(subtask.id, {
+                                                  title: event.target.value,
+                                                })
+                                              }
+                                              className="min-h-8 w-full border border-transparent bg-transparent text-sm font-normal text-[#1d2320] hover:border-[#cbd8d2] focus:border-[#77b8ae] focus:bg-white"
+                                            />
+                                          </label>
+                                          <label className="grid gap-1 text-xs font-semibold text-[#63716b] md:block">
+                                            <span className="md:hidden">기한</span>
+                                            <input
+                                              type="date"
+                                              value={subtask.dueDate ?? ""}
+                                              onChange={(event) => {
+                                                updateLocalSubtask(subtask.id, {
+                                                  dueDate: event.target.value,
+                                                });
+                                                void updateSubtask(subtask.id, {
+                                                  dueDate: event.target.value,
+                                                });
+                                              }}
+                                              className="min-h-8 w-full border border-[#d7e1dc] bg-white px-2 text-xs font-normal text-[#1d2320]"
+                                            />
+                                          </label>
+                                          <label className="grid gap-1 text-xs font-semibold text-[#63716b] md:block">
+                                            <span className="md:hidden">애로사항</span>
+                                            <input
+                                              value={subtask.blockers}
+                                              onChange={(event) =>
+                                                updateLocalSubtask(subtask.id, {
+                                                  blockers: event.target.value,
+                                                })
+                                              }
+                                              onBlur={(event) =>
+                                                updateSubtask(subtask.id, {
+                                                  blockers: event.target.value,
+                                                })
+                                              }
+                                              className="min-h-8 w-full border border-transparent bg-transparent text-sm font-normal text-[#1d2320] hover:border-[#cbd8d2] focus:border-[#77b8ae] focus:bg-white"
+                                              placeholder="없음"
+                                            />
+                                          </label>
                                           {savingSubtaskIds.has(subtask.id) ? (
                                             <span className="text-xs text-[#1f6f67]">
                                               저장
                                             </span>
-                                          ) : null}
-                                        </label>
+                                          ) : (
+                                            <span />
+                                          )}
+                                        </div>
                                       ))}
                                     </div>
                                     <form
@@ -1534,18 +1687,52 @@ export default function TaskBoard() {
                                         event.preventDefault();
                                         void addSubtask(item.id);
                                       }}
-                                      className="mt-3 grid gap-2 md:grid-cols-[1fr_100px]"
+                                      className="mt-3 grid gap-2 md:grid-cols-[minmax(180px,1.2fr)_130px_minmax(180px,1fr)_90px]"
                                     >
                                       <input
-                                        value={subtaskDrafts[item.id] ?? ""}
+                                        value={subtaskDrafts[item.id]?.title ?? ""}
                                         onChange={(event) =>
                                           setSubtaskDrafts((current) => ({
                                             ...current,
-                                            [item.id]: event.target.value,
+                                            [item.id]: {
+                                              title: event.target.value,
+                                              dueDate: current[item.id]?.dueDate ?? "",
+                                              blockers: current[item.id]?.blockers ?? "",
+                                            },
                                           }))
                                         }
                                         className="min-h-10 border border-[#cbd8d2] bg-white px-3 text-sm"
-                                        placeholder="예: 현장 조사, 데이터 분석, 보고서 작성"
+                                        placeholder="내용"
+                                      />
+                                      <input
+                                        type="date"
+                                        value={subtaskDrafts[item.id]?.dueDate ?? ""}
+                                        onChange={(event) =>
+                                          setSubtaskDrafts((current) => ({
+                                            ...current,
+                                            [item.id]: {
+                                              title: current[item.id]?.title ?? "",
+                                              dueDate: event.target.value,
+                                              blockers: current[item.id]?.blockers ?? "",
+                                            },
+                                          }))
+                                        }
+                                        className="min-h-10 border border-[#cbd8d2] bg-white px-3 text-sm"
+                                      />
+                                      <input
+                                        value={subtaskDrafts[item.id]?.blockers ?? ""}
+                                        onChange={(event) =>
+                                          setSubtaskDrafts((current) => ({
+                                            ...current,
+                                            [item.id]: {
+                                              title: current[item.id]?.title ?? "",
+                                              dueDate: current[item.id]?.dueDate ?? "",
+                                              blockers: event.target.value,
+                                            },
+                                          }))
+                                        }
+                                        className="min-h-10 border border-[#cbd8d2] bg-white px-3 text-sm"
+                                        placeholder="애로사항"
                                       />
                                       <button
                                         type="submit"
@@ -1588,9 +1775,11 @@ export default function TaskBoard() {
                               </td>
                             </tr>
                           ) : null}
-                        </>
+                        </Fragment>
                       );
-                    })}
+                        })}
+                      </Fragment>
+                    ))}
                 </tbody>
 
                 <tfoot>
@@ -1599,7 +1788,7 @@ export default function TaskBoard() {
                     <td colSpan={stages.length + 4} className="px-3 py-3">
                       <form
                         onSubmit={addItem}
-                        className="grid gap-2 lg:grid-cols-[160px_minmax(220px,1fr)_140px_130px_minmax(220px,1fr)_100px]"
+                        className="grid gap-2 lg:grid-cols-[150px_150px_minmax(220px,1fr)_130px_120px_minmax(190px,1fr)_90px]"
                       >
                         <select
                           value={newTemplateKey}
@@ -1612,6 +1801,12 @@ export default function TaskBoard() {
                             </option>
                           ))}
                         </select>
+                        <input
+                          value={newCategory}
+                          onChange={(event) => setNewCategory(event.target.value)}
+                          className="min-h-10 border border-[#cbd8d2] bg-white px-3 text-sm text-[#1d2320]"
+                          placeholder="대분류"
+                        />
                         <input
                           value={newTitle}
                           onChange={(event) => setNewTitle(event.target.value)}
