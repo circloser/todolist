@@ -178,21 +178,103 @@ const defaultStages = [
 
 const templates = [
   {
-    key: "general-service",
-    name: "일반 용역",
-    description: "계획, 구매/계약, 착수, 과업 진행, 검수, 지급, 결과 보고",
+    key: "external-research-outsourcing",
+    name: "외부 학술/조사 용역",
+    description: "공공 조달, 계약, 보고, 검수, 지급이 포함된 외부 용역",
+    stages: [
+      ["basic-plan", "기본계획(초안)", "준비", "사업 범위와 추진 방향을 정리합니다.", null],
+      ["spec-estimate", "과업지시서/견적", "준비", "과업지시서와 견적 근거를 마련합니다.", null],
+      ["audit-approval", "일상감사/결재", "결재", "감사와 내부 결재를 진행합니다.", null],
+      ["procurement-order", "조달/발주", "조달", "조달 요청과 발주 절차를 진행합니다.", null],
+      ["contract", "계약", "계약", "계약 체결 여부를 확인합니다.", null],
+      ["kickoff", "착수", "수행", "착수 보고와 수행 시작을 확인합니다.", null],
+      ["mid-report", "중간보고(50%)", "수행", "중간 산출물과 진행률을 점검합니다.", 50],
+      ["final-report", "최종보고(90%)", "수행", "최종 산출물 제출 전 검토를 진행합니다.", 90],
+      ["completion-inspection", "완료계/검수", "검수", "완료계 접수와 검수를 처리합니다.", 100],
+      ["payment", "대금지급", "정산", "대금 지급 절차를 진행합니다.", null],
+      ["archive-deliverables", "성과물등록", "아카이빙", "최종 성과물을 등록합니다.", null],
+    ],
   },
   {
-    key: "goods-purchase",
-    name: "물품 구매",
-    description: "견적, 구매 요청, 계약/구매, 검수, 지급 요청 중심",
+    key: "internal-rnd-survey",
+    name: "내부 자체 연구 및 현장 조사",
+    description: "내부 연구, 현장 조사, 분석, 보고서 작성 중심 업무",
+    stages: [
+      ["research-plan", "연구계획(초안)", "기획", "연구 목적과 조사 범위를 정리합니다.", null],
+      ["internal-review", "내부심의/결재", "결재", "내부 심의와 결재를 진행합니다.", null],
+      ["equipment-ready", "장비/물품준비", "준비", "현장 장비와 물품을 준비합니다.", null],
+      ["field-1", "1차 현장조사", "조사", "1차 현장 데이터를 수집합니다.", null],
+      ["field-2", "2차 현장조사(50%)", "조사", "보완 조사와 핵심 데이터를 확보합니다.", 50],
+      ["data-analysis", "데이터분석", "분석", "수집 자료를 정리하고 분석합니다.", null],
+      ["draft-report", "보고서(초안)", "보고", "초안 보고서를 작성합니다.", null],
+      ["seminar-advice", "내부자문/세미나", "검토", "내부 자문과 세미나를 진행합니다.", null],
+      ["final-report", "최종보고서(100%)", "보고", "최종 보고서를 확정합니다.", 100],
+      ["institution-report", "원내보고", "보고", "원내 보고 절차를 완료합니다.", null],
+      ["archive", "아카이빙", "아카이빙", "자료와 결과물을 보존합니다.", null],
+    ],
   },
   {
-    key: "internal-research",
-    name: "자체 연구",
-    description: "계획, 착수, 진행률 점검, 검수, 결과 보고 중심",
+    key: "digital-3d-data",
+    name: "디지털 데이터 구축 / 3D 모델링",
+    description: "LiDAR, 3D 모델링, 공간 데이터 가공 및 업로드 파이프라인",
+    stages: [
+      ["target-planning", "대상선정/기획", "기획", "구축 대상과 산출물을 정의합니다.", null],
+      ["equipment-gcp", "장비세팅/GCP설정", "준비", "장비와 기준점을 설정합니다.", null],
+      ["field-scan", "현장스캔/데이터취득", "취득", "현장 스캔과 원천 데이터를 확보합니다.", null],
+      ["preprocess", "전처리(Point Cloud 등)", "가공", "포인트 클라우드 등 원천 데이터를 정리합니다.", null],
+      ["model-merge", "3D모델링/병합(50%)", "모델링", "모델링과 병합을 진행합니다.", 50],
+      ["texture-optimize", "텍스처링/최적화", "모델링", "텍스처와 모델 성능을 최적화합니다.", null],
+      ["quality-review", "품질검토(90%)", "검수", "정확도와 품질을 검토합니다.", 90],
+      ["metadata", "메타데이터입력", "등록", "표준 메타데이터를 입력합니다.", null],
+      ["platform-upload", "DB/플랫폼업로드", "등록", "DB와 플랫폼에 업로드합니다.", null],
+      ["completion-report", "완료보고", "보고", "완료 결과를 보고합니다.", 100],
+    ],
   },
-];
+  {
+    key: "ecological-restoration-construction",
+    name: "생태 복원 및 조성 공사",
+    description: "습지 복원, 서식처 조성, 시공, 준공, 유지관리 이관",
+    stages: [
+      ["concept-plan", "기본구상(초안)", "기획", "복원 목표와 기본 구상을 정리합니다.", null],
+      ["design-estimate", "실시설계/내역서", "설계", "설계와 내역서를 마련합니다.", null],
+      ["budget-approval", "예산결재", "결재", "예산 결재를 완료합니다.", null],
+      ["order-contract", "발주/계약", "계약", "발주와 계약을 진행합니다.", null],
+      ["site-handover", "착공/현장인수", "시공", "현장 인수와 착공을 확인합니다.", null],
+      ["earthwork", "기반조성/토공사(25%)", "시공", "기반 조성과 토공사를 진행합니다.", 25],
+      ["plant-facility", "식재/시설물설치(75%)", "시공", "식재와 시설물 설치를 진행합니다.", 75],
+      ["completion-inspection", "준공검사(100%)", "검수", "준공 검사를 완료합니다.", 100],
+      ["defect-plan", "하자보수계획", "유지관리", "하자보수 계획을 수립합니다.", null],
+      ["payment", "대금지급", "정산", "대금 지급을 진행합니다.", null],
+      ["maintenance-transfer", "유지관리이관", "이관", "유지관리 주체로 이관합니다.", null],
+    ],
+  },
+  {
+    key: "internal-admin-planning",
+    name: "내부 일반 행정 및 기획",
+    description: "기획, 검토, 결재, 시행, 결과 정리 중심의 내부 행정",
+    stages: [
+      ["planning-draft", "기획안(초안)", "기획", "기획 초안을 작성합니다.", null],
+      ["case-research", "자료수집/사례조사", "조사", "관련 자료와 사례를 수집합니다.", null],
+      ["department-opinion", "유관부서의견조회", "협의", "유관부서 의견을 조회합니다.", null],
+      ["plan-writing", "기획서작성(진행중)", "작성", "기획서를 작성합니다.", null],
+      ["first-review", "1차검토/수정", "검토", "1차 검토와 수정을 진행합니다.", null],
+      ["manager-approval", "부서장결재(50%)", "결재", "부서장 결재를 진행합니다.", 50],
+      ["agency-consultation", "유관기관협의", "협의", "유관기관과 협의합니다.", null],
+      ["final-approval", "최종결재(100%)", "결재", "최종 결재를 완료합니다.", 100],
+      ["implementation", "시행/공문발송", "시행", "시행과 공문 발송을 처리합니다.", null],
+      ["result-summary", "결과정리", "정리", "결과 자료를 정리합니다.", null],
+    ],
+  },
+].map((template) => ({
+  ...template,
+  stages: template.stages.map(([key, title, group, description, progress]) => ({
+    key,
+    title,
+    group,
+    description,
+    progress,
+  })),
+}));
 
 const defaultAppSettings = {
   organizationName: "습지복원팀",
@@ -525,7 +607,7 @@ async function createItemWithDefaultSteps({
   const itemId = Number(insertResult.meta.last_row_id);
 
   await d1.batch(
-    defaultStages.map((stage, index) => {
+    selectedTemplate.stages.map((stage, index) => {
       const legacyStatus = legacyStatuses?.get(stage.key);
       const status = legacyStatus?.status ?? "todo";
 
@@ -746,7 +828,8 @@ export async function GET(request: Request) {
 
     return Response.json({
       items: await getItems(),
-      stages: defaultStages,
+      stages: templates[0].stages,
+      legacyStages: defaultStages,
       templates,
       assigneeSettings: await getAssigneeSettings(),
       history: await getHistory(),

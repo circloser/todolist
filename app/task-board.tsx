@@ -61,10 +61,19 @@ type WorkflowItem = {
   subtasks: WorkflowSubtask[];
 };
 
+type TemplateStage = {
+  key: string;
+  title: string;
+  description: string;
+  group: string;
+  progress: number | null;
+};
+
 type TemplateOption = {
   key: string;
   name: string;
   description: string;
+  stages: TemplateStage[];
 };
 
 type HistoryEntry = {
@@ -138,9 +147,10 @@ const compactStageLabels: Record<string, string> = {
 
 const defaultTemplates: TemplateOption[] = [
   {
-    key: "general-service",
-    name: "일반 용역",
-    description: "일반 행정/용역 프로세스",
+    key: "external-research-outsourcing",
+    name: "외부 학술/조사 용역",
+    description: "공공 조달, 계약, 보고, 검수, 지급이 포함된 외부 용역",
+    stages: [],
   },
 ];
 
@@ -149,8 +159,9 @@ const defaultSettings: AppSettings = {
   boardTitle: "Workflow Command Center",
 };
 
-function compactStageTitle(step: Pick<WorkflowStep, "stageKey" | "title">) {
-  return compactStageLabels[step.stageKey] ?? step.title;
+function compactStageTitle(step: { stageKey?: string; key?: string; title: string }) {
+  const stageKey = step.stageKey ?? step.key ?? "";
+  return compactStageLabels[stageKey] ?? step.title;
 }
 
 function formatDate(value?: string | null) {
@@ -350,6 +361,7 @@ export default function TaskBoard() {
   const [viewMode, setViewMode] = useState<ViewMode>("grid");
   const [assigneeFilter, setAssigneeFilter] = useState("all");
   const [categoryFilter, setCategoryFilter] = useState("all");
+  const [templateFilter, setTemplateFilter] = useState("all");
   const [stageFilter, setStageFilter] = useState("all");
   const [keyword, setKeyword] = useState("");
   const [newTitle, setNewTitle] = useState("");
@@ -357,7 +369,9 @@ export default function TaskBoard() {
   const [newAssignee, setNewAssignee] = useState("");
   const [newMemo, setNewMemo] = useState("");
   const [newDueDate, setNewDueDate] = useState("");
-  const [newTemplateKey, setNewTemplateKey] = useState("general-service");
+  const [newTemplateKey, setNewTemplateKey] = useState(
+    "external-research-outsourcing"
+  );
   const [expandedIds, setExpandedIds] = useState<Set<number>>(new Set());
   const [subtaskDrafts, setSubtaskDrafts] = useState<
     Record<number, SubtaskDraft>
@@ -484,12 +498,19 @@ export default function TaskBoard() {
     [items]
   );
 
-  const stages = items[0]?.steps ?? [];
+  const selectedTemplate =
+    templateFilter === "all"
+      ? null
+      : templates.find((template) => template.key === templateFilter) ?? null;
 
   const baseItems = useMemo(() => {
     const query = keyword.trim().toLocaleLowerCase("ko-KR");
 
     return [...items].filter((item) => {
+      if (templateFilter !== "all" && item.templateKey !== templateFilter) {
+        return false;
+      }
+
       if (assigneeFilter !== "all" && assigneeName(item.assignee) !== assigneeFilter) {
         return false;
       }
@@ -545,6 +566,7 @@ export default function TaskBoard() {
     items,
     keyword,
     stageFilter,
+    templateFilter,
   ]);
 
   const visibleItems = useMemo(() => {
@@ -595,6 +617,16 @@ export default function TaskBoard() {
       items: groupItems,
     }));
   }, [visibleItems]);
+
+  const stages =
+    selectedTemplate?.stages.map((stage) => ({
+      stageKey: stage.key,
+      title: stage.title,
+      description: stage.description,
+    })) ??
+    visibleItems[0]?.steps ??
+    items[0]?.steps ??
+    [];
 
   const totalSteps = items.reduce((sum, item) => sum + item.steps.length, 0);
   const completedSteps = items.reduce(
@@ -926,6 +958,7 @@ export default function TaskBoard() {
       setNewMemo("");
       setNewDueDate("");
       setSortMode("manual");
+      setTemplateFilter(newTemplateKey);
       setHistory(data.history ?? history);
     } catch (addError) {
       setError(
@@ -1100,7 +1133,30 @@ export default function TaskBoard() {
           </div>
 
           <div className="grid gap-3 xl:grid-cols-[1fr_360px]">
-            <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-[120px_140px_145px_145px_120px_120px_120px_1fr]">
+            <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-[160px_110px_130px_130px_130px_110px_110px_110px_1fr]">
+              <label className="text-sm font-medium text-[#4b5d56]">
+                업무 유형
+                <select
+                  value={templateFilter}
+                  onChange={(event) => {
+                    const value = event.target.value;
+                    setTemplateFilter(value);
+                    setStageFilter("all");
+                    if (value !== "all") {
+                      setNewTemplateKey(value);
+                    }
+                  }}
+                  className="mt-1 min-h-10 w-full border border-[#cbd8d2] bg-white px-3 text-sm text-[#1d2320]"
+                >
+                  <option value="all">전체</option>
+                  {templates.map((template) => (
+                    <option key={template.key} value={template.key}>
+                      {template.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
               <label className="text-sm font-medium text-[#4b5d56]">
                 상태
                 <select
@@ -1792,7 +1848,11 @@ export default function TaskBoard() {
                       >
                         <select
                           value={newTemplateKey}
-                          onChange={(event) => setNewTemplateKey(event.target.value)}
+                          onChange={(event) => {
+                            setNewTemplateKey(event.target.value);
+                            setTemplateFilter(event.target.value);
+                            setStageFilter("all");
+                          }}
                           className="min-h-10 border border-[#cbd8d2] bg-white px-3 text-sm"
                         >
                           {templates.map((template) => (
