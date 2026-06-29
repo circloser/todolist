@@ -19,6 +19,7 @@ import {
   formatDate,
   formatDay,
   isItemDone,
+  itemHasDueInRange,
   itemHasOverdueDate,
   itemHasUrgentDate,
   itemProgress,
@@ -60,6 +61,8 @@ const sortOptions: Array<{ key: SortMode; label: string }> = [
 const dueFilters: Array<{ key: DueFilter; label: string }> = [
   { key: "all", label: "전체 일정" },
   { key: "urgent", label: "D-3 이내" },
+  { key: "week", label: "이번 주" },
+  { key: "month", label: "이번 달" },
   { key: "overdue", label: "지연" },
 ];
 
@@ -76,6 +79,47 @@ const defaultSettings: AppSettings = {
   organizationName: "습지복원팀",
   boardTitle: "Workflow Command Center",
 };
+
+const DASHBOARD_WIDGETS: Array<{ key: string; label: string }> = [
+  { key: "kpi", label: "KPI 카드" },
+  { key: "status", label: "상태 분포" },
+  { key: "workload", label: "담당자 워크로드" },
+  { key: "types", label: "유형별 업무" },
+  { key: "deadlines", label: "다가오는 마감" },
+  { key: "budget", label: "예산 요약" },
+  { key: "bottlenecks", label: "병목 단계" },
+  { key: "activity", label: "최근 활동" },
+];
+
+const defaultWidgetPrefs: Record<string, boolean> = Object.fromEntries(
+  DASHBOARD_WIDGETS.map((widget) => [widget.key, true])
+);
+
+function isoDate(date: Date) {
+  const year = date.getFullYear();
+  const month = `${date.getMonth() + 1}`.padStart(2, "0");
+  const day = `${date.getDate()}`.padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+// Inclusive [start, end] ISO range for "this week" (Mon–Sun) or "this month".
+function periodRange(kind: "week" | "month") {
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+
+  if (kind === "week") {
+    const weekday = (today.getDay() + 6) % 7; // Monday = 0
+    const start = new Date(today);
+    start.setDate(today.getDate() - weekday);
+    const end = new Date(start);
+    end.setDate(start.getDate() + 6);
+    return { start: isoDate(start), end: isoDate(end) };
+  }
+
+  const start = new Date(today.getFullYear(), today.getMonth(), 1);
+  const end = new Date(today.getFullYear(), today.getMonth() + 1, 0);
+  return { start: isoDate(start), end: isoDate(end) };
+}
 
 export default function TaskBoard() {
   const [items, setItems] = useState<WorkflowItem[]>([]);
@@ -101,6 +145,11 @@ export default function TaskBoard() {
     stages: Array<{ stageKey: string | null; title: string; group: string }>;
   } | null>(null);
   const [savingTemplate, setSavingTemplate] = useState(false);
+  const [focusItemId, setFocusItemId] = useState<number | null>(null);
+  const [notifOpen, setNotifOpen] = useState(false);
+  const [widgetMenuOpen, setWidgetMenuOpen] = useState(false);
+  const [widgetPrefs, setWidgetPrefs] =
+    useState<Record<string, boolean>>(defaultWidgetPrefs);
   const [assigneeFilter, setAssigneeFilter] = useState("all");
   const [categoryFilter, setCategoryFilter] = useState("all");
   const [templateFilter, setTemplateFilter] = useState("all");
@@ -284,6 +333,17 @@ export default function TaskBoard() {
         return false;
       }
 
+      if (
+        (dueFilter === "week" || dueFilter === "month") &&
+        !itemHasDueInRange(
+          item,
+          periodRange(dueFilter).start,
+          periodRange(dueFilter).end
+        )
+      ) {
+        return false;
+      }
+
       if (filter === "open" && isItemDone(item)) {
         return false;
       }
@@ -339,7 +399,7 @@ export default function TaskBoard() {
     if (sortMode === "progress") {
       return next.sort(
         (first, second) =>
-          itemProgress(first) - itemProgress(second) ||
+          itemProgress(second) - itemProgress(first) ||
           first.position - second.position
       );
     }
@@ -557,6 +617,76 @@ export default function TaskBoard() {
       required,
     };
   }, [items, templatesByKey]);
+
+  const notifications = useMemo(() => {
+    type Alert = {
+      itemId: number;
+      title: string;
+      label: string;
+      date: string;
+      state: ReturnType<typeof urgency>;
+    };
+    const groups = new Map<string, Alert[]>();
+
+    for (const item of items) {
+      if (isItemDone(item)) {
+        continue;
+      }
+
+      const who = assigneeName(item.assignee);
+      const entries: Alert[] = [];
+      const step = nextStep(item);
+
+      if (step?.dueDate) {
+        const state = urgency(step.dueDate);
+        if (state === "overdue" || state === "danger" || state === "warning") {
+          entries.push({
+            itemId: item.id,
+            title: item.title,
+            label: step.title,
+            date: step.dueDate,
+            state,
+          });
+        }
+      }
+
+      if (item.dueDate) {
+        const state = urgency(item.dueDate);
+        if (state === "overdue" || state === "danger" || state === "warning") {
+          entries.push({
+            itemId: item.id,
+            title: item.title,
+            label: "최종 마감",
+            date: item.dueDate,
+            state,
+          });
+        }
+      }
+
+      if (entries.length) {
+        groups.set(who, [...(groups.get(who) ?? []), ...entries]);
+      }
+    }
+
+    const list = [...groups.entries()]
+      .map(([assignee, entries]) => ({
+        assignee,
+        entries: entries.sort((first, second) =>
+          first.date.localeCompare(second.date)
+        ),
+        overdue: entries.filter((entry) => entry.state === "overdue").length,
+      }))
+      .sort(
+        (first, second) =>
+          second.overdue - first.overdue ||
+          second.entries.length - first.entries.length
+      );
+
+    return {
+      list,
+      total: list.reduce((sum, group) => sum + group.entries.length, 0),
+    };
+  }, [items]);
 
   function replaceItem(nextItem: WorkflowItem) {
     setItems((current) =>
@@ -1194,6 +1324,50 @@ export default function TaskBoard() {
     });
   }
 
+  // Jump from a dashboard widget straight to a task: switch to the list,
+  // expand it, and scroll it into view with a brief highlight.
+  function openItem(id: number) {
+    setViewMode("list");
+    setExpandedIds((current) => new Set(current).add(id));
+    setFocusItemId(id);
+  }
+
+  useEffect(() => {
+    if (focusItemId === null) {
+      return;
+    }
+
+    const element = document.getElementById(`item-${focusItemId}`);
+    element?.scrollIntoView({ behavior: "smooth", block: "center" });
+    const timer = window.setTimeout(() => setFocusItemId(null), 1800);
+    return () => window.clearTimeout(timer);
+  }, [focusItemId, viewMode]);
+
+  useEffect(() => {
+    try {
+      const raw = window.localStorage.getItem("team-progress-widgets");
+      if (raw) {
+        const parsed = JSON.parse(raw) as Record<string, boolean>;
+        // Sync persisted UI prefs once on mount (SSR-safe; defaults render first).
+        // eslint-disable-next-line react-hooks/set-state-in-effect
+        setWidgetPrefs((prev) => ({ ...prev, ...parsed }));
+      }
+    } catch {
+      // ignore malformed preferences
+    }
+  }, []);
+
+  function toggleWidget(key: string) {
+    setWidgetPrefs((prev) => {
+      const next = { ...prev, [key]: !prev[key] };
+      window.localStorage.setItem(
+        "team-progress-widgets",
+        JSON.stringify(next)
+      );
+      return next;
+    });
+  }
+
   function progressColor(item: WorkflowItem) {
     if (itemHasOverdueDate(item)) {
       return "#d9452f";
@@ -1351,6 +1525,33 @@ export default function TaskBoard() {
                     <span className="tb-badge tb-badge-muted">{n}</span>
                   ) : null;
                 })()}
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setNotifOpen(true)}
+                className="tb-btn relative"
+                title="담당자별 마감 알림"
+              >
+                <svg
+                  width="15"
+                  height="15"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                >
+                  <path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9" />
+                  <path d="M10.3 21a1.94 1.94 0 0 0 3.4 0" />
+                </svg>
+                알림
+                {notifications.total ? (
+                  <span className="ml-0.5 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-[var(--danger)] px-1 text-[10px] font-bold text-white">
+                    {notifications.total}
+                  </span>
+                ) : null}
               </button>
 
               <button
@@ -1543,6 +1744,52 @@ export default function TaskBoard() {
               </div>
             ) : null}
 
+            <div className="flex items-center justify-end">
+              <div className="relative">
+                <button
+                  type="button"
+                  onClick={() => setWidgetMenuOpen((value) => !value)}
+                  data-active={widgetMenuOpen}
+                  className="tb-btn"
+                  title="대시보드 위젯 표시 설정"
+                >
+                  <svg
+                    width="15"
+                    height="15"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  >
+                    <circle cx="12" cy="12" r="3" />
+                    <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1Z" />
+                  </svg>
+                  위젯
+                </button>
+                {widgetMenuOpen ? (
+                  <div className="tb-card absolute right-0 z-20 mt-1.5 w-52 p-2 shadow-[var(--shadow-md)]">
+                    {DASHBOARD_WIDGETS.map((widget) => (
+                      <label
+                        key={widget.key}
+                        className="flex cursor-pointer items-center gap-2 rounded-[var(--radius-sm)] px-2 py-1.5 text-sm hover:bg-[var(--surface-3)]"
+                      >
+                        <input
+                          type="checkbox"
+                          checked={widgetPrefs[widget.key] !== false}
+                          onChange={() => toggleWidget(widget.key)}
+                          className="h-4 w-4 accent-[var(--accent)]"
+                        />
+                        {widget.label}
+                      </label>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+            </div>
+
+            {widgetPrefs.kpi !== false ? (
             <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
               <div className="tb-card p-4">
                 <div className="tb-stat-label">전체 진행률</div>
@@ -1581,8 +1828,10 @@ export default function TaskBoard() {
                 </div>
               </div>
             </div>
+            ) : null}
 
             <div className="grid gap-4 lg:grid-cols-3">
+              {widgetPrefs.status !== false ? (
               <div className="tb-card p-5">
                 <h2 className="text-sm font-semibold">상태 분포</h2>
                 <div className="mt-4 flex items-center gap-5">
@@ -1617,6 +1866,9 @@ export default function TaskBoard() {
                 </div>
               </div>
 
+              ) : null}
+
+              {widgetPrefs.workload !== false ? (
               <div className="tb-card p-5">
                 <h2 className="text-sm font-semibold">담당자 워크로드</h2>
                 <div className="mt-3 space-y-2.5">
@@ -1671,6 +1923,9 @@ export default function TaskBoard() {
                 </div>
               </div>
 
+              ) : null}
+
+              {widgetPrefs.types !== false ? (
               <div className="tb-card p-5">
                 <h2 className="text-sm font-semibold">유형별 업무</h2>
                 <div className="mt-3 space-y-2.5">
@@ -1715,9 +1970,11 @@ export default function TaskBoard() {
                   )}
                 </div>
               </div>
+              ) : null}
             </div>
 
             <div className="grid gap-4 lg:grid-cols-[1.2fr_1fr]">
+              {widgetPrefs.deadlines !== false ? (
               <div className="tb-card p-5">
                 <h2 className="text-sm font-semibold">다가오는 마감</h2>
                 <div className="mt-3 space-y-1.5">
@@ -1725,9 +1982,11 @@ export default function TaskBoard() {
                     dashboard.deadlines.map((deadline) => {
                       const state = urgency(deadline.date);
                       return (
-                        <div
+                        <button
                           key={deadline.id}
-                          className="flex items-center gap-2.5 rounded-[var(--radius)] border border-[var(--border)] bg-[var(--surface)] px-3 py-2"
+                          type="button"
+                          onClick={() => openItem(deadline.itemId)}
+                          className="flex w-full items-center gap-2.5 rounded-[var(--radius)] border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-left transition hover:border-[var(--accent)] hover:bg-[var(--surface-3)]"
                         >
                           <span
                             className={`tb-badge ${
@@ -1748,7 +2007,7 @@ export default function TaskBoard() {
                               {deadline.label} · {formatDay(deadline.date)}
                             </div>
                           </div>
-                        </div>
+                        </button>
                       );
                     })
                   ) : (
@@ -1758,8 +2017,10 @@ export default function TaskBoard() {
                   )}
                 </div>
               </div>
+              ) : null}
 
               <div className="space-y-4">
+                {widgetPrefs.budget !== false ? (
                 <div className="tb-card p-5">
                   <h2 className="text-sm font-semibold">예산 요약</h2>
                   <div className="mt-3 space-y-3">
@@ -1814,6 +2075,9 @@ export default function TaskBoard() {
                   </div>
                 </div>
 
+                ) : null}
+
+                {widgetPrefs.bottlenecks !== false ? (
                 <div className="tb-card p-5">
                   <h2 className="text-sm font-semibold">병목 단계</h2>
                   <div className="mt-3 flex flex-wrap gap-2">
@@ -1844,9 +2108,11 @@ export default function TaskBoard() {
                     )}
                   </div>
                 </div>
+                ) : null}
               </div>
             </div>
 
+            {widgetPrefs.activity !== false ? (
             <div className="tb-card p-5">
               <h2 className="text-sm font-semibold">최근 활동</h2>
               <div className="mt-3 grid gap-2.5 sm:grid-cols-2">
@@ -1868,6 +2134,7 @@ export default function TaskBoard() {
                 ) : null}
               </div>
             </div>
+            ) : null}
           </div>
         ) : viewMode === "list" ? (
           <div className="space-y-2.5">
@@ -1899,10 +2166,11 @@ export default function TaskBoard() {
                 return (
                   <div
                     key={item.id}
+                    id={`item-${item.id}`}
                     onDragOver={handleDragOver}
                     onDrop={() => handleDrop(item.id)}
-                    className={`tb-card overflow-hidden ${
-                      draggedId === item.id
+                    className={`tb-card overflow-hidden transition-shadow ${
+                      draggedId === item.id || focusItemId === item.id
                         ? "ring-2 ring-[var(--accent-ring)]"
                         : ""
                     }`}
@@ -3469,6 +3737,95 @@ export default function TaskBoard() {
                   상태·기한은 유지)
                 </p>
               </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {notifOpen ? (
+        <div
+          className="fixed inset-0 z-50 flex items-start justify-center overflow-auto bg-black/40 p-4 backdrop-blur-sm"
+          onClick={() => setNotifOpen(false)}
+        >
+          <div
+            className="tb-card my-6 w-full max-w-[520px] shadow-[var(--shadow-lg)]"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="flex items-center justify-between border-b border-[var(--border)] px-5 py-3.5">
+              <h2 className="flex items-center gap-2 text-base font-semibold">
+                마감 알림
+                {notifications.total ? (
+                  <span className="tb-badge tb-badge-danger">
+                    {notifications.total}
+                  </span>
+                ) : null}
+              </h2>
+              <button
+                type="button"
+                onClick={() => setNotifOpen(false)}
+                className="tb-iconbtn h-8 w-8"
+              >
+                ×
+              </button>
+            </div>
+
+            <div className="max-h-[70vh] space-y-4 overflow-auto p-5">
+              {notifications.list.length ? (
+                notifications.list.map((group) => (
+                  <div key={group.assignee}>
+                    <div className="mb-1.5 flex items-center gap-2 text-sm font-semibold">
+                      <span
+                        className="h-2.5 w-2.5 rounded-full"
+                        style={{
+                          backgroundColor: rowAccentColor(
+                            assigneeSettings[group.assignee]
+                          ),
+                        }}
+                      />
+                      {group.assignee}
+                      <span className="ml-auto text-xs font-normal text-[var(--text-faint)]">
+                        {group.overdue ? `지연 ${group.overdue} · ` : ""}
+                        총 {group.entries.length}건
+                      </span>
+                    </div>
+                    <div className="space-y-1.5">
+                      {group.entries.map((entry, index) => (
+                        <button
+                          key={`${entry.itemId}-${index}`}
+                          type="button"
+                          onClick={() => {
+                            openItem(entry.itemId);
+                            setNotifOpen(false);
+                          }}
+                          className="flex w-full items-center gap-2.5 rounded-[var(--radius)] border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-left transition hover:border-[var(--accent)] hover:bg-[var(--surface-3)]"
+                        >
+                          <span
+                            className={`tb-badge ${
+                              entry.state === "overdue" || entry.state === "danger"
+                                ? "tb-badge-danger"
+                                : "tb-badge-warning"
+                            }`}
+                          >
+                            {shortDueLabel(entry.date)}
+                          </span>
+                          <div className="min-w-0 flex-1">
+                            <div className="truncate text-sm font-medium">
+                              {entry.title}
+                            </div>
+                            <div className="text-[11px] text-[var(--text-faint)]">
+                              {entry.label} · {formatDay(entry.date)}
+                            </div>
+                          </div>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                ))
+              ) : (
+                <div className="py-10 text-center text-sm text-[var(--text-muted)]">
+                  마감 임박·지연 항목이 없습니다. 👍
+                </div>
+              )}
             </div>
           </div>
         </div>

@@ -6,7 +6,7 @@ export type StepStatus = "todo" | "done";
 export type TaskFilter = "all" | "open" | "done";
 export type SortMode = "manual" | "assignee" | "progress" | "updated";
 export type ViewMode = "dashboard" | "list" | "grid" | "gantt";
-export type DueFilter = "all" | "urgent" | "overdue";
+export type DueFilter = "all" | "urgent" | "overdue" | "week" | "month";
 export type Urgency = "none" | "overdue" | "danger" | "warning" | "normal";
 
 export type WorkflowSubtask = {
@@ -277,6 +277,24 @@ export function itemHasUrgentDate(item: WorkflowItem) {
     const state = urgency(date);
     return state === "warning" || state === "danger";
   });
+}
+
+// True when the item's final due date or any open step's due date falls within
+// the inclusive [start, end] range. Dates are ISO "YYYY-MM-DD" so string
+// comparison is a correct chronological comparison.
+export function itemHasDueInRange(
+  item: WorkflowItem,
+  start: string,
+  end: string
+) {
+  const dueDates = [
+    item.dueDate,
+    ...item.steps
+      .filter((step) => step.status !== "done")
+      .map((step) => step.dueDate),
+  ];
+
+  return dueDates.some((date) => !!date && date >= start && date <= end);
 }
 
 export function itemHasOverdueDate(item: WorkflowItem) {

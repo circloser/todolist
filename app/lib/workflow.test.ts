@@ -8,6 +8,7 @@ import {
   daysUntil,
   formatBudget,
   isItemDone,
+  itemHasDueInRange,
   itemHasOverdueDate,
   itemHasUrgentDate,
   itemProgress,
@@ -232,6 +233,22 @@ describe("date-based helpers", () => {
   it("shortDueLabel falls back to 일정 without a date", () => {
     expect(shortDueLabel(null)).toBe("일정");
     expect(shortDueLabel("2026-07-02")).toBe("D-3");
+  });
+
+  it("itemHasDueInRange matches item or open-step dates inside the range", () => {
+    const item = makeItem({
+      dueDate: "2026-07-05",
+      steps: [makeStep({ status: "todo", dueDate: "2026-07-15" })],
+    });
+    expect(itemHasDueInRange(item, "2026-07-01", "2026-07-07")).toBe(true);
+    expect(itemHasDueInRange(item, "2026-07-10", "2026-07-20")).toBe(true);
+    expect(itemHasDueInRange(item, "2026-08-01", "2026-08-31")).toBe(false);
+
+    // A done step's date must be ignored.
+    const doneOnly = makeItem({
+      steps: [makeStep({ status: "done", dueDate: "2026-07-05" })],
+    });
+    expect(itemHasDueInRange(doneOnly, "2026-07-01", "2026-07-31")).toBe(false);
   });
 
   it("itemHasUrgentDate / itemHasOverdueDate consider item and open steps", () => {
