@@ -265,7 +265,20 @@ const rawTemplates: Array<{
   },
 ];
 
-const templates = rawTemplates.map((template) => ({
+type ResolvedTemplate = {
+  key: string;
+  name: string;
+  description: string;
+  stages: Array<{
+    key: string;
+    title: string;
+    description: string;
+    group: string;
+    progress: number | null;
+  }>;
+};
+
+const seedTemplates: ResolvedTemplate[] = rawTemplates.map((template) => ({
   ...template,
   stages: template.stages.map(([key, title, group, description, progress]) => ({
     key,
@@ -356,8 +369,25 @@ function normalizeBudget(value: unknown) {
   return Math.round(amount);
 }
 
-function getTemplate(key?: string) {
-  return templates.find((template) => template.key === key) ?? templates[0];
+type TemplateRow = {
+  template_key: string;
+  name: string;
+  description: string;
+  position: number;
+};
+
+type TemplateStageRow = {
+  template_key: string;
+  stage_key: string;
+  title: string;
+  description: string;
+  phase_group: string;
+  progress_value: number | null;
+  position: number;
+};
+
+function resolveTemplate(list: ResolvedTemplate[], key?: string) {
+  return list.find((template) => template.key === key) ?? list[0];
 }
 
 function toItem(
@@ -490,6 +520,25 @@ async function ensureSchema() {
       value TEXT NOT NULL,
       updated_at TEXT NOT NULL
     )`),
+    d1.prepare(`CREATE TABLE IF NOT EXISTS workflow_templates (
+      template_key TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      description TEXT NOT NULL DEFAULT '',
+      position INTEGER NOT NULL,
+      updated_at TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    )`),
+    d1.prepare(`CREATE TABLE IF NOT EXISTS workflow_template_stages (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      template_key TEXT NOT NULL,
+      stage_key TEXT NOT NULL,
+      title TEXT NOT NULL,
+      description TEXT NOT NULL DEFAULT '',
+      phase_group TEXT NOT NULL DEFAULT '',
+      progress_value INTEGER,
+      position INTEGER NOT NULL,
+      UNIQUE(template_key, stage_key)
+    )`),
     d1.prepare(
       "CREATE INDEX IF NOT EXISTS workflow_items_assignee_idx ON workflow_items (assignee, position)"
     ),
@@ -593,7 +642,7 @@ async function createItemWithDefaultSteps({
   allocatedBudget,
   requiredBudget,
   dueDate,
-  templateKey,
+  template,
   actor,
   position,
   legacyStatuses,
@@ -605,14 +654,14 @@ async function createItemWithDefaultSteps({
   allocatedBudget?: number | null;
   requiredBudget?: number | null;
   dueDate?: string | null;
-  templateKey?: string;
+  template: ResolvedTemplate;
   actor: string;
   position: number;
   legacyStatuses?: Map<string, { status: StepStatus; completedAt: string | null }>;
 }) {
   const d1 = getD1();
   const now = new Date().toISOString();
-  const selectedTemplate = getTemplate(templateKey);
+  const selectedTemplate = template;
   const insertResult = await d1
     .prepare(`INSERT INTO workflow_items (
       title,
@@ -720,13 +769,15 @@ async function ensureDefaultItem() {
     return;
   }
 
+  const defaultTemplate = resolveTemplate(await getTemplatesFromDb());
   await createItemWithDefaultSteps({
     title: "기본 업무",
     assignee: "미지정",
-    category: "일반 업무",
+    category: defaultTemplate.name,
     memo: "",
     allocatedBudget: null,
     requiredBudget: null,
+    template: defaultTemplate,
     actor: "템플릿",
     position: 1,
     legacyStatuses: await readLegacyStatuses(),
@@ -770,6 +821,194 @@ async function ensureDefaultSettings() {
   );
 }
 
+async function getTemplatesFromDb(): Promise<ResolvedTemplate[]> {
+  const d1 = getD1();
+  const [templatesResult, stagesResult] = await Promise.all([
+    d1
+      .prepare(
+        "SELECT * FROM workflow_templates ORDER BY position, template_key"
+      )
+      .all<TemplateRow>(),
+    d1
+      .prepare(
+        "SELECT * FROM workflow_template_stages ORDER BY template_key, position, id"
+      )
+      .all<TemplateStageRow>(),
+  ]);
+
+  const stagesByTemplate = new Map<string, TemplateStageRow[]>();
+
+  for (const stage of stagesResult.results ?? []) {
+    const current = stagesByTemplate.get(stage.template_key) ?? [];
+    current.push(stage);
+    stagesByTemplate.set(stage.template_key, current);
+  }
+
+  return (templatesResult.results ?? []).map((template) => ({
+    key: template.template_key,
+    name: template.name,
+    description: template.description,
+    stages: (stagesByTemplate.get(template.template_key) ?? []).map((stage) => ({
+      key: stage.stage_key,
+      title: stage.title,
+      description: stage.description,
+      group: stage.phase_group,
+      progress: stage.progress_value,
+    })),
+  }));
+}
+
+async function ensureDefaultTemplates() {
+  const d1 = getD1();
+  const count = await d1
+    .prepare("SELECT COUNT(*) AS count FROM workflow_templates")
+    .first<{ count: number }>();
+
+  if (Number(count?.count ?? 0) > 0) {
+    return;
+  }
+
+  const now = new Date().toISOString();
+  const statements: D1PreparedStatement[] = [];
+
+  seedTemplates.forEach((template, templateIndex) => {
+    statements.push(
+      d1
+        .prepare(
+          `INSERT OR IGNORE INTO workflow_templates (template_key, name, description, position, updated_at, created_at)
+           VALUES (?, ?, ?, ?, ?, ?)`
+        )
+        .bind(
+          template.key,
+          template.name,
+          template.description,
+          templateIndex + 1,
+          now,
+          now
+        )
+    );
+
+    template.stages.forEach((stage, stageIndex) => {
+      statements.push(
+        d1
+          .prepare(
+            `INSERT OR IGNORE INTO workflow_template_stages (template_key, stage_key, title, description, phase_group, progress_value, position)
+             VALUES (?, ?, ?, ?, ?, ?, ?)`
+          )
+          .bind(
+            template.key,
+            stage.key,
+            stage.title,
+            stage.description,
+            stage.group,
+            stage.progress,
+            stageIndex + 1
+          )
+      );
+    });
+  });
+
+  if (statements.length) {
+    await d1.batch(statements);
+  }
+}
+
+// When a template's stages change, sync the steps of every item using that
+// template. Matched by stage_key so existing status/due dates are preserved;
+// new stages are added as todo and removed stages are dropped.
+async function reconcileItemsForTemplate(
+  templateKey: string,
+  stages: ResolvedTemplate["stages"],
+  actor: string
+) {
+  const d1 = getD1();
+  const now = new Date().toISOString();
+  const itemsResult = await d1
+    .prepare("SELECT id FROM workflow_items WHERE template_key = ?")
+    .bind(templateKey)
+    .all<{ id: number }>();
+  const items = itemsResult.results ?? [];
+
+  if (!items.length) {
+    return;
+  }
+
+  const desiredKeys = new Set(stages.map((stage) => stage.key));
+
+  for (const item of items) {
+    const stepsResult = await d1
+      .prepare("SELECT * FROM workflow_steps WHERE item_id = ?")
+      .bind(item.id)
+      .all<WorkflowStepRow>();
+    const existing = stepsResult.results ?? [];
+    const existingByKey = new Map(existing.map((step) => [step.stage_key, step]));
+    const statements: D1PreparedStatement[] = [];
+
+    for (const step of existing) {
+      if (!desiredKeys.has(step.stage_key)) {
+        statements.push(
+          d1.prepare("DELETE FROM workflow_steps WHERE id = ?").bind(step.id)
+        );
+      }
+    }
+
+    stages.forEach((stage, index) => {
+      const match = existingByKey.get(stage.key);
+
+      if (match) {
+        statements.push(
+          d1
+            .prepare(
+              `UPDATE workflow_steps
+               SET title = ?, description = ?, phase_group = ?, progress_value = ?, position = ?, updated_by = ?, updated_at = ?
+               WHERE id = ?`
+            )
+            .bind(
+              stage.title,
+              stage.description,
+              stage.group,
+              stage.progress,
+              index + 1,
+              actor,
+              now,
+              match.id
+            )
+        );
+      } else {
+        statements.push(
+          d1
+            .prepare(
+              `INSERT INTO workflow_steps (item_id, stage_key, title, description, phase_group, position, progress_value, status, due_date, completed_at, updated_by, updated_at, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, 'todo', NULL, NULL, ?, ?, ?)`
+            )
+            .bind(
+              item.id,
+              stage.key,
+              stage.title,
+              stage.description,
+              stage.group,
+              index + 1,
+              stage.progress,
+              actor,
+              now,
+              now
+            )
+        );
+      }
+    });
+
+    statements.push(
+      d1
+        .prepare(
+          "UPDATE workflow_items SET updated_by = ?, updated_at = ? WHERE id = ?"
+        )
+        .bind(actor, now, item.id)
+    );
+
+    await d1.batch(statements);
+  }
+}
+
 // Schema/seed setup is idempotent but expensive (DDL + ALTER probes on every
 // call). Cache success per worker isolate so it runs once per cold start
 // instead of on every request. A recycled isolate simply re-runs it once.
@@ -781,6 +1020,7 @@ async function prepareWorkflow() {
   }
 
   await ensureSchema();
+  await ensureDefaultTemplates();
   await ensureDefaultItem();
   await ensureDefaultSettings();
   workflowReady = true;
@@ -897,11 +1137,13 @@ export async function GET(request: Request) {
   try {
     await prepareWorkflow();
 
+    const templateList = await getTemplatesFromDb();
+
     return Response.json({
       items: await getItems(),
-      stages: templates[0].stages,
+      stages: templateList[0]?.stages ?? [],
       legacyStages: defaultStages,
-      templates,
+      templates: templateList,
       assigneeSettings: await getAssigneeSettings(),
       history: await getHistory(),
       settings: await getAppSettings(),
@@ -1004,7 +1246,6 @@ export async function POST(request: Request) {
 
     const title = payload.title?.trim().slice(0, 120) ?? "";
     const assignee = payload.assignee?.trim().slice(0, 80) ?? "";
-    const category = payload.category?.trim().slice(0, 80) || "일반 업무";
     const memo = payload.memo?.trim().slice(0, 1000) ?? "";
     const allocatedBudget = normalizeBudget(payload.allocatedBudget);
     const requiredBudget = normalizeBudget(payload.requiredBudget);
@@ -1013,6 +1254,14 @@ export async function POST(request: Request) {
     if (!title) {
       return Response.json({ error: "업무명을 입력해 주세요." }, { status: 400 });
     }
+
+    const selectedTemplate = resolveTemplate(
+      await getTemplatesFromDb(),
+      payload.templateKey
+    );
+    // The type (template) is the task's category — they are one concept now.
+    const category =
+      payload.category?.trim().slice(0, 80) || selectedTemplate.name;
 
     const last = await d1
       .prepare("SELECT MAX(position) AS position FROM workflow_items")
@@ -1025,7 +1274,7 @@ export async function POST(request: Request) {
       allocatedBudget,
       requiredBudget,
       dueDate,
-      templateKey: payload.templateKey,
+      template: selectedTemplate,
       actor,
       position: Number(last?.position ?? 0) + 1,
     });
@@ -1069,10 +1318,285 @@ export async function PATCH(request: Request) {
       organizationName?: string;
       boardTitle?: string;
       status?: StepStatus;
+      templateKey?: string;
+      name?: string;
+      description?: string;
+      stages?: Array<{
+        stageKey?: string;
+        title?: string;
+        description?: string;
+        group?: string;
+        progress?: number | string | null;
+      }>;
     };
     const now = new Date().toISOString();
     const actor = getActor(request, payload.actor);
     const d1 = getD1();
+
+    if (payload.action === "save-template") {
+      const name =
+        typeof payload.name === "string" ? payload.name.trim().slice(0, 80) : "";
+      const description =
+        typeof payload.description === "string"
+          ? payload.description.trim().slice(0, 200)
+          : "";
+      const rawStages = Array.isArray(payload.stages) ? payload.stages : [];
+      const stages = rawStages
+        .map((stage, index) => {
+          const title =
+            typeof stage.title === "string" ? stage.title.trim().slice(0, 80) : "";
+          const progressValue =
+            stage.progress === null ||
+            stage.progress === undefined ||
+            stage.progress === ""
+              ? null
+              : normalizeBudget(stage.progress);
+
+          return {
+            key:
+              typeof stage.stageKey === "string" && stage.stageKey.trim()
+                ? stage.stageKey.trim()
+                : `st-${crypto.randomUUID()}`,
+            title,
+            description:
+              typeof stage.description === "string"
+                ? stage.description.trim().slice(0, 200)
+                : "",
+            group:
+              typeof stage.group === "string"
+                ? stage.group.trim().slice(0, 40)
+                : "",
+            progress:
+              progressValue !== null && progressValue >= 0 && progressValue <= 100
+                ? progressValue
+                : null,
+            position: index + 1,
+          };
+        })
+        .filter((stage) => stage.title);
+
+      if (!name) {
+        return Response.json({ error: "유형 이름을 입력해 주세요." }, { status: 400 });
+      }
+
+      if (!stages.length) {
+        return Response.json(
+          { error: "최소 한 개 이상의 단계가 필요합니다." },
+          { status: 400 }
+        );
+      }
+
+      // De-duplicate stage keys (a copied key would break reconciliation).
+      const seenKeys = new Set<string>();
+      for (const stage of stages) {
+        if (seenKeys.has(stage.key)) {
+          stage.key = `st-${crypto.randomUUID()}`;
+        }
+        seenKeys.add(stage.key);
+      }
+
+      const existingKey =
+        typeof payload.templateKey === "string" && payload.templateKey.trim()
+          ? payload.templateKey.trim()
+          : "";
+      const existing = existingKey
+        ? await d1
+            .prepare(
+              "SELECT template_key FROM workflow_templates WHERE template_key = ?"
+            )
+            .bind(existingKey)
+            .first<{ template_key: string }>()
+        : null;
+      const templateKey = existing ? existingKey : `tpl-${crypto.randomUUID()}`;
+
+      const positionRow = existing
+        ? null
+        : await d1
+            .prepare("SELECT MAX(position) AS position FROM workflow_templates")
+            .first<{ position: number | null }>();
+      const position = existing ? 0 : Number(positionRow?.position ?? 0) + 1;
+
+      if (existing) {
+        await d1
+          .prepare(
+            "UPDATE workflow_templates SET name = ?, description = ?, updated_at = ? WHERE template_key = ?"
+          )
+          .bind(name, description, now, templateKey)
+          .run();
+      } else {
+        await d1
+          .prepare(
+            `INSERT INTO workflow_templates (template_key, name, description, position, updated_at, created_at)
+             VALUES (?, ?, ?, ?, ?, ?)`
+          )
+          .bind(templateKey, name, description, position, now, now)
+          .run();
+      }
+
+      await d1
+        .prepare("DELETE FROM workflow_template_stages WHERE template_key = ?")
+        .bind(templateKey)
+        .run();
+      await d1.batch(
+        stages.map((stage) =>
+          d1
+            .prepare(
+              `INSERT INTO workflow_template_stages (template_key, stage_key, title, description, phase_group, progress_value, position)
+               VALUES (?, ?, ?, ?, ?, ?, ?)`
+            )
+            .bind(
+              templateKey,
+              stage.key,
+              stage.title,
+              stage.description,
+              stage.group,
+              stage.progress,
+              stage.position
+            )
+        )
+      );
+
+      await reconcileItemsForTemplate(
+        templateKey,
+        stages.map((stage) => ({
+          key: stage.key,
+          title: stage.title,
+          description: stage.description,
+          group: stage.group,
+          progress: stage.progress,
+        })),
+        actor
+      );
+
+      await logHistory({
+        entityType: "template",
+        action: existing ? "update" : "create",
+        summary: `${actor}님이 '${name}' 유형의 단계를 ${existing ? "수정" : "추가"}함`,
+        actor,
+      });
+
+      return Response.json({
+        templates: await getTemplatesFromDb(),
+        items: await getItems(),
+        history: await getHistory(),
+      });
+    }
+
+    if (payload.action === "delete-template") {
+      const templateKey =
+        typeof payload.templateKey === "string" ? payload.templateKey.trim() : "";
+
+      if (!templateKey) {
+        return Response.json({ error: "삭제할 유형이 필요합니다." }, { status: 400 });
+      }
+
+      const template = await d1
+        .prepare("SELECT name FROM workflow_templates WHERE template_key = ?")
+        .bind(templateKey)
+        .first<{ name: string }>();
+
+      if (!template) {
+        return Response.json({ error: "유형을 찾을 수 없습니다." }, { status: 404 });
+      }
+
+      const inUse = await d1
+        .prepare("SELECT COUNT(*) AS count FROM workflow_items WHERE template_key = ?")
+        .bind(templateKey)
+        .first<{ count: number }>();
+
+      if (Number(inUse?.count ?? 0) > 0) {
+        return Response.json(
+          { error: "이 유형을 사용하는 업무가 있어 삭제할 수 없습니다." },
+          { status: 400 }
+        );
+      }
+
+      const remaining = await d1
+        .prepare("SELECT COUNT(*) AS count FROM workflow_templates")
+        .first<{ count: number }>();
+
+      if (Number(remaining?.count ?? 0) <= 1) {
+        return Response.json(
+          { error: "최소 한 개의 유형은 남겨야 합니다." },
+          { status: 400 }
+        );
+      }
+
+      await d1.batch([
+        d1
+          .prepare("DELETE FROM workflow_template_stages WHERE template_key = ?")
+          .bind(templateKey),
+        d1
+          .prepare("DELETE FROM workflow_templates WHERE template_key = ?")
+          .bind(templateKey),
+      ]);
+
+      await logHistory({
+        entityType: "template",
+        action: "delete",
+        summary: `${actor}님이 '${template.name}' 유형을 삭제함`,
+        actor,
+      });
+
+      return Response.json({
+        templates: await getTemplatesFromDb(),
+        items: await getItems(),
+        history: await getHistory(),
+      });
+    }
+
+    if (payload.action === "set-item-template") {
+      const itemId = Number(payload.itemId);
+      const templateKey =
+        typeof payload.templateKey === "string" ? payload.templateKey.trim() : "";
+
+      if (!Number.isFinite(itemId) || !templateKey) {
+        return Response.json(
+          { error: "업무와 유형이 필요합니다." },
+          { status: 400 }
+        );
+      }
+
+      const item = await d1
+        .prepare("SELECT title FROM workflow_items WHERE id = ?")
+        .bind(itemId)
+        .first<{ title: string }>();
+
+      if (!item) {
+        return Response.json({ error: "업무를 찾을 수 없습니다." }, { status: 404 });
+      }
+
+      const template = (await getTemplatesFromDb()).find(
+        (candidate) => candidate.key === templateKey
+      );
+
+      if (!template) {
+        return Response.json({ error: "유형을 찾을 수 없습니다." }, { status: 404 });
+      }
+
+      await d1
+        .prepare(
+          "UPDATE workflow_items SET template_key = ?, category = ?, updated_by = ?, updated_at = ? WHERE id = ?"
+        )
+        .bind(templateKey, template.name, actor, now, itemId)
+        .run();
+      await reconcileItemsForTemplate(templateKey, template.stages, actor);
+
+      await logHistory({
+        itemId,
+        entityType: "item",
+        entityId: itemId,
+        action: "template",
+        summary: `${actor}님이 '${item.title}' 업무 유형을 '${template.name}'(으)로 변경함`,
+        actor,
+      });
+
+      return Response.json({
+        item: await getItem(itemId),
+        items: await getItems(),
+        history: await getHistory(),
+      });
+    }
 
     if (payload.action === "update-settings") {
       const organizationName =

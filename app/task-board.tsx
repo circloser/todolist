@@ -94,13 +94,19 @@ export default function TaskBoard() {
   const [sortMode, setSortMode] = useState<SortMode>("manual");
   const [viewMode, setViewMode] = useState<ViewMode>("list");
   const [showFilters, setShowFilters] = useState(false);
+  const [templateEditorOpen, setTemplateEditorOpen] = useState(false);
+  const [templateDraft, setTemplateDraft] = useState<{
+    key: string | null;
+    name: string;
+    stages: Array<{ stageKey: string | null; title: string; group: string }>;
+  } | null>(null);
+  const [savingTemplate, setSavingTemplate] = useState(false);
   const [assigneeFilter, setAssigneeFilter] = useState("all");
   const [categoryFilter, setCategoryFilter] = useState("all");
   const [templateFilter, setTemplateFilter] = useState("all");
   const [stageFilter, setStageFilter] = useState("all");
   const [keyword, setKeyword] = useState("");
   const [newTitle, setNewTitle] = useState("");
-  const [newCategory, setNewCategory] = useState("일반 업무");
   const [newAssignee, setNewAssignee] = useState("");
   const [newMemo, setNewMemo] = useState("");
   const [newAllocatedBudget, setNewAllocatedBudget] = useState("");
@@ -235,6 +241,15 @@ export default function TaskBoard() {
       ),
     [items]
   );
+
+  const templatesByKey = useMemo(
+    () => new Map(templates.map((template) => [template.key, template])),
+    [templates]
+  );
+
+  function itemTypeName(item: WorkflowItem) {
+    return templatesByKey.get(item.templateKey)?.name ?? categoryName(item.category);
+  }
 
   const selectedTemplate =
     templateFilter === "all"
@@ -766,7 +781,6 @@ export default function TaskBoard() {
         body: JSON.stringify({
           title,
           actor: currentActor,
-          category: newCategory,
           assignee: newAssignee,
           memo: newMemo,
           allocatedBudget: newAllocatedBudget,
@@ -783,7 +797,6 @@ export default function TaskBoard() {
 
       setItems((current) => [...current, data.item!]);
       setNewTitle("");
-      setNewCategory("일반 업무");
       setNewAssignee("");
       setNewMemo("");
       setNewAllocatedBudget("");
@@ -829,6 +842,169 @@ export default function TaskBoard() {
           ? saveError.message
           : "담당자 색상을 저장하지 못했습니다."
       );
+    }
+  }
+
+  function openTemplateEditor(template: TemplateOption | null) {
+    setError("");
+    setTemplateDraft(
+      template
+        ? {
+            key: template.key,
+            name: template.name,
+            stages: template.stages.map((stage) => ({
+              stageKey: stage.key,
+              title: stage.title,
+              group: stage.group,
+            })),
+          }
+        : {
+            key: null,
+            name: "",
+            stages: [{ stageKey: null, title: "", group: "" }],
+          }
+    );
+    setTemplateEditorOpen(true);
+  }
+
+  async function saveTemplateDraft() {
+    if (!templateDraft) {
+      return;
+    }
+
+    const name = templateDraft.name.trim();
+    const stages = templateDraft.stages
+      .map((stage) => ({
+        stageKey: stage.stageKey,
+        title: stage.title.trim(),
+        group: stage.group.trim(),
+      }))
+      .filter((stage) => stage.title);
+
+    if (!name) {
+      setError("유형 이름을 입력해 주세요.");
+      return;
+    }
+
+    if (!stages.length) {
+      setError("최소 한 개 이상의 단계가 필요합니다.");
+      return;
+    }
+
+    setSavingTemplate(true);
+    setError("");
+
+    try {
+      const response = await fetch("/api/tasks", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "save-template",
+          actor: currentActor,
+          templateKey: templateDraft.key ?? undefined,
+          name,
+          stages,
+        }),
+      });
+      const data = (await response.json()) as TaskResponse;
+
+      if (!response.ok || !data.templates) {
+        throw new Error(data.error ?? "유형을 저장하지 못했습니다.");
+      }
+
+      setTemplates(data.templates);
+      if (data.items) {
+        setItems(data.items);
+      }
+      setHistory(data.history ?? history);
+      setTemplateEditorOpen(false);
+      setTemplateDraft(null);
+    } catch (saveError) {
+      setError(
+        saveError instanceof Error ? saveError.message : "유형을 저장하지 못했습니다."
+      );
+    } finally {
+      setSavingTemplate(false);
+    }
+  }
+
+  async function deleteTemplateByKey(key: string, name: string) {
+    if (!window.confirm(`'${name}' 유형을 삭제할까요?`)) {
+      return;
+    }
+
+    setSavingTemplate(true);
+    setError("");
+
+    try {
+      const response = await fetch("/api/tasks", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "delete-template",
+          actor: currentActor,
+          templateKey: key,
+        }),
+      });
+      const data = (await response.json()) as TaskResponse;
+
+      if (!response.ok || !data.templates) {
+        throw new Error(data.error ?? "유형을 삭제하지 못했습니다.");
+      }
+
+      setTemplates(data.templates);
+      if (data.items) {
+        setItems(data.items);
+      }
+      setHistory(data.history ?? history);
+      setTemplateEditorOpen(false);
+      setTemplateDraft(null);
+    } catch (deleteError) {
+      setError(
+        deleteError instanceof Error
+          ? deleteError.message
+          : "유형을 삭제하지 못했습니다."
+      );
+    } finally {
+      setSavingTemplate(false);
+    }
+  }
+
+  async function changeItemTemplate(itemId: number, templateKey: string) {
+    setError("");
+    setSavingItemIds((current) => new Set(current).add(itemId));
+
+    try {
+      const response = await fetch("/api/tasks", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "set-item-template",
+          actor: currentActor,
+          itemId,
+          templateKey,
+        }),
+      });
+      const data = (await response.json()) as TaskResponse;
+
+      if (!response.ok || !data.item) {
+        throw new Error(data.error ?? "업무 유형을 변경하지 못했습니다.");
+      }
+
+      replaceItem(data.item);
+      setHistory(data.history ?? history);
+    } catch (changeError) {
+      setError(
+        changeError instanceof Error
+          ? changeError.message
+          : "업무 유형을 변경하지 못했습니다."
+      );
+    } finally {
+      setSavingItemIds((current) => {
+        const next = new Set(current);
+        next.delete(itemId);
+        return next;
+      });
     }
   }
 
@@ -1068,6 +1244,28 @@ export default function TaskBoard() {
                 })()}
               </button>
 
+              <button
+                type="button"
+                onClick={() => openTemplateEditor(null)}
+                className="tb-btn"
+                title="업무 유형과 단계 관리"
+              >
+                <svg
+                  width="15"
+                  height="15"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                >
+                  <path d="M12 20h9" />
+                  <path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z" />
+                </svg>
+                유형·단계
+              </button>
+
               <div className="tb-seg ml-auto">
                 {(["list", "grid", "gantt"] as const).map((mode) => (
                   <button
@@ -1287,8 +1485,8 @@ export default function TaskBoard() {
                           <span className="truncate text-sm font-semibold">
                             {item.title || "제목 없음"}
                           </span>
-                          <span className="tb-chip">
-                            {categoryName(item.category)}
+                          <span className="tb-chip tb-chip-accent">
+                            {itemTypeName(item)}
                           </span>
                         </div>
                         <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-[var(--text-muted)]">
@@ -1604,21 +1802,35 @@ export default function TaskBoard() {
                                 </div>
                               </label>
                               <label className="block">
-                                <span className="tb-label">대분류</span>
-                                <input
-                                  value={item.category}
-                                  onChange={(event) =>
-                                    updateLocalItem(item.id, {
-                                      category: event.target.value,
-                                    })
-                                  }
-                                  onBlur={(event) =>
-                                    updateItem(item.id, {
-                                      category: event.target.value,
-                                    })
-                                  }
+                                <span className="tb-label">유형 (단계 세트)</span>
+                                <select
+                                  value={item.templateKey}
+                                  onChange={(event) => {
+                                    if (
+                                      event.target.value !== item.templateKey &&
+                                      window.confirm(
+                                        "유형을 바꾸면 이 업무의 단계가 새 유형의 단계로 교체됩니다. 계속할까요?"
+                                      )
+                                    ) {
+                                      void changeItemTemplate(
+                                        item.id,
+                                        event.target.value
+                                      );
+                                    }
+                                  }}
                                   className="tb-field"
-                                />
+                                >
+                                  {!templatesByKey.has(item.templateKey) ? (
+                                    <option value={item.templateKey}>
+                                      {itemTypeName(item)} (기타)
+                                    </option>
+                                  ) : null}
+                                  {templates.map((template) => (
+                                    <option key={template.key} value={template.key}>
+                                      {template.name}
+                                    </option>
+                                  ))}
+                                </select>
                               </label>
                               <label className="block">
                                 <span className="tb-label">최종 마감일</span>
@@ -1749,7 +1961,7 @@ export default function TaskBoard() {
               </div>
               <form
                 onSubmit={addItem}
-                className="grid gap-2 md:grid-cols-2 xl:grid-cols-[160px_140px_minmax(180px,1fr)_120px_130px_96px]"
+                className="grid gap-2 md:grid-cols-2 xl:grid-cols-[180px_minmax(180px,1fr)_120px_130px_96px]"
               >
                 <select
                   value={newTemplateKey}
@@ -1758,7 +1970,7 @@ export default function TaskBoard() {
                     setStageFilter("all");
                   }}
                   className="tb-field"
-                  title="업무 유형"
+                  title="유형 (단계 세트)"
                 >
                   {templates.map((template) => (
                     <option key={template.key} value={template.key}>
@@ -1766,12 +1978,6 @@ export default function TaskBoard() {
                     </option>
                   ))}
                 </select>
-                <input
-                  value={newCategory}
-                  onChange={(event) => setNewCategory(event.target.value)}
-                  className="tb-field"
-                  placeholder="대분류"
-                />
                 <input
                   value={newTitle}
                   onChange={(event) => setNewTitle(event.target.value)}
@@ -2375,7 +2581,7 @@ export default function TaskBoard() {
               </div>
               <form
                 onSubmit={addItem}
-                className="grid gap-2 md:grid-cols-2 xl:grid-cols-[150px_130px_minmax(180px,1fr)_110px_120px_110px_110px_minmax(160px,1fr)_88px]"
+                className="grid gap-2 md:grid-cols-2 xl:grid-cols-[180px_minmax(180px,1fr)_110px_120px_110px_110px_minmax(160px,1fr)_88px]"
               >
                 <select
                   value={newTemplateKey}
@@ -2385,6 +2591,7 @@ export default function TaskBoard() {
                     setStageFilter("all");
                   }}
                   className="tb-field"
+                  title="유형 (단계 세트)"
                 >
                   {templates.map((template) => (
                     <option key={template.key} value={template.key}>
@@ -2392,12 +2599,6 @@ export default function TaskBoard() {
                     </option>
                   ))}
                 </select>
-                <input
-                  value={newCategory}
-                  onChange={(event) => setNewCategory(event.target.value)}
-                  className="tb-field"
-                  placeholder="대분류"
-                />
                 <input
                   value={newTitle}
                   onChange={(event) => setNewTitle(event.target.value)}
@@ -2569,6 +2770,260 @@ export default function TaskBoard() {
           </section>
         </div>
       </section>
+
+      {templateEditorOpen && templateDraft ? (
+        <div
+          className="fixed inset-0 z-50 flex items-start justify-center overflow-auto bg-black/40 p-4 backdrop-blur-sm"
+          onClick={() => {
+            setTemplateEditorOpen(false);
+            setTemplateDraft(null);
+          }}
+        >
+          <div
+            className="tb-card my-6 w-full max-w-[760px] shadow-[var(--shadow-lg)]"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="flex items-center justify-between border-b border-[var(--border)] px-5 py-3.5">
+              <h2 className="text-base font-semibold">유형·단계 관리</h2>
+              <button
+                type="button"
+                onClick={() => {
+                  setTemplateEditorOpen(false);
+                  setTemplateDraft(null);
+                }}
+                className="tb-iconbtn h-8 w-8"
+              >
+                ×
+              </button>
+            </div>
+
+            <div className="grid gap-4 p-5 md:grid-cols-[200px_1fr]">
+              <div className="space-y-1.5">
+                <div className="tb-label">유형 목록</div>
+                {templates.map((template) => (
+                  <button
+                    key={template.key}
+                    type="button"
+                    onClick={() => openTemplateEditor(template)}
+                    data-active={templateDraft.key === template.key}
+                    className={`flex w-full items-center justify-between rounded-[var(--radius)] border px-3 py-2 text-left text-sm transition ${
+                      templateDraft.key === template.key
+                        ? "border-[var(--accent)] bg-[var(--accent-soft)] text-[var(--accent)]"
+                        : "border-[var(--border)] bg-[var(--surface)] hover:bg-[var(--surface-3)]"
+                    }`}
+                  >
+                    <span className="truncate">{template.name}</span>
+                    <span className="text-[var(--text-faint)]">
+                      {template.stages.length}
+                    </span>
+                  </button>
+                ))}
+                <button
+                  type="button"
+                  onClick={() => openTemplateEditor(null)}
+                  className="tb-btn w-full"
+                >
+                  + 새 유형
+                </button>
+              </div>
+
+              <div className="space-y-3">
+                <label className="block">
+                  <span className="tb-label">유형 이름</span>
+                  <input
+                    value={templateDraft.name}
+                    onChange={(event) =>
+                      setTemplateDraft((draft) =>
+                        draft ? { ...draft, name: event.target.value } : draft
+                      )
+                    }
+                    className="tb-field"
+                    placeholder="예: 외부 용역, 현장 조사"
+                  />
+                </label>
+
+                <div>
+                  <div className="mb-1.5 flex items-center justify-between">
+                    <span className="tb-label !mb-0">진행 단계</span>
+                    <span className="text-xs text-[var(--text-faint)]">
+                      {templateDraft.stages.length}단계
+                    </span>
+                  </div>
+                  <div className="max-h-[46vh] space-y-1.5 overflow-auto pr-1">
+                    {templateDraft.stages.map((stage, index) => (
+                      <div
+                        key={index}
+                        className="flex items-center gap-1.5 rounded-[var(--radius)] border border-[var(--border)] bg-[var(--surface-2)] p-1.5"
+                      >
+                        <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-[var(--accent-soft)] text-[10px] font-bold text-[var(--accent)]">
+                          {index + 1}
+                        </span>
+                        <input
+                          value={stage.title}
+                          onChange={(event) =>
+                            setTemplateDraft((draft) =>
+                              draft
+                                ? {
+                                    ...draft,
+                                    stages: draft.stages.map((current, i) =>
+                                      i === index
+                                        ? { ...current, title: event.target.value }
+                                        : current
+                                    ),
+                                  }
+                                : draft
+                            )
+                          }
+                          className="tb-field flex-1"
+                          placeholder="단계 이름"
+                        />
+                        <input
+                          value={stage.group}
+                          onChange={(event) =>
+                            setTemplateDraft((draft) =>
+                              draft
+                                ? {
+                                    ...draft,
+                                    stages: draft.stages.map((current, i) =>
+                                      i === index
+                                        ? { ...current, group: event.target.value }
+                                        : current
+                                    ),
+                                  }
+                                : draft
+                            )
+                          }
+                          className="tb-field hidden w-28 sm:block"
+                          placeholder="그룹(선택)"
+                        />
+                        <div className="flex shrink-0 flex-col">
+                          <button
+                            type="button"
+                            disabled={index === 0}
+                            onClick={() =>
+                              setTemplateDraft((draft) => {
+                                if (!draft || index === 0) return draft;
+                                const stages = [...draft.stages];
+                                [stages[index - 1], stages[index]] = [
+                                  stages[index],
+                                  stages[index - 1],
+                                ];
+                                return { ...draft, stages };
+                              })
+                            }
+                            className="tb-iconbtn h-4 w-6 disabled:opacity-30"
+                            title="위로"
+                          >
+                            ▲
+                          </button>
+                          <button
+                            type="button"
+                            disabled={index === templateDraft.stages.length - 1}
+                            onClick={() =>
+                              setTemplateDraft((draft) => {
+                                if (!draft || index === draft.stages.length - 1)
+                                  return draft;
+                                const stages = [...draft.stages];
+                                [stages[index], stages[index + 1]] = [
+                                  stages[index + 1],
+                                  stages[index],
+                                ];
+                                return { ...draft, stages };
+                              })
+                            }
+                            className="tb-iconbtn h-4 w-6 disabled:opacity-30"
+                            title="아래로"
+                          >
+                            ▼
+                          </button>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setTemplateDraft((draft) =>
+                              draft
+                                ? {
+                                    ...draft,
+                                    stages: draft.stages.filter(
+                                      (_, i) => i !== index
+                                    ),
+                                  }
+                                : draft
+                            )
+                          }
+                          className="tb-iconbtn tb-iconbtn-danger h-7 w-7 shrink-0"
+                          title="단계 삭제"
+                        >
+                          ×
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setTemplateDraft((draft) =>
+                        draft
+                          ? {
+                              ...draft,
+                              stages: [
+                                ...draft.stages,
+                                { stageKey: null, title: "", group: "" },
+                              ],
+                            }
+                          : draft
+                      )
+                    }
+                    className="tb-btn mt-1.5 w-full"
+                  >
+                    + 단계 추가
+                  </button>
+                </div>
+
+                <div className="flex items-center gap-2 border-t border-[var(--border)] pt-3">
+                  <button
+                    type="button"
+                    disabled={savingTemplate}
+                    onClick={() => void saveTemplateDraft()}
+                    className="tb-btn tb-btn-primary"
+                  >
+                    {savingTemplate ? "저장 중…" : "저장"}
+                  </button>
+                  {templateDraft.key ? (
+                    <button
+                      type="button"
+                      disabled={savingTemplate}
+                      onClick={() =>
+                        void deleteTemplateByKey(
+                          templateDraft.key as string,
+                          templateDraft.name
+                        )
+                      }
+                      className="tb-btn tb-iconbtn-danger"
+                    >
+                      유형 삭제
+                    </button>
+                  ) : null}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setTemplateEditorOpen(false);
+                      setTemplateDraft(null);
+                    }}
+                    className="tb-btn ml-auto"
+                  >
+                    닫기
+                  </button>
+                </div>
+                <p className="text-xs text-[var(--text-faint)]">
+                  단계를 수정하면 이 유형을 쓰는 기존 업무에도 반영됩니다. (완료
+                  상태·기한은 유지)
+                </p>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </main>
   );
 }
