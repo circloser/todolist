@@ -35,5 +35,10 @@ yarn-error.log*
 
 # typescript
 next-env.d.ts
+*.tsbuildinfo
 /dist/
 /.wrangler/
+
+# local tooling state
+/.omc/
+/.claude/

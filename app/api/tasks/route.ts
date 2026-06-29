@@ -178,7 +178,20 @@ const defaultStages = [
   },
 ];
 
-const templates = [
+type StageTuple = [
+  key: string,
+  title: string,
+  group: string,
+  description: string,
+  progress: number | null,
+];
+
+const rawTemplates: Array<{
+  key: string;
+  name: string;
+  description: string;
+  stages: StageTuple[];
+}> = [
   {
     key: "external-research-outsourcing",
     name: "외부 학술/조사 용역",
@@ -250,7 +263,9 @@ const templates = [
       ["result-summary", "결과정리", "정리", "결과 자료를 정리합니다.", null],
     ],
   },
-].map((template) => ({
+];
+
+const templates = rawTemplates.map((template) => ({
   ...template,
   stages: template.stages.map(([key, title, group, description, progress]) => ({
     key,
@@ -554,15 +569,17 @@ async function readLegacyStatuses() {
       )
       .all<LegacyWorkflowTaskRow>();
 
-    return new Map(
-      (legacy.results ?? []).map((task) => [
-        task.template_key,
-        {
-          status: task.status === "done" ? "done" : "todo",
-          completedAt: task.completed_at,
-        },
-      ])
-    );
+    const entries: Array<
+      [string, { status: StepStatus; completedAt: string | null }]
+    > = (legacy.results ?? []).map((task) => [
+      task.template_key,
+      {
+        status: task.status === "done" ? "done" : "todo",
+        completedAt: task.completed_at,
+      },
+    ]);
+
+    return new Map(entries);
   } catch {
     return new Map<string, { status: StepStatus; completedAt: string | null }>();
   }
@@ -753,10 +770,20 @@ async function ensureDefaultSettings() {
   );
 }
 
+// Schema/seed setup is idempotent but expensive (DDL + ALTER probes on every
+// call). Cache success per worker isolate so it runs once per cold start
+// instead of on every request. A recycled isolate simply re-runs it once.
+let workflowReady = false;
+
 async function prepareWorkflow() {
+  if (workflowReady) {
+    return;
+  }
+
   await ensureSchema();
   await ensureDefaultItem();
   await ensureDefaultSettings();
+  workflowReady = true;
 }
 
 async function getItems() {

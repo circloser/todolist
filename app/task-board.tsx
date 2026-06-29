@@ -9,107 +9,40 @@ import {
   useState,
 } from "react";
 
-type StepStatus = "todo" | "done";
-type TaskFilter = "all" | "open" | "done";
-type SortMode = "manual" | "assignee" | "progress" | "updated";
-type ViewMode = "grid" | "gantt";
-type DueFilter = "all" | "urgent" | "overdue";
-
-type WorkflowSubtask = {
-  id: number;
-  itemId: number;
-  title: string;
-  status: StepStatus;
-  dueDate: string | null;
-  blockers: string;
-  position: number;
-  updatedBy: string;
-  updatedAt: string;
-  createdAt: string;
-};
-
-type WorkflowStep = {
-  id: number;
-  itemId: number;
-  stageKey: string;
-  title: string;
-  description: string;
-  phaseGroup: string;
-  position: number;
-  progressValue: number | null;
-  status: StepStatus;
-  dueDate: string | null;
-  completedAt: string | null;
-  updatedBy: string;
-  updatedAt: string;
-  createdAt: string;
-};
-
-type WorkflowItem = {
-  id: number;
-  title: string;
-  assignee: string;
-  category: string;
-  memo: string;
-  allocatedBudget: number | null;
-  requiredBudget: number | null;
-  dueDate: string | null;
-  templateKey: string;
-  position: number;
-  updatedBy: string;
-  updatedAt: string;
-  createdAt: string;
-  steps: WorkflowStep[];
-  subtasks: WorkflowSubtask[];
-};
-
-type TemplateStage = {
-  key: string;
-  title: string;
-  description: string;
-  group: string;
-  progress: number | null;
-};
-
-type TemplateOption = {
-  key: string;
-  name: string;
-  description: string;
-  stages: TemplateStage[];
-};
-
-type HistoryEntry = {
-  id: number;
-  itemId: number | null;
-  entityType: string;
-  entityId: number | null;
-  action: string;
-  summary: string;
-  actor: string;
-  createdAt: string;
-};
-
-type AppSettings = {
-  organizationName: string;
-  boardTitle: string;
-};
-
-type TaskResponse = {
-  item?: WorkflowItem | null;
-  items?: WorkflowItem[];
-  templates?: TemplateOption[];
-  assigneeSettings?: Record<string, string>;
-  history?: HistoryEntry[];
-  settings?: AppSettings;
-  viewer?: string;
-  error?: string;
-};
-
-type SubtaskDraft = {
-  title: string;
-  dueDate: string;
-  blockers: string;
-};
+import {
+  applyManualPositions,
+  assigneeName,
+  canToggleStep,
+  categoryName,
+  completionCount,
+  formatBudget,
+  formatDate,
+  formatDay,
+  isItemDone,
+  itemHasOverdueDate,
+  itemHasUrgentDate,
+  itemProgress,
+  moveItem,
+  nextStep,
+  nextStepTitle,
+  rowAccentColor,
+  shortDueLabel,
+  subtaskProgress,
+  urgency,
+  type AppSettings,
+  type DueFilter,
+  type HistoryEntry,
+  type SortMode,
+  type StepStatus,
+  type SubtaskDraft,
+  type TaskFilter,
+  type TaskResponse,
+  type TemplateOption,
+  type ViewMode,
+  type WorkflowItem,
+  type WorkflowStep,
+  type WorkflowSubtask,
+} from "./lib/workflow";
 
 const filters: Array<{ key: TaskFilter; label: string }> = [
   { key: "all", label: "전체" },
@@ -143,193 +76,6 @@ const defaultSettings: AppSettings = {
   organizationName: "습지복원팀",
   boardTitle: "Workflow Command Center",
 };
-
-function formatDate(value?: string | null) {
-  if (!value) {
-    return "기록 없음";
-  }
-
-  return new Intl.DateTimeFormat("ko-KR", {
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-  }).format(new Date(value));
-}
-
-function formatDay(value?: string | null) {
-  if (!value) {
-    return "";
-  }
-
-  return new Intl.DateTimeFormat("ko-KR", {
-    month: "2-digit",
-    day: "2-digit",
-  }).format(new Date(`${value}T00:00:00`));
-}
-
-function formatBudget(value?: number | null) {
-  if (!value) {
-    return "";
-  }
-
-  return new Intl.NumberFormat("ko-KR").format(value);
-}
-
-function daysUntil(value?: string | null) {
-  if (!value) {
-    return null;
-  }
-
-  const target = new Date(`${value}T00:00:00`).getTime();
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  return Math.ceil((target - today.getTime()) / 86_400_000);
-}
-
-function urgency(value?: string | null) {
-  const days = daysUntil(value);
-
-  if (days === null) {
-    return "none";
-  }
-
-  if (days < 0) {
-    return "overdue";
-  }
-
-  if (days <= 1) {
-    return "danger";
-  }
-
-  if (days <= 3) {
-    return "warning";
-  }
-
-  return "normal";
-}
-
-function urgencyLabel(value?: string | null) {
-  const days = daysUntil(value);
-
-  if (days === null) {
-    return "";
-  }
-
-  if (days < 0) {
-    return `D+${Math.abs(days)}`;
-  }
-
-  return `D-${days}`;
-}
-
-function shortDueLabel(value?: string | null) {
-  const label = urgencyLabel(value);
-  return label || "일정";
-}
-
-function assigneeName(value: string) {
-  return value.trim() || "미지정";
-}
-
-function categoryName(value: string) {
-  return value.trim() || "일반 업무";
-}
-
-function completionCount(item: WorkflowItem) {
-  return item.steps.filter((step) => step.status === "done").length;
-}
-
-function itemProgress(item: WorkflowItem) {
-  if (!item.steps.length) {
-    return 0;
-  }
-
-  return Math.round((completionCount(item) / item.steps.length) * 100);
-}
-
-function subtaskProgress(item: WorkflowItem) {
-  if (!item.subtasks.length) {
-    return null;
-  }
-
-  return Math.round(
-    (item.subtasks.filter((subtask) => subtask.status === "done").length /
-      item.subtasks.length) *
-      100
-  );
-}
-
-function isItemDone(item: WorkflowItem) {
-  return item.steps.length > 0 && completionCount(item) === item.steps.length;
-}
-
-function nextStep(item: WorkflowItem) {
-  return item.steps.find((step) => step.status !== "done") ?? null;
-}
-
-function nextStepTitle(item: WorkflowItem) {
-  return nextStep(item)?.title ?? "완료";
-}
-
-function canToggleStep(item: WorkflowItem, index: number) {
-  const step = item.steps[index];
-
-  if (!step) {
-    return false;
-  }
-
-  if (step.status === "done") {
-    return true;
-  }
-
-  return index === 0 || item.steps[index - 1]?.status === "done";
-}
-
-function applyManualPositions(items: WorkflowItem[], order: number[]) {
-  const positions = new Map(order.map((id, index) => [id, index + 1]));
-
-  return items.map((item) => ({
-    ...item,
-    position: positions.get(item.id) ?? item.position,
-  }));
-}
-
-function moveItem<T>(list: T[], from: number, to: number) {
-  const next = [...list];
-  const [moved] = next.splice(from, 1);
-  next.splice(to, 0, moved);
-  return next;
-}
-
-function itemHasUrgentDate(item: WorkflowItem) {
-  const dueDates = [
-    item.dueDate,
-    ...item.steps
-      .filter((step) => step.status !== "done")
-      .map((step) => step.dueDate),
-  ];
-
-  return dueDates.some((date) => {
-    const state = urgency(date);
-    return state === "warning" || state === "danger";
-  });
-}
-
-function itemHasOverdueDate(item: WorkflowItem) {
-  const dueDates = [
-    item.dueDate,
-    ...item.steps
-      .filter((step) => step.status !== "done")
-      .map((step) => step.dueDate),
-  ];
-
-  return dueDates.some((date) => urgency(date) === "overdue");
-}
-
-function rowAccentColor(color?: string) {
-  return color && /^#[0-9a-fA-F]{6}$/.test(color) ? color : "#ffffff";
-}
 
 export default function TaskBoard() {
   const [items, setItems] = useState<WorkflowItem[]>([]);
@@ -602,6 +348,44 @@ export default function TaskBoard() {
     visibleItems[0]?.steps ??
     items[0]?.steps ??
     [];
+
+  // Items of different templates have different stage columns, so the grid is
+  // rendered as one table per template group. Within a group every item shares
+  // the same stage set, keeping header columns aligned with each row's cells.
+  const gridGroups = useMemo(() => {
+    const groups: Array<{
+      templateKey: string;
+      templateName: string;
+      stages: Array<{ stageKey: string; title: string; description: string }>;
+      items: WorkflowItem[];
+    }> = [];
+    const indexByKey = new Map<string, number>();
+
+    for (const item of visibleItems) {
+      let index = indexByKey.get(item.templateKey);
+
+      if (index === undefined) {
+        index = groups.length;
+        indexByKey.set(item.templateKey, index);
+        groups.push({
+          templateKey: item.templateKey,
+          templateName:
+            templates.find((template) => template.key === item.templateKey)
+              ?.name ?? "기타 업무",
+          stages: item.steps.map((step) => ({
+            stageKey: step.stageKey,
+            title: step.title,
+            description: step.description,
+          })),
+          items: [],
+        });
+      }
+
+      groups[index].items.push(item);
+    }
+
+    return groups;
+  }, [visibleItems, templates]);
 
   const totalSteps = items.reduce((sum, item) => sum + item.steps.length, 0);
   const completedSteps = items.reduce(
@@ -1373,20 +1157,46 @@ export default function TaskBoard() {
         ) : null}
 
         {viewMode === "grid" ? (
-          <div className="overflow-hidden border border-[#cfdad4] bg-white shadow-sm">
-            <div className="overflow-x-hidden">
-              <table className="w-full table-fixed border-collapse text-[11px] xl:text-xs">
-                <colgroup>
-                  <col className="w-[8%]" />
-                  <col className="w-[2.5%]" />
-                  <col className="w-[13%]" />
-                  <col className="w-[7%]" />
-                  <col className="w-[7%]" />
-                  {stages.map((stage) => (
-                    <col key={stage.stageKey} className="w-[2.8%]" />
-                  ))}
-                  <col className="w-[23.3%]" />
-                </colgroup>
+          <div className="space-y-4">
+            {loading ? (
+              <div className="border border-[#cfdad4] bg-white px-4 py-12 text-center text-[#63716b] shadow-sm">
+                불러오는 중
+              </div>
+            ) : null}
+
+            {!loading && !visibleItems.length ? (
+              <div className="border border-[#cfdad4] bg-white px-4 py-12 text-center text-[#63716b] shadow-sm">
+                표시할 업무가 없습니다.
+              </div>
+            ) : null}
+
+            {!loading &&
+              gridGroups.map((group) => (
+                <div
+                  key={group.templateKey}
+                  className="overflow-hidden border border-[#cfdad4] bg-white shadow-sm"
+                >
+                  {gridGroups.length > 1 ? (
+                    <div className="border-b border-[#dbe4df] bg-[#f1f6f3] px-3 py-2 text-sm font-semibold text-[#2f5a52]">
+                      {group.templateName}
+                      <span className="ml-2 text-xs font-normal text-[#6b7772]">
+                        {group.items.length}건
+                      </span>
+                    </div>
+                  ) : null}
+                  <div className="overflow-x-hidden">
+                    <table className="w-full table-fixed border-collapse text-[11px] xl:text-xs">
+                      <colgroup>
+                        <col className="w-[8%]" />
+                        <col className="w-[2.5%]" />
+                        <col className="w-[13%]" />
+                        <col className="w-[7%]" />
+                        <col className="w-[7%]" />
+                        {group.stages.map((stage) => (
+                          <col key={stage.stageKey} className="w-[2.8%]" />
+                        ))}
+                        <col className="w-[23.3%]" />
+                      </colgroup>
                 <thead>
                   <tr className="bg-[#f7faf8] text-left text-xs font-semibold text-[#53625c]">
                     <th className="border-b border-r border-[#dbe4df] bg-[#f7faf8] px-2 py-3">
@@ -1402,7 +1212,7 @@ export default function TaskBoard() {
                     <th className="border-b border-r border-[#dbe4df] px-2 py-3">
                       진도
                     </th>
-                    {stages.map((stage) => (
+                    {group.stages.map((stage) => (
                       <th
                         key={stage.stageKey}
                         className="border-b border-r border-[#dbe4df] px-0.5 py-2 text-center"
@@ -1423,30 +1233,7 @@ export default function TaskBoard() {
                 </thead>
 
                 <tbody>
-                  {loading ? (
-                    <tr>
-                      <td
-                        colSpan={stages.length + 6}
-                        className="px-4 py-12 text-center text-[#63716b]"
-                      >
-                        불러오는 중
-                      </td>
-                    </tr>
-                  ) : null}
-
-                  {!loading && !visibleItems.length ? (
-                    <tr>
-                      <td
-                        colSpan={stages.length + 6}
-                        className="px-4 py-12 text-center text-[#63716b]"
-                      >
-                        표시할 업무가 없습니다.
-                      </td>
-                    </tr>
-                  ) : null}
-
-                  {!loading &&
-                    visibleItems.map((item) => {
+                  {group.items.map((item) => {
                       const progress = itemProgress(item);
                       const done = isItemDone(item);
                       const expanded = expandedIds.has(item.id);
@@ -1751,7 +1538,7 @@ export default function TaskBoard() {
                           {expanded ? (
                             <tr className="border-b border-[#dbe4df] bg-[#fbfcfb]">
                               <td colSpan={2} />
-                              <td colSpan={stages.length + 4} className="px-3 py-3">
+                              <td colSpan={group.stages.length + 4} className="px-3 py-3">
                                 <div className="grid gap-3 lg:grid-cols-[1fr_320px]">
                                   <div>
                                     <div className="mb-2 text-sm font-semibold">
@@ -1945,18 +1732,16 @@ export default function TaskBoard() {
                       );
                     })}
                 </tbody>
+                    </table>
+                  </div>
+                </div>
+              ))}
 
-                <tfoot>
-                  <tr className="border-t-2 border-[#9fcac1] bg-[#f6fbf8]">
-                    <td
-                      colSpan={2}
-                      className="border-r border-[#dbe4df] bg-[#f6fbf8] px-1 py-3"
-                    />
-                    <td colSpan={stages.length + 4} className="px-3 py-3">
-                      <form
-                        onSubmit={addItem}
-                        className="grid gap-2 md:grid-cols-2 xl:grid-cols-[150px_130px_minmax(180px,1fr)_110px_110px_110px_110px_minmax(160px,1fr)_80px]"
-                      >
+            <div className="border border-[#cfdad4] bg-white p-3 shadow-sm">
+              <form
+                onSubmit={addItem}
+                className="grid gap-2 md:grid-cols-2 xl:grid-cols-[150px_130px_minmax(180px,1fr)_110px_110px_110px_110px_minmax(160px,1fr)_80px]"
+              >
                         <select
                           value={newTemplateKey}
                           onChange={(event) => {
@@ -2032,11 +1817,7 @@ export default function TaskBoard() {
                         >
                           {adding ? "추가 중" : "+ 추가"}
                         </button>
-                      </form>
-                    </td>
-                  </tr>
-                </tfoot>
-              </table>
+              </form>
             </div>
           </div>
         ) : (
