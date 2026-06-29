@@ -92,7 +92,8 @@ export default function TaskBoard() {
   const [filter, setFilter] = useState<TaskFilter>("all");
   const [dueFilter, setDueFilter] = useState<DueFilter>("all");
   const [sortMode, setSortMode] = useState<SortMode>("manual");
-  const [viewMode, setViewMode] = useState<ViewMode>("grid");
+  const [viewMode, setViewMode] = useState<ViewMode>("list");
+  const [showFilters, setShowFilters] = useState(false);
   const [assigneeFilter, setAssigneeFilter] = useState("all");
   const [categoryFilter, setCategoryFilter] = useState("all");
   const [templateFilter, setTemplateFilter] = useState("all");
@@ -997,27 +998,6 @@ export default function TaskBoard() {
               </div>
 
               <select
-                value={templateFilter}
-                onChange={(event) => {
-                  const value = event.target.value;
-                  setTemplateFilter(value);
-                  setStageFilter("all");
-                  if (value !== "all") {
-                    setNewTemplateKey(value);
-                  }
-                }}
-                className="tb-field w-auto min-w-[140px]"
-                title="업무 유형"
-              >
-                <option value="all">모든 유형</option>
-                {templates.map((template) => (
-                  <option key={template.key} value={template.key}>
-                    {template.name}
-                  </option>
-                ))}
-              </select>
-
-              <select
                 value={filter}
                 onChange={(event) => setFilter(event.target.value as TaskFilter)}
                 className="tb-field w-auto"
@@ -1026,20 +1006,6 @@ export default function TaskBoard() {
                 {filters.map((option) => (
                   <option key={option.key} value={option.key}>
                     {option.label}
-                  </option>
-                ))}
-              </select>
-
-              <select
-                value={categoryFilter}
-                onChange={(event) => setCategoryFilter(event.target.value)}
-                className="tb-field w-auto"
-                title="대분류"
-              >
-                <option value="all">모든 대분류</option>
-                {categories.map((category) => (
-                  <option key={category} value={category}>
-                    {category}
                   </option>
                 ))}
               </select>
@@ -1059,33 +1025,6 @@ export default function TaskBoard() {
               </select>
 
               <select
-                value={stageFilter}
-                onChange={(event) => setStageFilter(event.target.value)}
-                className="tb-field w-auto"
-                title="단계"
-              >
-                <option value="all">모든 단계</option>
-                {stages.map((stage) => (
-                  <option key={stage.stageKey} value={stage.stageKey}>
-                    {stage.title}
-                  </option>
-                ))}
-              </select>
-
-              <select
-                value={dueFilter}
-                onChange={(event) => setDueFilter(event.target.value as DueFilter)}
-                className="tb-field w-auto"
-                title="일정"
-              >
-                {dueFilters.map((option) => (
-                  <option key={option.key} value={option.key}>
-                    {option.label}
-                  </option>
-                ))}
-              </select>
-
-              <select
                 value={sortMode}
                 onChange={(event) => setSortMode(event.target.value as SortMode)}
                 className="tb-field w-auto"
@@ -1098,8 +1037,39 @@ export default function TaskBoard() {
                 ))}
               </select>
 
+              <button
+                type="button"
+                onClick={() => setShowFilters((value) => !value)}
+                data-active={showFilters}
+                className="tb-btn"
+                title="상세 필터"
+              >
+                <svg
+                  width="15"
+                  height="15"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                >
+                  <path d="M22 3H2l8 9.46V19l4 2v-8.54L22 3z" />
+                </svg>
+                필터
+                {(() => {
+                  const n =
+                    [templateFilter, categoryFilter, stageFilter].filter(
+                      (value) => value !== "all"
+                    ).length + (dueFilter !== "all" ? 1 : 0);
+                  return n ? (
+                    <span className="tb-badge tb-badge-muted">{n}</span>
+                  ) : null;
+                })()}
+              </button>
+
               <div className="tb-seg ml-auto">
-                {(["grid", "gantt"] as const).map((mode) => (
+                {(["list", "grid", "gantt"] as const).map((mode) => (
                   <button
                     key={mode}
                     type="button"
@@ -1107,11 +1077,90 @@ export default function TaskBoard() {
                     data-active={viewMode === mode}
                     className="tb-seg-btn"
                   >
-                    {mode === "grid" ? "표" : "간트"}
+                    {mode === "list" ? "목록" : mode === "grid" ? "표" : "간트"}
                   </button>
                 ))}
               </div>
             </div>
+
+            {showFilters ? (
+              <div className="flex flex-wrap items-center gap-2 rounded-[var(--radius)] border border-[var(--border)] bg-[var(--surface-2)] p-2.5">
+                <select
+                  value={templateFilter}
+                  onChange={(event) => {
+                    const value = event.target.value;
+                    setTemplateFilter(value);
+                    setStageFilter("all");
+                    if (value !== "all") {
+                      setNewTemplateKey(value);
+                    }
+                  }}
+                  className="tb-field w-auto min-w-[140px]"
+                  title="업무 유형"
+                >
+                  <option value="all">모든 유형</option>
+                  {templates.map((template) => (
+                    <option key={template.key} value={template.key}>
+                      {template.name}
+                    </option>
+                  ))}
+                </select>
+
+                <select
+                  value={categoryFilter}
+                  onChange={(event) => setCategoryFilter(event.target.value)}
+                  className="tb-field w-auto"
+                  title="대분류"
+                >
+                  <option value="all">모든 대분류</option>
+                  {categories.map((category) => (
+                    <option key={category} value={category}>
+                      {category}
+                    </option>
+                  ))}
+                </select>
+
+                <select
+                  value={stageFilter}
+                  onChange={(event) => setStageFilter(event.target.value)}
+                  className="tb-field w-auto"
+                  title="단계"
+                >
+                  <option value="all">모든 단계</option>
+                  {stages.map((stage) => (
+                    <option key={stage.stageKey} value={stage.stageKey}>
+                      {stage.title}
+                    </option>
+                  ))}
+                </select>
+
+                <select
+                  value={dueFilter}
+                  onChange={(event) => setDueFilter(event.target.value as DueFilter)}
+                  className="tb-field w-auto"
+                  title="일정"
+                >
+                  {dueFilters.map((option) => (
+                    <option key={option.key} value={option.key}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setTemplateFilter("all");
+                    setCategoryFilter("all");
+                    setStageFilter("all");
+                    setDueFilter("all");
+                  }}
+                  className="tb-btn ml-auto"
+                >
+                  초기화
+                </button>
+              </div>
+            ) : null}
 
             {bottlenecks.length || assigneeStats.length ? (
               <div className="flex flex-wrap items-center gap-2">
@@ -1173,7 +1222,586 @@ export default function TaskBoard() {
           </div>
         ) : null}
 
-        {viewMode === "grid" ? (
+        {viewMode === "list" ? (
+          <div className="space-y-2.5">
+            {loading ? (
+              <div className="tb-card px-4 py-16 text-center text-sm text-[var(--text-muted)]">
+                불러오는 중…
+              </div>
+            ) : null}
+
+            {!loading && !visibleItems.length ? (
+              <div className="tb-card px-4 py-16 text-center text-sm text-[var(--text-muted)]">
+                표시할 업무가 없습니다.
+              </div>
+            ) : null}
+
+            {!loading &&
+              visibleItems.map((item) => {
+                const progress = itemProgress(item);
+                const done = isItemDone(item);
+                const expanded = expandedIds.has(item.id);
+                const rowColor = rowAccentColor(
+                  assigneeSettings[assigneeName(item.assignee)]
+                );
+                const next = nextStep(item);
+                const subProgress = subtaskProgress(item);
+                const completed = completionCount(item);
+                const itemDue = urgency(item.dueDate);
+
+                return (
+                  <div
+                    key={item.id}
+                    onDragOver={handleDragOver}
+                    onDrop={() => handleDrop(item.id)}
+                    className={`tb-card overflow-hidden ${
+                      draggedId === item.id
+                        ? "ring-2 ring-[var(--accent-ring)]"
+                        : ""
+                    }`}
+                  >
+                    <div
+                      className="flex items-center gap-3 p-3"
+                      style={{ boxShadow: `inset 3px 0 0 ${rowColor}` }}
+                    >
+                      <button
+                        type="button"
+                        draggable
+                        onDragStart={(event) => {
+                          setDraggedId(item.id);
+                          event.dataTransfer.effectAllowed = "move";
+                        }}
+                        onDragEnd={() => setDraggedId(null)}
+                        className="tb-iconbtn h-8 w-6 shrink-0 cursor-grab active:cursor-grabbing"
+                        title="드래그로 순서 변경"
+                      >
+                        ⋮⋮
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => toggleExpanded(item.id)}
+                        className="min-w-0 flex-1 text-left"
+                      >
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="truncate text-sm font-semibold">
+                            {item.title || "제목 없음"}
+                          </span>
+                          <span className="tb-chip">
+                            {categoryName(item.category)}
+                          </span>
+                        </div>
+                        <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-[var(--text-muted)]">
+                          <span className="inline-flex items-center gap-1.5">
+                            <span
+                              className="h-2.5 w-2.5 rounded-full"
+                              style={{ backgroundColor: rowColor }}
+                            />
+                            {assigneeName(item.assignee)}
+                          </span>
+                          {done ? (
+                            <span className="tb-badge tb-badge-success">완료</span>
+                          ) : (
+                            <span className="tb-badge tb-badge-muted">
+                              {completed}/{item.steps.length} · {next?.title ?? "—"}
+                            </span>
+                          )}
+                          {item.dueDate ? (
+                            <span
+                              className={`tb-badge ${
+                                itemDue === "overdue" || itemDue === "danger"
+                                  ? "tb-badge-danger"
+                                  : itemDue === "warning"
+                                    ? "tb-badge-warning"
+                                    : "tb-badge-muted"
+                              }`}
+                            >
+                              마감 {formatDay(item.dueDate)} · {shortDueLabel(item.dueDate)}
+                            </span>
+                          ) : null}
+                          {subProgress !== null ? (
+                            <span>세부 {subProgress}%</span>
+                          ) : null}
+                          {savingItemIds.has(item.id) ? (
+                            <span className="text-[var(--accent)]">저장 중…</span>
+                          ) : null}
+                        </div>
+                      </button>
+
+                      <div className="hidden w-44 shrink-0 md:block">
+                        <div className="flex items-center gap-2">
+                          <div className="tb-progress flex-1">
+                            <span
+                              style={{
+                                width: `${progress}%`,
+                                background: progressColor(item),
+                              }}
+                            />
+                          </div>
+                          <span className="w-9 text-right text-sm font-bold">
+                            {progress}%
+                          </span>
+                        </div>
+                      </div>
+
+                      <div className="flex shrink-0 items-center gap-1">
+                        <button
+                          type="button"
+                          onClick={() => toggleExpanded(item.id)}
+                          className="tb-iconbtn h-8 w-8"
+                          title="펼치기"
+                        >
+                          {expanded ? "▴" : "▾"}
+                        </button>
+                        <button
+                          type="button"
+                          disabled={deletingItemIds.has(item.id)}
+                          onClick={() => void deleteItem(item)}
+                          className="tb-iconbtn tb-iconbtn-danger h-8 w-8 disabled:cursor-not-allowed disabled:opacity-40"
+                          title="업무 삭제"
+                        >
+                          ×
+                        </button>
+                      </div>
+                    </div>
+
+                    {expanded ? (
+                      <div className="border-t border-[var(--border)] bg-[var(--surface-2)] p-4">
+                        <div className="grid gap-4 lg:grid-cols-[1fr_300px]">
+                          <div className="space-y-4">
+                            <div>
+                              <div className="mb-2 flex items-center justify-between">
+                                <span className="text-sm font-semibold">진행 단계</span>
+                                <span className="text-xs text-[var(--text-faint)]">
+                                  {completed}/{item.steps.length} 완료
+                                </span>
+                              </div>
+                              <div className="grid gap-1.5">
+                                {item.steps.map((step, index) => {
+                                  const checked = step.status === "done";
+                                  const saving = savingStepIds.has(step.id);
+                                  const allowed = canToggleStep(item, index);
+                                  const state = urgency(step.dueDate);
+                                  const disabled = !allowed || saving;
+                                  const dotClass = checked
+                                    ? "is-done"
+                                    : !allowed
+                                      ? "is-locked"
+                                      : state === "overdue" || state === "danger"
+                                        ? "is-danger"
+                                        : state === "warning"
+                                          ? "is-warning"
+                                          : "is-available";
+
+                                  return (
+                                    <div
+                                      key={step.id}
+                                      className="flex items-center gap-2.5 rounded-[var(--radius)] border border-[var(--border)] bg-[var(--surface)] px-2.5 py-2"
+                                    >
+                                      <button
+                                        type="button"
+                                        disabled={disabled}
+                                        onClick={() =>
+                                          updateStep(
+                                            item,
+                                            step,
+                                            checked ? "todo" : "done"
+                                          )
+                                        }
+                                        className={`tb-stage !h-6 !w-6 shrink-0 rounded-full ${dotClass}`}
+                                        title={step.description}
+                                      >
+                                        {saving ? "…" : checked ? "✓" : index + 1}
+                                      </button>
+                                      <div className="min-w-0 flex-1">
+                                        <div
+                                          className={`truncate text-sm ${
+                                            checked
+                                              ? "text-[var(--text-faint)] line-through"
+                                              : "font-medium"
+                                          }`}
+                                        >
+                                          {step.title}
+                                        </div>
+                                        {step.phaseGroup ? (
+                                          <div className="text-[10px] text-[var(--text-faint)]">
+                                            {step.phaseGroup}
+                                          </div>
+                                        ) : null}
+                                      </div>
+                                      {step.dueDate && !checked ? (
+                                        <span
+                                          className={`tb-badge ${
+                                            state === "overdue" || state === "danger"
+                                              ? "tb-badge-danger"
+                                              : state === "warning"
+                                                ? "tb-badge-warning"
+                                                : "tb-badge-muted"
+                                          }`}
+                                        >
+                                          {shortDueLabel(step.dueDate)}
+                                        </span>
+                                      ) : null}
+                                      <label
+                                        className="tb-stage-due relative !w-auto px-2"
+                                        title="목표일 설정"
+                                      >
+                                        {step.dueDate ? formatDay(step.dueDate) : "+ 기한"}
+                                        <input
+                                          type="date"
+                                          value={step.dueDate ?? ""}
+                                          onChange={(event) =>
+                                            updateStepDueDate(step, event.target.value)
+                                          }
+                                          className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
+                                        />
+                                      </label>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            </div>
+
+                            <div>
+                              <div className="mb-2 text-sm font-semibold">
+                                세부 체크리스트
+                              </div>
+                              <div className="space-y-1.5">
+                                {item.subtasks.map((subtask) => (
+                                  <div
+                                    key={subtask.id}
+                                    className="flex items-center gap-2.5 rounded-[var(--radius)] border border-[var(--border)] bg-[var(--surface)] px-2.5 py-2"
+                                  >
+                                    <input
+                                      type="checkbox"
+                                      checked={subtask.status === "done"}
+                                      onChange={(event) => {
+                                        updateLocalSubtask(subtask.id, {
+                                          status: event.target.checked ? "done" : "todo",
+                                        });
+                                        void updateSubtask(subtask.id, {
+                                          status: event.target.checked ? "done" : "todo",
+                                        });
+                                      }}
+                                      className="h-4 w-4 shrink-0 accent-[var(--accent)]"
+                                    />
+                                    <input
+                                      value={subtask.title}
+                                      onChange={(event) =>
+                                        updateLocalSubtask(subtask.id, {
+                                          title: event.target.value,
+                                        })
+                                      }
+                                      onBlur={(event) =>
+                                        updateSubtask(subtask.id, {
+                                          title: event.target.value,
+                                        })
+                                      }
+                                      className={`tb-ghost flex-1 text-sm ${
+                                        subtask.status === "done"
+                                          ? "text-[var(--text-faint)] line-through"
+                                          : ""
+                                      }`}
+                                    />
+                                    <input
+                                      value={subtask.blockers}
+                                      onChange={(event) =>
+                                        updateLocalSubtask(subtask.id, {
+                                          blockers: event.target.value,
+                                        })
+                                      }
+                                      onBlur={(event) =>
+                                        updateSubtask(subtask.id, {
+                                          blockers: event.target.value,
+                                        })
+                                      }
+                                      className="tb-ghost hidden w-40 text-xs sm:block"
+                                      placeholder="애로사항"
+                                    />
+                                    <label className="tb-stage-due relative !w-auto px-2">
+                                      {subtask.dueDate ? formatDay(subtask.dueDate) : "+ 기한"}
+                                      <input
+                                        type="date"
+                                        value={subtask.dueDate ?? ""}
+                                        onChange={(event) => {
+                                          updateLocalSubtask(subtask.id, {
+                                            dueDate: event.target.value,
+                                          });
+                                          void updateSubtask(subtask.id, {
+                                            dueDate: event.target.value,
+                                          });
+                                        }}
+                                        className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
+                                      />
+                                    </label>
+                                  </div>
+                                ))}
+                              </div>
+                              <form
+                                onSubmit={(event) => {
+                                  event.preventDefault();
+                                  void addSubtask(item.id);
+                                }}
+                                className="mt-2 flex gap-2"
+                              >
+                                <input
+                                  value={subtaskDrafts[item.id]?.title ?? ""}
+                                  onChange={(event) =>
+                                    setSubtaskDrafts((current) => ({
+                                      ...current,
+                                      [item.id]: {
+                                        title: event.target.value,
+                                        dueDate: current[item.id]?.dueDate ?? "",
+                                        blockers: current[item.id]?.blockers ?? "",
+                                      },
+                                    }))
+                                  }
+                                  className="tb-field flex-1"
+                                  placeholder="새 체크리스트 추가"
+                                />
+                                <button type="submit" className="tb-btn tb-btn-primary">
+                                  추가
+                                </button>
+                              </form>
+                            </div>
+                          </div>
+
+                          <div className="space-y-3">
+                            <div className="space-y-3 rounded-[var(--radius)] border border-[var(--border)] bg-[var(--surface)] p-3.5">
+                              <div className="text-sm font-semibold">업무 정보</div>
+                              <label className="block">
+                                <span className="tb-label">담당자</span>
+                                <div className="flex items-center gap-2">
+                                  <input
+                                    value={item.assignee}
+                                    onChange={(event) =>
+                                      updateLocalItem(item.id, {
+                                        assignee: event.target.value,
+                                      })
+                                    }
+                                    onBlur={(event) =>
+                                      updateItem(item.id, {
+                                        assignee: event.target.value,
+                                      })
+                                    }
+                                    className="tb-field"
+                                  />
+                                  <input
+                                    type="color"
+                                    value={
+                                      assigneeSettings[assigneeName(item.assignee)] ??
+                                      "#e6f4ef"
+                                    }
+                                    onChange={(event) =>
+                                      saveAssigneeColor(
+                                        assigneeName(item.assignee),
+                                        event.target.value
+                                      )
+                                    }
+                                    className="h-9 w-10 shrink-0 cursor-pointer rounded border border-[var(--border)] bg-transparent p-0"
+                                    title="담당자 색상"
+                                  />
+                                </div>
+                              </label>
+                              <label className="block">
+                                <span className="tb-label">대분류</span>
+                                <input
+                                  value={item.category}
+                                  onChange={(event) =>
+                                    updateLocalItem(item.id, {
+                                      category: event.target.value,
+                                    })
+                                  }
+                                  onBlur={(event) =>
+                                    updateItem(item.id, {
+                                      category: event.target.value,
+                                    })
+                                  }
+                                  className="tb-field"
+                                />
+                              </label>
+                              <label className="block">
+                                <span className="tb-label">최종 마감일</span>
+                                <input
+                                  type="date"
+                                  value={item.dueDate ?? ""}
+                                  onChange={(event) =>
+                                    updateItem(item.id, {
+                                      dueDate: event.target.value,
+                                    })
+                                  }
+                                  className="tb-field"
+                                />
+                              </label>
+                              <div className="grid grid-cols-2 gap-2">
+                                <label className="block">
+                                  <span className="tb-label">편성 예산</span>
+                                  <input
+                                    type="number"
+                                    min="0"
+                                    step="1000"
+                                    value={item.allocatedBudget ?? ""}
+                                    onChange={(event) =>
+                                      updateLocalItem(item.id, {
+                                        allocatedBudget: event.target.value
+                                          ? Number(event.target.value)
+                                          : null,
+                                      })
+                                    }
+                                    onBlur={(event) =>
+                                      updateItem(item.id, {
+                                        allocatedBudget: event.target.value
+                                          ? Number(event.target.value)
+                                          : null,
+                                      })
+                                    }
+                                    className="tb-field"
+                                    placeholder="원"
+                                  />
+                                </label>
+                                <label className="block">
+                                  <span className="tb-label">소요 예산</span>
+                                  <input
+                                    type="number"
+                                    min="0"
+                                    step="1000"
+                                    value={item.requiredBudget ?? ""}
+                                    onChange={(event) =>
+                                      updateLocalItem(item.id, {
+                                        requiredBudget: event.target.value
+                                          ? Number(event.target.value)
+                                          : null,
+                                      })
+                                    }
+                                    onBlur={(event) =>
+                                      updateItem(item.id, {
+                                        requiredBudget: event.target.value
+                                          ? Number(event.target.value)
+                                          : null,
+                                      })
+                                    }
+                                    className="tb-field"
+                                    placeholder="원"
+                                  />
+                                </label>
+                              </div>
+                              <label className="block">
+                                <span className="tb-label">메모</span>
+                                <textarea
+                                  value={item.memo}
+                                  onChange={(event) =>
+                                    updateLocalItem(item.id, {
+                                      memo: event.target.value,
+                                    })
+                                  }
+                                  onBlur={(event) =>
+                                    updateItem(item.id, {
+                                      memo: event.target.value,
+                                    })
+                                  }
+                                  className="tb-field min-h-[60px] resize-y"
+                                  placeholder="메모"
+                                />
+                              </label>
+                              <div className="text-[10px] text-[var(--text-faint)]">
+                                수정 {formatDate(item.updatedAt)}
+                              </div>
+                            </div>
+
+                            <div className="rounded-[var(--radius)] border border-[var(--border)] bg-[var(--surface)] p-3.5">
+                              <div className="text-sm font-semibold">최근 이력</div>
+                              <div className="mt-2.5 max-h-40 space-y-2.5 overflow-auto">
+                                {history
+                                  .filter((entry) => entry.itemId === item.id)
+                                  .slice(0, 6)
+                                  .map((entry) => (
+                                    <div
+                                      key={entry.id}
+                                      className="border-l-2 border-[var(--accent-soft-2)] pl-2.5 text-xs leading-5 text-[var(--text-muted)]"
+                                    >
+                                      <div className="text-[10px] font-semibold text-[var(--text-faint)]">
+                                        {formatDate(entry.createdAt)}
+                                      </div>
+                                      {entry.summary}
+                                    </div>
+                                  ))}
+                                {!history.some((entry) => entry.itemId === item.id) ? (
+                                  <div className="text-xs text-[var(--text-faint)]">
+                                    아직 기록이 없습니다.
+                                  </div>
+                                ) : null}
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    ) : null}
+                  </div>
+                );
+              })}
+
+            <div className="tb-card p-3.5">
+              <div className="mb-2.5 flex items-center gap-2 text-sm font-semibold text-[var(--text-muted)]">
+                <span className="flex h-5 w-5 items-center justify-center rounded-full bg-[var(--accent-soft)] text-[var(--accent)]">
+                  +
+                </span>
+                새 업무 추가
+              </div>
+              <form
+                onSubmit={addItem}
+                className="grid gap-2 md:grid-cols-2 xl:grid-cols-[160px_140px_minmax(180px,1fr)_120px_130px_96px]"
+              >
+                <select
+                  value={newTemplateKey}
+                  onChange={(event) => {
+                    setNewTemplateKey(event.target.value);
+                    setStageFilter("all");
+                  }}
+                  className="tb-field"
+                  title="업무 유형"
+                >
+                  {templates.map((template) => (
+                    <option key={template.key} value={template.key}>
+                      {template.name}
+                    </option>
+                  ))}
+                </select>
+                <input
+                  value={newCategory}
+                  onChange={(event) => setNewCategory(event.target.value)}
+                  className="tb-field"
+                  placeholder="대분류"
+                />
+                <input
+                  value={newTitle}
+                  onChange={(event) => setNewTitle(event.target.value)}
+                  className="tb-field"
+                  placeholder="새 업무명"
+                />
+                <input
+                  value={newAssignee}
+                  onChange={(event) => setNewAssignee(event.target.value)}
+                  className="tb-field"
+                  placeholder="담당자"
+                />
+                <input
+                  type="date"
+                  value={newDueDate}
+                  onChange={(event) => setNewDueDate(event.target.value)}
+                  className="tb-field"
+                  title="최종 마감일"
+                />
+                <button
+                  type="submit"
+                  disabled={!newTitle.trim() || adding}
+                  className="tb-btn tb-btn-primary"
+                >
+                  {adding ? "추가 중…" : "+ 추가"}
+                </button>
+              </form>
+            </div>
+          </div>
+        ) : viewMode === "grid" ? (
           <div className="space-y-4">
             {loading ? (
               <div className="tb-card px-4 py-16 text-center text-sm text-[var(--text-muted)]">
