@@ -921,20 +921,18 @@ export default function TaskBoard() {
   }
 
   return (
-    <main className="min-h-dvh bg-[#f4f6f3] text-[#1d2320]">
-      <header className="border-b border-[#d9e1dc] bg-white">
+    <main className="min-h-dvh">
+      <header className="sticky top-0 z-30 border-b border-[var(--border)] bg-[var(--surface)]/90 shadow-[var(--shadow-xs)] backdrop-blur">
         <div className="mx-auto flex max-w-[1600px] flex-col gap-4 px-4 py-4 sm:px-6 lg:px-8">
-          <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
-            <div>
-              <div className="flex flex-wrap items-end gap-2 text-sm font-semibold text-[#4f6f68]">
-                <span className="border border-[#cbd8d2] bg-[#e6f4ef] px-2.5 py-1 text-sm text-[#1f4f49]">
-                  {organizationName}
-                </span>
-                <span className="border border-[#dce5e0] bg-white px-2.5 py-1 text-sm text-[#53625c]">
-                  {currentActor}
-                </span>
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+            <div className="min-w-0">
+              <div className="mb-1.5 flex flex-wrap items-center gap-2">
+                <span className="tb-chip tb-chip-accent">{organizationName}</span>
+                <span className="tb-chip">{currentActor}</span>
                 {savingSettings ? (
-                  <span className="pb-1 text-xs text-[#1f6f67]">저장 중</span>
+                  <span className="text-xs font-medium text-[var(--accent)]">
+                    저장 중…
+                  </span>
                 ) : null}
               </div>
               <input
@@ -943,215 +941,234 @@ export default function TaskBoard() {
                 onBlur={(event) =>
                   void saveBoardSettings({ boardTitle: event.target.value })
                 }
-                className="mt-2 min-h-11 w-full max-w-[560px] border border-transparent bg-transparent px-0 text-2xl font-semibold text-[#1d2320] hover:border-[#cbd8d2] focus:border-[#77b8ae] focus:bg-white focus:px-2 sm:text-3xl"
+                className="tb-ghost max-w-[560px] -ml-2 text-2xl font-bold tracking-tight sm:text-[28px]"
               />
             </div>
 
-            <div className="grid grid-cols-3 gap-2 sm:min-w-[420px]">
-              <div className="border border-[#d8e0db] bg-[#f8faf8] px-3 py-2">
-                <p className="text-xs font-semibold text-[#64746d]">전체</p>
-                <p className="text-xl font-semibold">{overallProgress}%</p>
+            <div className="flex flex-wrap gap-2.5">
+              <div className="tb-stat">
+                <div className="tb-stat-label">전체 진행률</div>
+                <div className="tb-stat-value text-[var(--accent)]">
+                  {overallProgress}%
+                </div>
+                <div className="tb-progress mt-2 w-[88px]">
+                  <span
+                    style={{
+                      width: `${overallProgress}%`,
+                      background: "var(--accent)",
+                    }}
+                  />
+                </div>
               </div>
-              <div className="border border-[#d8e0db] bg-[#f8faf8] px-3 py-2">
-                <p className="text-xs font-semibold text-[#64746d]">업무</p>
-                <p className="text-xl font-semibold">{items.length}</p>
+              <div className="tb-stat">
+                <div className="tb-stat-label">전체 업무</div>
+                <div className="tb-stat-value">{items.length}</div>
               </div>
-              <div className="border border-[#d8e0db] bg-[#f8faf8] px-3 py-2">
-                <p className="text-xs font-semibold text-[#64746d]">진행</p>
-                <p className="text-xl font-semibold">{openItemCount}</p>
+              <div className="tb-stat">
+                <div className="tb-stat-label">진행 중</div>
+                <div className="tb-stat-value">{openItemCount}</div>
               </div>
             </div>
           </div>
 
-          <div className="grid gap-3 xl:grid-cols-[1fr_360px]">
-            <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-[160px_110px_130px_130px_130px_110px_110px_110px_1fr]">
-              <label className="text-sm font-medium text-[#4b5d56]">
-                업무 유형
-                <select
-                  value={templateFilter}
-                  onChange={(event) => {
-                    const value = event.target.value;
-                    setTemplateFilter(value);
-                    setStageFilter("all");
-                    if (value !== "all") {
-                      setNewTemplateKey(value);
-                    }
-                  }}
-                  className="mt-1 min-h-10 w-full border border-[#cbd8d2] bg-white px-3 text-sm text-[#1d2320]"
+          <div className="flex flex-col gap-3">
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="relative min-w-[220px] flex-1">
+                <svg
+                  className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[var(--text-faint)]"
+                  width="16"
+                  height="16"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
                 >
-                  <option value="all">전체</option>
-                  {templates.map((template) => (
-                    <option key={template.key} value={template.key}>
-                      {template.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
-
-              <label className="text-sm font-medium text-[#4b5d56]">
-                상태
-                <select
-                  value={filter}
-                  onChange={(event) => setFilter(event.target.value as TaskFilter)}
-                  className="mt-1 min-h-10 w-full border border-[#cbd8d2] bg-white px-3 text-sm text-[#1d2320]"
-                >
-                  {filters.map((option) => (
-                    <option key={option.key} value={option.key}>
-                      {option.label}
-                    </option>
-                  ))}
-                </select>
-              </label>
-
-              <label className="text-sm font-medium text-[#4b5d56]">
-                대분류
-                <select
-                  value={categoryFilter}
-                  onChange={(event) => setCategoryFilter(event.target.value)}
-                  className="mt-1 min-h-10 w-full border border-[#cbd8d2] bg-white px-3 text-sm text-[#1d2320]"
-                >
-                  <option value="all">전체</option>
-                  {categories.map((category) => (
-                    <option key={category} value={category}>
-                      {category}
-                    </option>
-                  ))}
-                </select>
-              </label>
-
-              <label className="text-sm font-medium text-[#4b5d56]">
-                담당자
-                <select
-                  value={assigneeFilter}
-                  onChange={(event) => setAssigneeFilter(event.target.value)}
-                  className="mt-1 min-h-10 w-full border border-[#cbd8d2] bg-white px-3 text-sm text-[#1d2320]"
-                >
-                  <option value="all">전체</option>
-                  {assignees.map((assignee) => (
-                    <option key={assignee} value={assignee}>
-                      {assignee}
-                    </option>
-                  ))}
-                </select>
-              </label>
-
-              <label className="text-sm font-medium text-[#4b5d56]">
-                단계
-                <select
-                  value={stageFilter}
-                  onChange={(event) => setStageFilter(event.target.value)}
-                  className="mt-1 min-h-10 w-full border border-[#cbd8d2] bg-white px-3 text-sm text-[#1d2320]"
-                >
-                  <option value="all">전체 단계</option>
-                  {stages.map((stage) => (
-                    <option key={stage.stageKey} value={stage.stageKey}>
-                      {stage.title}
-                    </option>
-                  ))}
-                </select>
-              </label>
-
-              <label className="text-sm font-medium text-[#4b5d56]">
-                일정
-                <select
-                  value={dueFilter}
-                  onChange={(event) => setDueFilter(event.target.value as DueFilter)}
-                  className="mt-1 min-h-10 w-full border border-[#cbd8d2] bg-white px-3 text-sm text-[#1d2320]"
-                >
-                  {dueFilters.map((option) => (
-                    <option key={option.key} value={option.key}>
-                      {option.label}
-                    </option>
-                  ))}
-                </select>
-              </label>
-
-              <label className="text-sm font-medium text-[#4b5d56]">
-                정렬
-                <select
-                  value={sortMode}
-                  onChange={(event) => setSortMode(event.target.value as SortMode)}
-                  className="mt-1 min-h-10 w-full border border-[#cbd8d2] bg-white px-3 text-sm text-[#1d2320]"
-                >
-                  {sortOptions.map((option) => (
-                    <option key={option.key} value={option.key}>
-                      {option.label}
-                    </option>
-                  ))}
-                </select>
-              </label>
-
-              <div className="text-sm font-medium text-[#4b5d56]">
-                보기
-                <div className="mt-1 grid grid-cols-2 overflow-hidden border border-[#cbd8d2] bg-[#f3f6f4] p-1">
-                  {(["grid", "gantt"] as const).map((mode) => (
-                    <button
-                      key={mode}
-                      type="button"
-                      onClick={() => setViewMode(mode)}
-                      className={`min-h-8 text-sm font-semibold ${
-                        viewMode === mode ? "bg-white text-[#1f6f67]" : "text-[#5f6f68]"
-                      }`}
-                    >
-                      {mode === "grid" ? "표" : "간트"}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              <label className="text-sm font-medium text-[#4b5d56]">
-                검색
+                  <circle cx="11" cy="11" r="8" />
+                  <path d="m21 21-4.3-4.3" />
+                </svg>
                 <input
                   value={keyword}
                   onChange={(event) => setKeyword(event.target.value)}
-                  className="mt-1 min-h-10 w-full border border-[#cbd8d2] bg-white px-3 text-sm text-[#1d2320]"
-                  placeholder="업무명, 메모, 세부 체크리스트"
+                  className="tb-field pl-9"
+                  placeholder="업무·메모·세부 체크리스트 검색"
                 />
-              </label>
+              </div>
+
+              <select
+                value={templateFilter}
+                onChange={(event) => {
+                  const value = event.target.value;
+                  setTemplateFilter(value);
+                  setStageFilter("all");
+                  if (value !== "all") {
+                    setNewTemplateKey(value);
+                  }
+                }}
+                className="tb-field w-auto min-w-[140px]"
+                title="업무 유형"
+              >
+                <option value="all">모든 유형</option>
+                {templates.map((template) => (
+                  <option key={template.key} value={template.key}>
+                    {template.name}
+                  </option>
+                ))}
+              </select>
+
+              <select
+                value={filter}
+                onChange={(event) => setFilter(event.target.value as TaskFilter)}
+                className="tb-field w-auto"
+                title="상태"
+              >
+                {filters.map((option) => (
+                  <option key={option.key} value={option.key}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+
+              <select
+                value={categoryFilter}
+                onChange={(event) => setCategoryFilter(event.target.value)}
+                className="tb-field w-auto"
+                title="대분류"
+              >
+                <option value="all">모든 대분류</option>
+                {categories.map((category) => (
+                  <option key={category} value={category}>
+                    {category}
+                  </option>
+                ))}
+              </select>
+
+              <select
+                value={assigneeFilter}
+                onChange={(event) => setAssigneeFilter(event.target.value)}
+                className="tb-field w-auto"
+                title="담당자"
+              >
+                <option value="all">모든 담당자</option>
+                {assignees.map((assignee) => (
+                  <option key={assignee} value={assignee}>
+                    {assignee}
+                  </option>
+                ))}
+              </select>
+
+              <select
+                value={stageFilter}
+                onChange={(event) => setStageFilter(event.target.value)}
+                className="tb-field w-auto"
+                title="단계"
+              >
+                <option value="all">모든 단계</option>
+                {stages.map((stage) => (
+                  <option key={stage.stageKey} value={stage.stageKey}>
+                    {stage.title}
+                  </option>
+                ))}
+              </select>
+
+              <select
+                value={dueFilter}
+                onChange={(event) => setDueFilter(event.target.value as DueFilter)}
+                className="tb-field w-auto"
+                title="일정"
+              >
+                {dueFilters.map((option) => (
+                  <option key={option.key} value={option.key}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+
+              <select
+                value={sortMode}
+                onChange={(event) => setSortMode(event.target.value as SortMode)}
+                className="tb-field w-auto"
+                title="정렬"
+              >
+                {sortOptions.map((option) => (
+                  <option key={option.key} value={option.key}>
+                    정렬: {option.label}
+                  </option>
+                ))}
+              </select>
+
+              <div className="tb-seg ml-auto">
+                {(["grid", "gantt"] as const).map((mode) => (
+                  <button
+                    key={mode}
+                    type="button"
+                    onClick={() => setViewMode(mode)}
+                    data-active={viewMode === mode}
+                    className="tb-seg-btn"
+                  >
+                    {mode === "grid" ? "표" : "간트"}
+                  </button>
+                ))}
+              </div>
             </div>
 
-            <div className="space-y-2">
-              <div className="text-sm font-semibold text-[#4f6f68]">
-                병목 구간 {savingOrder ? "· 순서 저장 중" : ""}
-              </div>
-              <div className="flex flex-wrap gap-2">
+            {bottlenecks.length || assigneeStats.length ? (
+              <div className="flex flex-wrap items-center gap-2">
+                {savingOrder ? (
+                  <span className="text-xs font-medium text-[var(--accent)]">
+                    순서 저장 중…
+                  </span>
+                ) : null}
                 {bottlenecks.slice(0, 3).map((bottleneck) => (
                   <button
                     key={bottleneck.title}
                     type="button"
                     onClick={() => {
-                      const stage = stages.find((item) => item.title === bottleneck.title);
+                      const stage = stages.find(
+                        (item) => item.title === bottleneck.title
+                      );
                       setStageFilter(stage?.stageKey ?? "all");
                     }}
-                    className="min-h-8 border border-[#d4ded8] bg-white px-3 text-sm"
+                    className="tb-chip tb-chip-btn"
                   >
-                    {bottleneck.title} {bottleneck.count}건
+                    <span className="text-[var(--text-faint)]">병목</span>
+                    {bottleneck.title}
+                    <span className="tb-badge tb-badge-muted">
+                      {bottleneck.count}
+                    </span>
                   </button>
                 ))}
-              </div>
-              <div className="flex flex-wrap gap-2">
                 {assigneeStats.slice(0, 4).map((stat) => (
                   <button
                     key={stat.assignee}
                     type="button"
                     onClick={() => setAssigneeFilter(stat.assignee)}
-                    className="min-h-8 border border-[#d4ded8] bg-white px-3 text-xs"
-                    style={{
-                      backgroundColor: rowAccentColor(assigneeSettings[stat.assignee]),
-                    }}
+                    className="tb-chip tb-chip-btn"
                   >
-                    {stat.assignee} {stat.count}건 · {stat.progress}%
+                    <span
+                      className="h-2.5 w-2.5 rounded-full"
+                      style={{
+                        backgroundColor: rowAccentColor(
+                          assigneeSettings[stat.assignee]
+                        ),
+                      }}
+                    />
+                    {stat.assignee}
+                    <span className="text-[var(--text-faint)]">
+                      {stat.count}건 · {stat.progress}%
+                    </span>
                   </button>
                 ))}
               </div>
-            </div>
+            ) : null}
           </div>
         </div>
       </header>
 
-      <section className="mx-auto max-w-[1600px] px-4 py-4 sm:px-6 lg:px-8">
+      <section className="mx-auto max-w-[1600px] px-4 py-5 sm:px-6 lg:px-8">
         {error ? (
-          <div className="mb-3 border border-[#e5b5a4] bg-[#fff3ee] px-4 py-3 text-sm font-medium text-[#8c3f2a]">
+          <div className="mb-4 flex items-center gap-2 rounded-[var(--radius)] border border-[var(--danger-border)] bg-[var(--danger-soft)] px-4 py-3 text-sm font-medium text-[var(--danger)]">
             {error}
           </div>
         ) : null}
@@ -1159,76 +1176,63 @@ export default function TaskBoard() {
         {viewMode === "grid" ? (
           <div className="space-y-4">
             {loading ? (
-              <div className="border border-[#cfdad4] bg-white px-4 py-12 text-center text-[#63716b] shadow-sm">
-                불러오는 중
+              <div className="tb-card px-4 py-16 text-center text-sm text-[var(--text-muted)]">
+                불러오는 중…
               </div>
             ) : null}
 
             {!loading && !visibleItems.length ? (
-              <div className="border border-[#cfdad4] bg-white px-4 py-12 text-center text-[#63716b] shadow-sm">
+              <div className="tb-card px-4 py-16 text-center text-sm text-[var(--text-muted)]">
                 표시할 업무가 없습니다.
               </div>
             ) : null}
 
             {!loading &&
               gridGroups.map((group) => (
-                <div
-                  key={group.templateKey}
-                  className="overflow-hidden border border-[#cfdad4] bg-white shadow-sm"
-                >
+                <div key={group.templateKey} className="tb-card overflow-hidden">
                   {gridGroups.length > 1 ? (
-                    <div className="border-b border-[#dbe4df] bg-[#f1f6f3] px-3 py-2 text-sm font-semibold text-[#2f5a52]">
+                    <div className="flex items-center gap-2 border-b border-[var(--border)] bg-[var(--surface-2)] px-4 py-2.5 text-sm font-semibold text-[var(--text)]">
                       {group.templateName}
-                      <span className="ml-2 text-xs font-normal text-[#6b7772]">
+                      <span className="tb-badge tb-badge-muted">
                         {group.items.length}건
                       </span>
                     </div>
                   ) : null}
-                  <div className="overflow-x-hidden">
-                    <table className="w-full table-fixed border-collapse text-[11px] xl:text-xs">
+                  <div className="overflow-x-auto">
+                    <table className="tb-table table-fixed text-[11px] xl:text-xs">
                       <colgroup>
+                        <col className="w-[9%]" />
+                        <col className="w-[44px]" />
+                        <col className="w-[14%]" />
                         <col className="w-[8%]" />
-                        <col className="w-[2.5%]" />
-                        <col className="w-[13%]" />
-                        <col className="w-[7%]" />
-                        <col className="w-[7%]" />
+                        <col className="w-[8%]" />
                         {group.stages.map((stage) => (
-                          <col key={stage.stageKey} className="w-[2.8%]" />
+                          <col key={stage.stageKey} className="w-[3%]" />
                         ))}
-                        <col className="w-[23.3%]" />
+                        <col className="w-[21%]" />
                       </colgroup>
                 <thead>
-                  <tr className="bg-[#f7faf8] text-left text-xs font-semibold text-[#53625c]">
-                    <th className="border-b border-r border-[#dbe4df] bg-[#f7faf8] px-2 py-3">
-                      대분류
-                    </th>
-                    <th className="border-b border-r border-[#dbe4df] bg-[#f7faf8] px-1 py-3" />
-                    <th className="border-b border-r border-[#dbe4df] bg-[#f7faf8] px-2 py-3">
-                      업무
-                    </th>
-                    <th className="border-b border-r border-[#dbe4df] bg-[#f7faf8] px-2 py-3">
-                      담당
-                    </th>
-                    <th className="border-b border-r border-[#dbe4df] px-2 py-3">
-                      진도
-                    </th>
+                  <tr className="text-left">
+                    <th className="px-3 py-3">대분류</th>
+                    <th className="px-1 py-3" />
+                    <th className="px-3 py-3">업무</th>
+                    <th className="px-3 py-3">담당</th>
+                    <th className="px-3 py-3">진도</th>
                     {group.stages.map((stage) => (
                       <th
                         key={stage.stageKey}
-                        className="border-b border-r border-[#dbe4df] px-0.5 py-2 text-center"
+                        className="px-0.5 py-2 text-center"
                         title={`${stage.title} · ${stage.description}`}
                       >
                         <span
-                          className="mx-auto flex min-h-24 items-center justify-center whitespace-nowrap text-[10px] leading-none text-[#40524b]"
+                          className="mx-auto flex min-h-[88px] items-center justify-center whitespace-nowrap text-[10px] font-medium leading-none text-[var(--text-muted)]"
                           style={{ writingMode: "vertical-rl" }}
                         >
                           {stage.title}
                         </span>
                       </th>
                     ))}
-                    <th className="border-b border-[#dbe4df] px-2 py-3">
-                      메모/일정
-                    </th>
+                    <th className="px-3 py-3">메모 / 예산 / 일정</th>
                   </tr>
                 </thead>
 
@@ -1247,12 +1251,14 @@ export default function TaskBoard() {
                           <tr
                             onDragOver={handleDragOver}
                             onDrop={() => handleDrop(item.id)}
-                            className={`group border-b border-[#e4ebe7] ${
-                              draggedId === item.id ? "bg-[#edf7f4]" : ""
-                            } hover:bg-[#f8fbf9]`}
-                            style={{ backgroundColor: draggedId === item.id ? undefined : rowColor }}
+                            className={`tb-row ${
+                              draggedId === item.id ? "bg-[var(--accent-soft)]" : ""
+                            }`}
                           >
-                            <td className="border-r border-[#dbe4df] bg-inherit px-1.5 py-2 align-top">
+                            <td
+                              className="px-2 py-2.5 align-top"
+                              style={{ boxShadow: `inset 3px 0 0 ${rowColor}` }}
+                            >
                               <input
                                 value={item.category}
                                 onChange={(event) =>
@@ -1265,43 +1271,45 @@ export default function TaskBoard() {
                                     category: event.target.value,
                                   })
                                 }
-                                className="min-h-8 w-full border border-transparent bg-transparent px-1.5 text-xs font-semibold text-[#245f57] hover:border-[#cbd8d2] focus:border-[#77b8ae] focus:bg-white"
+                                className="tb-ghost text-xs font-semibold text-[var(--accent)]"
                                 placeholder="대분류"
                               />
                             </td>
-                            <td className="border-r border-[#dbe4df] bg-inherit px-1 py-2 align-top">
-                              <button
-                                type="button"
-                                draggable
-                                onDragStart={(event) => {
-                                  setDraggedId(item.id);
-                                  event.dataTransfer.effectAllowed = "move";
-                                }}
-                                onDragEnd={() => setDraggedId(null)}
-                                className="mb-1 flex h-7 w-full cursor-grab items-center justify-center border border-[#d2ddd7] bg-white text-[#72817a] active:cursor-grabbing"
-                                title="드래그"
-                              >
-                                ⋮
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => toggleExpanded(item.id)}
-                                className="flex h-7 w-full items-center justify-center border border-[#d2ddd7] bg-white text-[#31413b]"
-                                title="세부 체크리스트"
-                              >
-                                {expanded ? "−" : "+"}
-                              </button>
-                              <button
-                                type="button"
-                                disabled={deletingItemIds.has(item.id)}
-                                onClick={() => void deleteItem(item)}
-                                className="mt-1 flex h-7 w-full items-center justify-center border border-[#ead1c8] bg-white text-[#9b3f2f] transition hover:bg-[#fff2ee] disabled:cursor-not-allowed disabled:text-[#c99c91]"
-                                title="업무 삭제"
-                              >
-                                ×
-                              </button>
+                            <td className="px-1 py-2.5 align-top">
+                              <div className="flex flex-col items-center gap-1">
+                                <button
+                                  type="button"
+                                  draggable
+                                  onDragStart={(event) => {
+                                    setDraggedId(item.id);
+                                    event.dataTransfer.effectAllowed = "move";
+                                  }}
+                                  onDragEnd={() => setDraggedId(null)}
+                                  className="tb-iconbtn h-6 w-6 cursor-grab active:cursor-grabbing"
+                                  title="드래그로 순서 변경"
+                                >
+                                  ⋮⋮
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => toggleExpanded(item.id)}
+                                  className="tb-iconbtn h-6 w-6"
+                                  title="세부 체크리스트"
+                                >
+                                  {expanded ? "−" : "+"}
+                                </button>
+                                <button
+                                  type="button"
+                                  disabled={deletingItemIds.has(item.id)}
+                                  onClick={() => void deleteItem(item)}
+                                  className="tb-iconbtn tb-iconbtn-danger h-6 w-6 disabled:cursor-not-allowed disabled:opacity-40"
+                                  title="업무 삭제"
+                                >
+                                  ×
+                                </button>
+                              </div>
                             </td>
-                            <td className="border-r border-[#dbe4df] bg-inherit px-1.5 py-2 align-top">
+                            <td className="px-2 py-2.5 align-top">
                               <input
                                 value={item.title}
                                 onChange={(event) =>
@@ -1314,15 +1322,25 @@ export default function TaskBoard() {
                                     title: event.target.value,
                                   })
                                 }
-                                className="min-h-8 w-full border border-transparent bg-transparent px-1.5 text-xs font-semibold text-[#1d2320] hover:border-[#cbd8d2] focus:border-[#77b8ae] focus:bg-white xl:text-sm"
+                                className="tb-ghost text-xs font-semibold xl:text-sm"
                               />
-                              <div className="mt-1 truncate px-1.5 text-[10px] text-[#6b7772] xl:text-xs">
-                                {done ? "완료" : nextStepTitle(item)}
-                                {subProgress !== null ? ` · 세부 ${subProgress}%` : ""}
-                                {savingItemIds.has(item.id) ? " · 저장 중" : ""}
+                              <div className="mt-1 flex flex-wrap items-center gap-1 px-2 text-[10px] text-[var(--text-muted)] xl:text-[11px]">
+                                {done ? (
+                                  <span className="tb-badge tb-badge-success">완료</span>
+                                ) : (
+                                  <span className="tb-badge tb-badge-muted">
+                                    {nextStepTitle(item)}
+                                  </span>
+                                )}
+                                {subProgress !== null ? (
+                                  <span>세부 {subProgress}%</span>
+                                ) : null}
+                                {savingItemIds.has(item.id) ? (
+                                  <span className="text-[var(--accent)]">저장 중…</span>
+                                ) : null}
                               </div>
                             </td>
-                            <td className="border-r border-[#dbe4df] bg-inherit px-1.5 py-2 align-top">
+                            <td className="px-2 py-2.5 align-top">
                               <input
                                 value={item.assignee}
                                 onChange={(event) =>
@@ -1335,7 +1353,7 @@ export default function TaskBoard() {
                                     assignee: event.target.value,
                                   })
                                 }
-                                className="min-h-8 w-full border border-transparent bg-transparent px-1.5 text-xs text-[#1d2320] hover:border-[#cbd8d2] focus:border-[#77b8ae] focus:bg-white"
+                                className="tb-ghost text-xs"
                               />
                               <input
                                 type="color"
@@ -1346,30 +1364,29 @@ export default function TaskBoard() {
                                     event.target.value
                                   )
                                 }
-                                className="mt-1 h-6 w-full border border-[#cbd8d2] bg-white"
+                                className="mt-1.5 h-5 w-full cursor-pointer rounded border border-[var(--border)] bg-transparent p-0"
                                 title="담당자 색상"
                               />
                             </td>
-                            <td className="border-r border-[#dbe4df] px-1.5 py-3 align-top">
+                            <td className="px-2 py-2.5 align-top">
                               <div className="flex items-center gap-1.5">
-                                <div className="h-2 flex-1 overflow-hidden bg-[#e2e9e5]">
-                                  <div
-                                    className="h-full"
+                                <div className="tb-progress flex-1">
+                                  <span
                                     style={{
                                       width: `${progress}%`,
-                                      backgroundColor: progressColor(item),
+                                      background: progressColor(item),
                                     }}
                                   />
                                 </div>
-                                <span className="w-8 text-right text-[11px] font-semibold text-[#1f6f67]">
+                                <span className="w-8 text-right text-[11px] font-bold">
                                   {progress}%
                                 </span>
                               </div>
                               <label
-                                className="relative mt-2 flex h-7 w-full cursor-pointer items-center justify-center border border-[#d7e1dc] bg-white px-1 text-[10px] font-semibold text-[#53625c]"
+                                className="tb-stage-due relative mt-2 h-7 px-2 font-semibold"
                                 title="최종 마감일"
                               >
-                                {item.dueDate ? `마감 ${formatDay(item.dueDate)}` : "+ 마감"}
+                                {item.dueDate ? `마감 ${formatDay(item.dueDate)}` : "+ 마감일"}
                                 <input
                                   type="date"
                                   value={item.dueDate ?? ""}
@@ -1388,21 +1405,20 @@ export default function TaskBoard() {
                               const allowed = canToggleStep(item, index);
                               const state = urgency(step.dueDate);
                               const disabled = !allowed || saving;
+                              const stageClass = checked
+                                ? "is-done"
+                                : !allowed
+                                  ? "is-locked"
+                                  : state === "overdue" || state === "danger"
+                                    ? "is-danger"
+                                    : state === "warning"
+                                      ? "is-warning"
+                                      : "is-available";
 
                               return (
                                 <td
                                   key={step.id}
-                                  className={`border-r border-[#dbe4df] px-0.5 py-1.5 text-center align-middle ${
-                                    checked
-                                      ? "bg-[#dff3ee]"
-                                      : state === "overdue" || state === "danger"
-                                        ? "bg-[#ffe5df]"
-                                        : state === "warning"
-                                          ? "bg-[#fff3c2]"
-                                          : allowed
-                                            ? "bg-[#fff8dc]"
-                                            : "bg-[#f6f7f6]"
-                                  }`}
+                                  className="px-0.5 py-1.5 text-center align-middle"
                                   title={`${step.title} · ${step.description}${
                                     step.dueDate ? ` · 목표일 ${formatDay(step.dueDate)}` : ""
                                   }`}
@@ -1418,17 +1434,7 @@ export default function TaskBoard() {
                                           checked ? "todo" : "done"
                                         )
                                       }
-                                      className={`mx-auto flex h-7 w-full max-w-7 items-center justify-center border text-[9px] font-semibold leading-none transition ${
-                                        checked
-                                          ? "border-[#248f84] bg-[#248f84] text-white"
-                                          : disabled
-                                            ? "border-[#d7e1dc] bg-[#eef2ef] text-[#a0aaa5]"
-                                            : state === "overdue" || state === "danger"
-                                              ? "border-[#d9452f] bg-[#e85d48] text-white"
-                                              : state === "warning"
-                                                ? "border-[#d59a18] bg-[#e5aa25] text-white"
-                                                : "border-[#e2c75e] bg-[#f7e47d] text-[#4d4626]"
-                                      }`}
+                                      className={`tb-stage ${stageClass}`}
                                     >
                                       {saving
                                         ? "…"
@@ -1439,7 +1445,7 @@ export default function TaskBoard() {
                                             : ""}
                                     </button>
                                     <label
-                                      className="relative flex h-4 w-full max-w-4 cursor-pointer items-center justify-center border border-[#d7e1dc] bg-white text-[9px] font-semibold text-[#6b7772]"
+                                      className="tb-stage-due relative"
                                       title={`${step.title} 목표일 설정`}
                                     >
                                       +
@@ -1456,7 +1462,7 @@ export default function TaskBoard() {
                                 </td>
                               );
                             })}
-                            <td className="px-2 py-2 align-top">
+                            <td className="px-3 py-2.5 align-top">
                               <textarea
                                 value={item.memo}
                                 onChange={(event) =>
@@ -1469,11 +1475,11 @@ export default function TaskBoard() {
                                     memo: event.target.value,
                                   })
                                 }
-                                className="min-h-14 w-full resize-y border border-transparent bg-transparent px-1.5 py-1 text-xs leading-5 text-[#1d2320] hover:border-[#cbd8d2] focus:border-[#77b8ae] focus:bg-white xl:text-sm"
-                                placeholder="메모"
+                                className="tb-ghost min-h-[52px] resize-y text-xs leading-5 xl:text-sm"
+                                placeholder="메모를 입력하세요"
                               />
-                              <div className="mt-2 grid gap-1 sm:grid-cols-2">
-                                <label className="grid gap-0.5 text-[10px] font-semibold text-[#63716b]">
+                              <div className="mt-2 grid grid-cols-2 gap-1.5">
+                                <label className="text-[10px] font-semibold text-[var(--text-muted)]">
                                   편성 예산
                                   <input
                                     type="number"
@@ -1494,11 +1500,11 @@ export default function TaskBoard() {
                                           : null,
                                       })
                                     }
-                                    className="h-7 w-full border border-[#d7e1dc] bg-white px-1.5 text-xs font-normal text-[#1d2320]"
+                                    className="tb-field mt-1 px-2 py-1.5 text-xs font-normal"
                                     placeholder="원"
                                   />
                                 </label>
-                                <label className="grid gap-0.5 text-[10px] font-semibold text-[#63716b]">
+                                <label className="text-[10px] font-semibold text-[var(--text-muted)]">
                                   소요 예산
                                   <input
                                     type="number"
@@ -1519,33 +1525,33 @@ export default function TaskBoard() {
                                           : null,
                                       })
                                     }
-                                    className="h-7 w-full border border-[#d7e1dc] bg-white px-1.5 text-xs font-normal text-[#1d2320]"
+                                    className="tb-field mt-1 px-2 py-1.5 text-xs font-normal"
                                     placeholder="원"
                                   />
                                 </label>
                               </div>
-                              <div className="mt-1 text-[10px] text-[#6b7772]">
-                                {item.allocatedBudget || item.requiredBudget
-                                  ? `편성 ${formatBudget(item.allocatedBudget)} / 소요 ${formatBudget(item.requiredBudget)}`
-                                  : "예산 미입력"}
-                              </div>
-                              <div className="text-[10px] text-[#6b7772]">
-                                수정 {formatDate(item.updatedAt)}
+                              <div className="mt-1.5 flex flex-wrap gap-x-2 text-[10px] text-[var(--text-faint)]">
+                                <span>
+                                  {item.allocatedBudget || item.requiredBudget
+                                    ? `편성 ${formatBudget(item.allocatedBudget)} / 소요 ${formatBudget(item.requiredBudget)}`
+                                    : "예산 미입력"}
+                                </span>
+                                <span>· 수정 {formatDate(item.updatedAt)}</span>
                               </div>
                             </td>
                           </tr>
 
                           {expanded ? (
-                            <tr className="border-b border-[#dbe4df] bg-[#fbfcfb]">
+                            <tr className="bg-[var(--surface-2)]">
                               <td colSpan={2} />
-                              <td colSpan={group.stages.length + 4} className="px-3 py-3">
-                                <div className="grid gap-3 lg:grid-cols-[1fr_320px]">
+                              <td colSpan={group.stages.length + 4} className="px-4 py-4">
+                                <div className="grid gap-4 lg:grid-cols-[1fr_320px]">
                                   <div>
-                                    <div className="mb-2 text-sm font-semibold">
+                                    <div className="mb-2.5 text-sm font-semibold">
                                       세부 체크리스트
                                     </div>
-                                    <div className="space-y-2">
-                                      <div className="hidden grid-cols-[34px_minmax(180px,1.2fr)_130px_minmax(180px,1fr)_54px] gap-2 px-2 text-xs font-semibold text-[#63716b] md:grid">
+                                    <div className="space-y-1.5">
+                                      <div className="hidden grid-cols-[34px_minmax(180px,1.2fr)_130px_minmax(180px,1fr)_44px] gap-2 px-2 text-[11px] font-semibold text-[var(--text-faint)] md:grid">
                                         <span />
                                         <span>내용</span>
                                         <span>기한</span>
@@ -1555,7 +1561,7 @@ export default function TaskBoard() {
                                       {item.subtasks.map((subtask) => (
                                         <div
                                           key={subtask.id}
-                                          className="grid gap-2 border border-[#d7e1dc] bg-white p-2 md:grid-cols-[34px_minmax(180px,1.2fr)_130px_minmax(180px,1fr)_54px] md:items-center"
+                                          className="grid gap-2 rounded-[var(--radius)] border border-[var(--border)] bg-[var(--surface)] p-2 md:grid-cols-[34px_minmax(180px,1.2fr)_130px_minmax(180px,1fr)_44px] md:items-center"
                                         >
                                           <input
                                             type="checkbox"
@@ -1572,9 +1578,9 @@ export default function TaskBoard() {
                                                   : "todo",
                                               });
                                             }}
-                                            className="h-4 w-4 accent-[#248f84] md:mx-auto"
+                                            className="h-4 w-4 accent-[var(--accent)] md:mx-auto"
                                           />
-                                          <label className="grid gap-1 text-xs font-semibold text-[#63716b] md:block">
+                                          <label className="grid gap-1 text-[11px] font-semibold text-[var(--text-faint)] md:block">
                                             <span className="md:hidden">내용</span>
                                             <input
                                               value={subtask.title}
@@ -1588,10 +1594,14 @@ export default function TaskBoard() {
                                                   title: event.target.value,
                                                 })
                                               }
-                                              className="min-h-8 w-full border border-transparent bg-transparent text-sm font-normal text-[#1d2320] hover:border-[#cbd8d2] focus:border-[#77b8ae] focus:bg-white"
+                                              className={`tb-ghost text-sm font-normal ${
+                                                subtask.status === "done"
+                                                  ? "text-[var(--text-faint)] line-through"
+                                                  : "text-[var(--text)]"
+                                              }`}
                                             />
                                           </label>
-                                          <label className="grid gap-1 text-xs font-semibold text-[#63716b] md:block">
+                                          <label className="grid gap-1 text-[11px] font-semibold text-[var(--text-faint)] md:block">
                                             <span className="md:hidden">기한</span>
                                             <input
                                               type="date"
@@ -1604,10 +1614,10 @@ export default function TaskBoard() {
                                                   dueDate: event.target.value,
                                                 });
                                               }}
-                                              className="min-h-8 w-full border border-[#d7e1dc] bg-white px-2 text-xs font-normal text-[#1d2320]"
+                                              className="tb-field px-2 py-1.5 text-xs font-normal"
                                             />
                                           </label>
-                                          <label className="grid gap-1 text-xs font-semibold text-[#63716b] md:block">
+                                          <label className="grid gap-1 text-[11px] font-semibold text-[var(--text-faint)] md:block">
                                             <span className="md:hidden">애로사항</span>
                                             <input
                                               value={subtask.blockers}
@@ -1621,17 +1631,13 @@ export default function TaskBoard() {
                                                   blockers: event.target.value,
                                                 })
                                               }
-                                              className="min-h-8 w-full border border-transparent bg-transparent text-sm font-normal text-[#1d2320] hover:border-[#cbd8d2] focus:border-[#77b8ae] focus:bg-white"
+                                              className="tb-ghost text-sm font-normal"
                                               placeholder="없음"
                                             />
                                           </label>
-                                          {savingSubtaskIds.has(subtask.id) ? (
-                                            <span className="text-xs text-[#1f6f67]">
-                                              저장
-                                            </span>
-                                          ) : (
-                                            <span />
-                                          )}
+                                          <span className="text-center text-[10px] text-[var(--accent)]">
+                                            {savingSubtaskIds.has(subtask.id) ? "저장" : ""}
+                                          </span>
                                         </div>
                                       ))}
                                     </div>
@@ -1640,7 +1646,7 @@ export default function TaskBoard() {
                                         event.preventDefault();
                                         void addSubtask(item.id);
                                       }}
-                                      className="mt-3 grid gap-2 md:grid-cols-[minmax(180px,1.2fr)_130px_minmax(180px,1fr)_90px]"
+                                      className="mt-2.5 grid gap-2 md:grid-cols-[minmax(180px,1.2fr)_130px_minmax(180px,1fr)_84px]"
                                     >
                                       <input
                                         value={subtaskDrafts[item.id]?.title ?? ""}
@@ -1654,8 +1660,8 @@ export default function TaskBoard() {
                                             },
                                           }))
                                         }
-                                        className="min-h-10 border border-[#cbd8d2] bg-white px-3 text-sm"
-                                        placeholder="내용"
+                                        className="tb-field"
+                                        placeholder="새 체크리스트 내용"
                                       />
                                       <input
                                         type="date"
@@ -1670,7 +1676,7 @@ export default function TaskBoard() {
                                             },
                                           }))
                                         }
-                                        className="min-h-10 border border-[#cbd8d2] bg-white px-3 text-sm"
+                                        className="tb-field"
                                       />
                                       <input
                                         value={subtaskDrafts[item.id]?.blockers ?? ""}
@@ -1684,41 +1690,36 @@ export default function TaskBoard() {
                                             },
                                           }))
                                         }
-                                        className="min-h-10 border border-[#cbd8d2] bg-white px-3 text-sm"
+                                        className="tb-field"
                                         placeholder="애로사항"
                                       />
-                                      <button
-                                        type="submit"
-                                        className="min-h-10 bg-[#1f6f67] px-4 text-sm font-semibold text-white"
-                                      >
+                                      <button type="submit" className="tb-btn tb-btn-primary">
                                         추가
                                       </button>
                                     </form>
                                   </div>
 
-                                  <div className="border border-[#d7e1dc] bg-white p-3">
-                                    <div className="text-sm font-semibold">
-                                      최근 이력
-                                    </div>
-                                    <div className="mt-2 max-h-40 space-y-2 overflow-auto">
+                                  <div className="rounded-[var(--radius)] border border-[var(--border)] bg-[var(--surface)] p-3.5">
+                                    <div className="text-sm font-semibold">최근 이력</div>
+                                    <div className="mt-2.5 max-h-44 space-y-2.5 overflow-auto">
                                       {history
                                         .filter((entry) => entry.itemId === item.id)
                                         .slice(0, 6)
                                         .map((entry) => (
                                           <div
                                             key={entry.id}
-                                            className="text-xs leading-5 text-[#53625c]"
+                                            className="border-l-2 border-[var(--accent-soft-2)] pl-2.5 text-xs leading-5 text-[var(--text-muted)]"
                                           >
-                                            <span className="font-semibold">
+                                            <div className="text-[10px] font-semibold text-[var(--text-faint)]">
                                               {formatDate(entry.createdAt)}
-                                            </span>{" "}
+                                            </div>
                                             {entry.summary}
                                           </div>
                                         ))}
                                       {!history.some(
                                         (entry) => entry.itemId === item.id
                                       ) ? (
-                                        <div className="text-xs text-[#6b7772]">
+                                        <div className="text-xs text-[var(--text-faint)]">
                                           아직 기록이 없습니다.
                                         </div>
                                       ) : null}
@@ -1737,92 +1738,94 @@ export default function TaskBoard() {
                 </div>
               ))}
 
-            <div className="border border-[#cfdad4] bg-white p-3 shadow-sm">
+            <div className="tb-card p-3.5">
+              <div className="mb-2.5 flex items-center gap-2 text-sm font-semibold text-[var(--text-muted)]">
+                <span className="flex h-5 w-5 items-center justify-center rounded-full bg-[var(--accent-soft)] text-[var(--accent)]">
+                  +
+                </span>
+                새 업무 추가
+              </div>
               <form
                 onSubmit={addItem}
-                className="grid gap-2 md:grid-cols-2 xl:grid-cols-[150px_130px_minmax(180px,1fr)_110px_110px_110px_110px_minmax(160px,1fr)_80px]"
+                className="grid gap-2 md:grid-cols-2 xl:grid-cols-[150px_130px_minmax(180px,1fr)_110px_120px_110px_110px_minmax(160px,1fr)_88px]"
               >
-                        <select
-                          value={newTemplateKey}
-                          onChange={(event) => {
-                            setNewTemplateKey(event.target.value);
-                            setTemplateFilter(event.target.value);
-                            setStageFilter("all");
-                          }}
-                          className="min-h-10 border border-[#cbd8d2] bg-white px-3 text-sm"
-                        >
-                          {templates.map((template) => (
-                            <option key={template.key} value={template.key}>
-                              {template.name}
-                            </option>
-                          ))}
-                        </select>
-                        <input
-                          value={newCategory}
-                          onChange={(event) => setNewCategory(event.target.value)}
-                          className="min-h-10 border border-[#cbd8d2] bg-white px-3 text-sm text-[#1d2320]"
-                          placeholder="대분류"
-                        />
-                        <input
-                          value={newTitle}
-                          onChange={(event) => setNewTitle(event.target.value)}
-                          className="min-h-10 border border-[#cbd8d2] bg-white px-3 text-sm text-[#1d2320]"
-                          placeholder="새 업무"
-                        />
-                        <input
-                          value={newAssignee}
-                          onChange={(event) => setNewAssignee(event.target.value)}
-                          className="min-h-10 border border-[#cbd8d2] bg-white px-3 text-sm text-[#1d2320]"
-                          placeholder="담당"
-                        />
-                        <input
-                          type="date"
-                          value={newDueDate}
-                          onChange={(event) => setNewDueDate(event.target.value)}
-                          className="min-h-10 border border-[#cbd8d2] bg-white px-3 text-sm"
-                          title="최종 마감일"
-                        />
-                        <input
-                          type="number"
-                          min="0"
-                          step="1000"
-                          value={newAllocatedBudget}
-                          onChange={(event) =>
-                            setNewAllocatedBudget(event.target.value)
-                          }
-                          className="min-h-10 border border-[#cbd8d2] bg-white px-3 text-sm"
-                          placeholder="편성 예산"
-                        />
-                        <input
-                          type="number"
-                          min="0"
-                          step="1000"
-                          value={newRequiredBudget}
-                          onChange={(event) =>
-                            setNewRequiredBudget(event.target.value)
-                          }
-                          className="min-h-10 border border-[#cbd8d2] bg-white px-3 text-sm"
-                          placeholder="소요 예산"
-                        />
-                        <input
-                          value={newMemo}
-                          onChange={(event) => setNewMemo(event.target.value)}
-                          className="min-h-10 border border-[#cbd8d2] bg-white px-3 text-sm text-[#1d2320]"
-                          placeholder="메모"
-                        />
-                        <button
-                          type="submit"
-                          disabled={!newTitle.trim() || adding}
-                          className="min-h-10 bg-[#1f6f67] px-4 text-sm font-semibold text-white transition hover:bg-[#185951] disabled:cursor-not-allowed disabled:bg-[#9dbbb4]"
-                        >
-                          {adding ? "추가 중" : "+ 추가"}
-                        </button>
+                <select
+                  value={newTemplateKey}
+                  onChange={(event) => {
+                    setNewTemplateKey(event.target.value);
+                    setTemplateFilter(event.target.value);
+                    setStageFilter("all");
+                  }}
+                  className="tb-field"
+                >
+                  {templates.map((template) => (
+                    <option key={template.key} value={template.key}>
+                      {template.name}
+                    </option>
+                  ))}
+                </select>
+                <input
+                  value={newCategory}
+                  onChange={(event) => setNewCategory(event.target.value)}
+                  className="tb-field"
+                  placeholder="대분류"
+                />
+                <input
+                  value={newTitle}
+                  onChange={(event) => setNewTitle(event.target.value)}
+                  className="tb-field"
+                  placeholder="새 업무명"
+                />
+                <input
+                  value={newAssignee}
+                  onChange={(event) => setNewAssignee(event.target.value)}
+                  className="tb-field"
+                  placeholder="담당자"
+                />
+                <input
+                  type="date"
+                  value={newDueDate}
+                  onChange={(event) => setNewDueDate(event.target.value)}
+                  className="tb-field"
+                  title="최종 마감일"
+                />
+                <input
+                  type="number"
+                  min="0"
+                  step="1000"
+                  value={newAllocatedBudget}
+                  onChange={(event) => setNewAllocatedBudget(event.target.value)}
+                  className="tb-field"
+                  placeholder="편성 예산"
+                />
+                <input
+                  type="number"
+                  min="0"
+                  step="1000"
+                  value={newRequiredBudget}
+                  onChange={(event) => setNewRequiredBudget(event.target.value)}
+                  className="tb-field"
+                  placeholder="소요 예산"
+                />
+                <input
+                  value={newMemo}
+                  onChange={(event) => setNewMemo(event.target.value)}
+                  className="tb-field"
+                  placeholder="메모"
+                />
+                <button
+                  type="submit"
+                  disabled={!newTitle.trim() || adding}
+                  className="tb-btn tb-btn-primary"
+                >
+                  {adding ? "추가 중…" : "+ 추가"}
+                </button>
               </form>
             </div>
           </div>
         ) : (
-          <div className="border border-[#cfdad4] bg-white p-4 shadow-sm">
-            <div className="grid gap-3">
+          <div className="tb-card p-4">
+            <div className="grid gap-2.5">
               {visibleItems.map((item) => {
                 const progress = itemProgress(item);
                 const next = nextStep(item);
@@ -1833,15 +1836,15 @@ export default function TaskBoard() {
                 return (
                   <div
                     key={item.id}
-                    className="grid gap-3 border border-[#dbe4df] p-3 md:grid-cols-[280px_1fr_80px]"
-                    style={{ backgroundColor: rowColor }}
+                    className="grid items-center gap-3 rounded-[var(--radius)] border border-[var(--border)] bg-[var(--surface)] p-3 md:grid-cols-[280px_1fr_56px]"
+                    style={{ boxShadow: `inset 3px 0 0 ${rowColor}` }}
                   >
                     <div>
                       <div className="font-semibold">{item.title}</div>
-                      <div className="text-sm text-[#66746e]">
+                      <div className="mt-0.5 text-xs text-[var(--text-muted)]">
                         {assigneeName(item.assignee)} · {next?.title ?? "완료"}
                       </div>
-                      <div className="mt-1 text-xs text-[#66746e]">
+                      <div className="mt-1 text-[11px] text-[var(--text-faint)]">
                         편성 {formatBudget(item.allocatedBudget) || "-"} · 소요{" "}
                         {formatBudget(item.requiredBudget) || "-"}
                       </div>
@@ -1850,21 +1853,21 @@ export default function TaskBoard() {
                       {item.steps.map((step) => (
                         <div
                           key={step.id}
-                          className={`h-7 flex-1 border ${
+                          className={`h-7 flex-1 rounded-[4px] border ${
                             step.status === "done"
-                              ? "border-[#248f84] bg-[#248f84]"
+                              ? "border-[var(--success)] bg-[var(--success)]"
                               : urgency(step.dueDate) === "overdue"
-                                ? "border-[#d9452f] bg-[#ffe5df]"
+                                ? "border-[var(--danger-border)] bg-[var(--danger-soft)]"
                                 : urgency(step.dueDate) === "warning" ||
                                     urgency(step.dueDate) === "danger"
-                                  ? "border-[#e5aa25] bg-[#fff3c2]"
-                                  : "border-[#d7e1dc] bg-white"
+                                  ? "border-[var(--warning-border)] bg-[var(--warning-soft)]"
+                                  : "border-[var(--border)] bg-[var(--surface-3)]"
                           }`}
                           title={`${step.title} ${formatDay(step.dueDate)}`}
                         />
                       ))}
                     </div>
-                    <div className="text-right text-sm font-semibold text-[#1f6f67]">
+                    <div className="text-right text-sm font-bold text-[var(--accent)]">
                       {progress}%
                     </div>
                   </div>
@@ -1874,27 +1877,34 @@ export default function TaskBoard() {
           </div>
         )}
 
-        <div className="mt-4 grid gap-4 lg:grid-cols-[1fr_360px]">
-          <section className="border border-[#cfdad4] bg-white p-4">
+        <div className="mt-5 grid gap-4 lg:grid-cols-[1fr_360px]">
+          <section className="tb-card p-5">
             <h2 className="text-base font-semibold">변경 이력</h2>
-            <div className="mt-3 max-h-56 space-y-2 overflow-auto">
+            <div className="mt-3 max-h-64 space-y-3 overflow-auto">
               {history.slice(0, 20).map((entry) => (
-                <div key={entry.id} className="text-sm leading-6 text-[#53625c]">
-                  <span className="font-semibold">{formatDate(entry.createdAt)}</span>{" "}
+                <div
+                  key={entry.id}
+                  className="border-l-2 border-[var(--accent-soft-2)] pl-3 text-sm leading-5 text-[var(--text-muted)]"
+                >
+                  <div className="text-[11px] font-semibold text-[var(--text-faint)]">
+                    {formatDate(entry.createdAt)}
+                  </div>
                   {entry.summary}
                 </div>
               ))}
               {!history.length ? (
-                <div className="text-sm text-[#63716b]">아직 변경 이력이 없습니다.</div>
+                <div className="text-sm text-[var(--text-faint)]">
+                  아직 변경 이력이 없습니다.
+                </div>
               ) : null}
             </div>
           </section>
 
-          <section className="border border-[#cfdad4] bg-white p-4">
+          <section className="tb-card p-5">
             <h2 className="text-base font-semibold">보드 설정</h2>
-            <div className="mt-3 grid gap-3">
-              <label className="text-sm font-medium text-[#4b5d56]">
-                조직명
+            <div className="mt-3 grid gap-3.5">
+              <label>
+                <span className="tb-label">조직명</span>
                 <input
                   value={organizationName}
                   onChange={(event) => setOrganizationName(event.target.value)}
@@ -1903,27 +1913,27 @@ export default function TaskBoard() {
                       organizationName: event.target.value,
                     })
                   }
-                  className="mt-1 min-h-10 w-full border border-[#cbd8d2] bg-white px-3 text-sm"
+                  className="tb-field"
                 />
               </label>
-              <label className="text-sm font-medium text-[#4b5d56]">
-                보드명
+              <label>
+                <span className="tb-label">보드명</span>
                 <input
                   value={boardTitle}
                   onChange={(event) => setBoardTitle(event.target.value)}
                   onBlur={(event) =>
                     void saveBoardSettings({ boardTitle: event.target.value })
                   }
-                  className="mt-1 min-h-10 w-full border border-[#cbd8d2] bg-white px-3 text-sm"
+                  className="tb-field"
                 />
               </label>
-              <label className="text-sm font-medium text-[#4b5d56]">
-                사용자명
+              <label>
+                <span className="tb-label">사용자명</span>
                 <input
                   value={userName}
                   onChange={(event) => setUserName(event.target.value)}
                   onBlur={(event) => saveUserName(event.target.value)}
-                  className="mt-1 min-h-10 w-full border border-[#cbd8d2] bg-white px-3 text-sm"
+                  className="tb-field"
                   placeholder="이름"
                 />
               </label>
