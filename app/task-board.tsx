@@ -92,7 +92,7 @@ export default function TaskBoard() {
   const [filter, setFilter] = useState<TaskFilter>("all");
   const [dueFilter, setDueFilter] = useState<DueFilter>("all");
   const [sortMode, setSortMode] = useState<SortMode>("manual");
-  const [viewMode, setViewMode] = useState<ViewMode>("list");
+  const [viewMode, setViewMode] = useState<ViewMode>("dashboard");
   const [showFilters, setShowFilters] = useState(false);
   const [templateEditorOpen, setTemplateEditorOpen] = useState(false);
   const [templateDraft, setTemplateDraft] = useState<{
@@ -448,6 +448,115 @@ export default function TaskBoard() {
       }),
     [assignees, items]
   );
+
+  const dashboard = useMemo(() => {
+    let done = 0;
+    let overdue = 0;
+    let urgent = 0;
+    let inProgress = 0;
+
+    for (const item of items) {
+      if (isItemDone(item)) {
+        done += 1;
+      } else if (itemHasOverdueDate(item)) {
+        overdue += 1;
+      } else if (itemHasUrgentDate(item)) {
+        urgent += 1;
+      } else {
+        inProgress += 1;
+      }
+    }
+
+    const total = items.length;
+    const safeTotal = total || 1;
+
+    const statusSegments = [
+      { key: "done", label: "완료", value: done, color: "var(--success)" },
+      { key: "inProgress", label: "진행", value: inProgress, color: "var(--accent)" },
+      { key: "urgent", label: "임박", value: urgent, color: "var(--warning)" },
+      { key: "overdue", label: "지연", value: overdue, color: "var(--danger)" },
+    ];
+
+    let acc = 0;
+    const stops = statusSegments
+      .filter((segment) => segment.value > 0)
+      .map((segment) => {
+        const start = (acc / safeTotal) * 100;
+        acc += segment.value;
+        const end = (acc / safeTotal) * 100;
+        return `${segment.color} ${start}% ${end}%`;
+      });
+    const conic = stops.length
+      ? `conic-gradient(${stops.join(", ")})`
+      : "conic-gradient(var(--surface-3) 0% 100%)";
+
+    const typeCounts = new Map<string, number>();
+    for (const item of items) {
+      typeCounts.set(item.templateKey, (typeCounts.get(item.templateKey) ?? 0) + 1);
+    }
+    const types = [...typeCounts.entries()]
+      .map(([key, count]) => ({
+        key,
+        name: templatesByKey.get(key)?.name ?? "기타",
+        count,
+      }))
+      .sort((first, second) => second.count - first.count);
+
+    const deadlines: Array<{
+      id: string;
+      itemId: number;
+      title: string;
+      label: string;
+      date: string;
+    }> = [];
+    for (const item of items) {
+      if (isItemDone(item)) {
+        continue;
+      }
+      const step = nextStep(item);
+      if (step?.dueDate) {
+        deadlines.push({
+          id: `s${step.id}`,
+          itemId: item.id,
+          title: item.title,
+          label: step.title,
+          date: step.dueDate,
+        });
+      } else if (item.dueDate) {
+        deadlines.push({
+          id: `i${item.id}`,
+          itemId: item.id,
+          title: item.title,
+          label: "최종 마감",
+          date: item.dueDate,
+        });
+      }
+    }
+    deadlines.sort((first, second) => first.date.localeCompare(second.date));
+
+    const allocated = items.reduce(
+      (sum, item) => sum + (item.allocatedBudget ?? 0),
+      0
+    );
+    const required = items.reduce(
+      (sum, item) => sum + (item.requiredBudget ?? 0),
+      0
+    );
+
+    return {
+      total,
+      done,
+      overdue,
+      urgent,
+      inProgress,
+      statusSegments,
+      conic,
+      types,
+      deadlines: deadlines.slice(0, 8),
+      allocated,
+      required,
+    };
+  }, [items, templatesByKey]);
 
   function replaceItem(nextItem: WorkflowItem) {
     setItems((current) =>
@@ -1267,7 +1376,7 @@ export default function TaskBoard() {
               </button>
 
               <div className="tb-seg ml-auto">
-                {(["list", "grid", "gantt"] as const).map((mode) => (
+                {(["dashboard", "list", "grid", "gantt"] as const).map((mode) => (
                   <button
                     key={mode}
                     type="button"
@@ -1275,7 +1384,13 @@ export default function TaskBoard() {
                     data-active={viewMode === mode}
                     className="tb-seg-btn"
                   >
-                    {mode === "list" ? "목록" : mode === "grid" ? "표" : "간트"}
+                    {mode === "dashboard"
+                      ? "대시보드"
+                      : mode === "list"
+                        ? "목록"
+                        : mode === "grid"
+                          ? "표"
+                          : "간트"}
                   </button>
                 ))}
               </div>
@@ -1420,7 +1535,341 @@ export default function TaskBoard() {
           </div>
         ) : null}
 
-        {viewMode === "list" ? (
+        {viewMode === "dashboard" ? (
+          <div className="space-y-4">
+            {loading ? (
+              <div className="tb-card px-4 py-16 text-center text-sm text-[var(--text-muted)]">
+                불러오는 중…
+              </div>
+            ) : null}
+
+            <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
+              <div className="tb-card p-4">
+                <div className="tb-stat-label">전체 진행률</div>
+                <div className="tb-stat-value text-[var(--accent)]">
+                  {overallProgress}%
+                </div>
+                <div className="tb-progress mt-2">
+                  <span
+                    style={{
+                      width: `${overallProgress}%`,
+                      background: "var(--accent)",
+                    }}
+                  />
+                </div>
+              </div>
+              <div className="tb-card p-4">
+                <div className="tb-stat-label">전체 업무</div>
+                <div className="tb-stat-value">{dashboard.total}</div>
+              </div>
+              <div className="tb-card p-4">
+                <div className="tb-stat-label">진행 중</div>
+                <div className="tb-stat-value">
+                  {dashboard.inProgress + dashboard.urgent}
+                </div>
+              </div>
+              <div className="tb-card p-4">
+                <div className="tb-stat-label">완료</div>
+                <div className="tb-stat-value text-[var(--success)]">
+                  {dashboard.done}
+                </div>
+              </div>
+              <div className="tb-card p-4">
+                <div className="tb-stat-label">지연</div>
+                <div className="tb-stat-value text-[var(--danger)]">
+                  {dashboard.overdue}
+                </div>
+              </div>
+            </div>
+
+            <div className="grid gap-4 lg:grid-cols-3">
+              <div className="tb-card p-5">
+                <h2 className="text-sm font-semibold">상태 분포</h2>
+                <div className="mt-4 flex items-center gap-5">
+                  <div
+                    className="relative h-32 w-32 shrink-0 rounded-full"
+                    style={{ background: dashboard.conic }}
+                  >
+                    <div className="absolute inset-[14px] flex flex-col items-center justify-center rounded-full bg-[var(--surface)]">
+                      <div className="text-2xl font-bold">{dashboard.total}</div>
+                      <div className="text-[11px] text-[var(--text-faint)]">
+                        전체
+                      </div>
+                    </div>
+                  </div>
+                  <div className="flex-1 space-y-1.5">
+                    {dashboard.statusSegments.map((segment) => (
+                      <div
+                        key={segment.key}
+                        className="flex items-center gap-2 text-sm"
+                      >
+                        <span
+                          className="h-2.5 w-2.5 rounded-full"
+                          style={{ background: segment.color }}
+                        />
+                        <span className="flex-1 text-[var(--text-muted)]">
+                          {segment.label}
+                        </span>
+                        <span className="font-semibold">{segment.value}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              <div className="tb-card p-5">
+                <h2 className="text-sm font-semibold">담당자 워크로드</h2>
+                <div className="mt-3 space-y-2.5">
+                  {assigneeStats.length ? (
+                    assigneeStats.slice(0, 6).map((stat) => {
+                      const maxCount = Math.max(
+                        ...assigneeStats.map((value) => value.count),
+                        1
+                      );
+                      return (
+                        <button
+                          key={stat.assignee}
+                          type="button"
+                          onClick={() => {
+                            setAssigneeFilter(stat.assignee);
+                            setViewMode("list");
+                          }}
+                          className="block w-full text-left"
+                        >
+                          <div className="flex items-center justify-between text-xs">
+                            <span className="flex items-center gap-1.5">
+                              <span
+                                className="h-2.5 w-2.5 rounded-full"
+                                style={{
+                                  backgroundColor: rowAccentColor(
+                                    assigneeSettings[stat.assignee]
+                                  ),
+                                }}
+                              />
+                              {stat.assignee}
+                            </span>
+                            <span className="text-[var(--text-faint)]">
+                              {stat.count}건 · {stat.progress}%
+                            </span>
+                          </div>
+                          <div className="tb-progress mt-1">
+                            <span
+                              style={{
+                                width: `${(stat.count / maxCount) * 100}%`,
+                                background: "var(--accent)",
+                              }}
+                            />
+                          </div>
+                        </button>
+                      );
+                    })
+                  ) : (
+                    <div className="text-sm text-[var(--text-faint)]">
+                      담당자가 없습니다.
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <div className="tb-card p-5">
+                <h2 className="text-sm font-semibold">유형별 업무</h2>
+                <div className="mt-3 space-y-2.5">
+                  {dashboard.types.length ? (
+                    dashboard.types.map((type) => {
+                      const maxCount = Math.max(
+                        ...dashboard.types.map((value) => value.count),
+                        1
+                      );
+                      return (
+                        <button
+                          key={type.key}
+                          type="button"
+                          onClick={() => {
+                            setTemplateFilter(type.key);
+                            setStageFilter("all");
+                            setViewMode("list");
+                          }}
+                          className="block w-full text-left"
+                        >
+                          <div className="flex items-center justify-between text-xs">
+                            <span className="truncate pr-2">{type.name}</span>
+                            <span className="text-[var(--text-faint)]">
+                              {type.count}
+                            </span>
+                          </div>
+                          <div className="tb-progress mt-1">
+                            <span
+                              style={{
+                                width: `${(type.count / maxCount) * 100}%`,
+                                background: "var(--accent)",
+                              }}
+                            />
+                          </div>
+                        </button>
+                      );
+                    })
+                  ) : (
+                    <div className="text-sm text-[var(--text-faint)]">
+                      업무가 없습니다.
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            <div className="grid gap-4 lg:grid-cols-[1.2fr_1fr]">
+              <div className="tb-card p-5">
+                <h2 className="text-sm font-semibold">다가오는 마감</h2>
+                <div className="mt-3 space-y-1.5">
+                  {dashboard.deadlines.length ? (
+                    dashboard.deadlines.map((deadline) => {
+                      const state = urgency(deadline.date);
+                      return (
+                        <div
+                          key={deadline.id}
+                          className="flex items-center gap-2.5 rounded-[var(--radius)] border border-[var(--border)] bg-[var(--surface)] px-3 py-2"
+                        >
+                          <span
+                            className={`tb-badge ${
+                              state === "overdue" || state === "danger"
+                                ? "tb-badge-danger"
+                                : state === "warning"
+                                  ? "tb-badge-warning"
+                                  : "tb-badge-muted"
+                            }`}
+                          >
+                            {shortDueLabel(deadline.date)}
+                          </span>
+                          <div className="min-w-0 flex-1">
+                            <div className="truncate text-sm font-medium">
+                              {deadline.title}
+                            </div>
+                            <div className="text-[11px] text-[var(--text-faint)]">
+                              {deadline.label} · {formatDay(deadline.date)}
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })
+                  ) : (
+                    <div className="text-sm text-[var(--text-faint)]">
+                      예정된 마감이 없습니다.
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <div className="space-y-4">
+                <div className="tb-card p-5">
+                  <h2 className="text-sm font-semibold">예산 요약</h2>
+                  <div className="mt-3 space-y-3">
+                    <div>
+                      <div className="flex justify-between text-xs">
+                        <span className="text-[var(--text-muted)]">편성 예산</span>
+                        <span className="font-semibold">
+                          {formatBudget(dashboard.allocated) || 0}
+                        </span>
+                      </div>
+                      <div className="tb-progress mt-1">
+                        <span
+                          style={{
+                            width: `${
+                              (dashboard.allocated /
+                                Math.max(
+                                  dashboard.allocated,
+                                  dashboard.required,
+                                  1
+                                )) *
+                              100
+                            }%`,
+                            background: "var(--accent)",
+                          }}
+                        />
+                      </div>
+                    </div>
+                    <div>
+                      <div className="flex justify-between text-xs">
+                        <span className="text-[var(--text-muted)]">소요 예산</span>
+                        <span className="font-semibold">
+                          {formatBudget(dashboard.required) || 0}
+                        </span>
+                      </div>
+                      <div className="tb-progress mt-1">
+                        <span
+                          style={{
+                            width: `${
+                              (dashboard.required /
+                                Math.max(
+                                  dashboard.allocated,
+                                  dashboard.required,
+                                  1
+                                )) *
+                              100
+                            }%`,
+                            background: "var(--warning)",
+                          }}
+                        />
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="tb-card p-5">
+                  <h2 className="text-sm font-semibold">병목 단계</h2>
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {bottlenecks.length ? (
+                      bottlenecks.slice(0, 6).map((bottleneck) => (
+                        <button
+                          key={bottleneck.title}
+                          type="button"
+                          onClick={() => {
+                            const stage = stages.find(
+                              (value) => value.title === bottleneck.title
+                            );
+                            setStageFilter(stage?.stageKey ?? "all");
+                            setViewMode("list");
+                          }}
+                          className="tb-chip tb-chip-btn"
+                        >
+                          {bottleneck.title}
+                          <span className="tb-badge tb-badge-muted">
+                            {bottleneck.count}
+                          </span>
+                        </button>
+                      ))
+                    ) : (
+                      <div className="text-sm text-[var(--text-faint)]">
+                        병목이 없습니다.
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div className="tb-card p-5">
+              <h2 className="text-sm font-semibold">최근 활동</h2>
+              <div className="mt-3 grid gap-2.5 sm:grid-cols-2">
+                {history.slice(0, 10).map((entry) => (
+                  <div
+                    key={entry.id}
+                    className="border-l-2 border-[var(--accent-soft-2)] pl-3 text-sm leading-5 text-[var(--text-muted)]"
+                  >
+                    <div className="text-[11px] font-semibold text-[var(--text-faint)]">
+                      {formatDate(entry.createdAt)}
+                    </div>
+                    {entry.summary}
+                  </div>
+                ))}
+                {!history.length ? (
+                  <div className="text-sm text-[var(--text-faint)]">
+                    활동 기록이 없습니다.
+                  </div>
+                ) : null}
+              </div>
+            </div>
+          </div>
+        ) : viewMode === "list" ? (
           <div className="space-y-2.5">
             {loading ? (
               <div className="tb-card px-4 py-16 text-center text-sm text-[var(--text-muted)]">
