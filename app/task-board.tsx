@@ -4,6 +4,7 @@ import {
   DragEvent,
   FormEvent,
   Fragment,
+  PointerEvent as ReactPointerEvent,
   useEffect,
   useMemo,
   useRef,
@@ -187,6 +188,13 @@ export default function TaskBoard() {
   const [mapNewTitle, setMapNewTitle] = useState("");
   const [mapNewAssignee, setMapNewAssignee] = useState("");
   const [mapNewLocation, setMapNewLocation] = useState("");
+  const [ganttDrag, setGanttDrag] = useState<{
+    itemId: number;
+    pct: number;
+  } | null>(null);
+  const [linkDrafts, setLinkDrafts] = useState<
+    Record<number, { title: string; url: string }>
+  >({});
   const [webhookUrl, setWebhookUrl] = useState("");
   const [webhookEnabled, setWebhookEnabled] = useState(false);
   const [savingWebhook, setSavingWebhook] = useState(false);
@@ -849,7 +857,7 @@ export default function TaskBoard() {
       };
     });
 
-    return { ticks, todayPct: pct(todayMs), rows };
+    return { ticks, todayPct: pct(todayMs), rows, min, span };
   }, [visibleItems]);
 
   function replaceItem(nextItem: WorkflowItem) {
@@ -873,6 +881,7 @@ export default function TaskBoard() {
         | "location"
         | "lat"
         | "lng"
+        | "links"
       >
     >
   ) {
@@ -912,6 +921,7 @@ export default function TaskBoard() {
         | "location"
         | "lat"
         | "lng"
+        | "links"
       >
     >
   ) {
@@ -1840,6 +1850,43 @@ export default function TaskBoard() {
       );
     }
   }, [viewMode, visibleItems, mapReady]);
+
+  // Drag a gantt bar's end handle to move the item's final due date.
+  function startGanttDrag(
+    event: ReactPointerEvent<HTMLButtonElement>,
+    itemId: number
+  ) {
+    event.preventDefault();
+    const timeline = (event.currentTarget as HTMLElement).closest(
+      "[data-gantt-timeline]"
+    );
+
+    if (!timeline) {
+      return;
+    }
+
+    const rect = timeline.getBoundingClientRect();
+    const { min, span } = gantt;
+    const toPct = (clientX: number) =>
+      Math.min(100, Math.max(0, ((clientX - rect.left) / rect.width) * 100));
+
+    setGanttDrag({ itemId, pct: toPct(event.clientX) });
+
+    const handleMove = (moveEvent: PointerEvent) => {
+      setGanttDrag({ itemId, pct: toPct(moveEvent.clientX) });
+    };
+    const handleUp = (upEvent: PointerEvent) => {
+      window.removeEventListener("pointermove", handleMove);
+      const pct = toPct(upEvent.clientX);
+      setGanttDrag(null);
+      void updateItem(itemId, {
+        dueDate: isoDate(new Date(min + (span * pct) / 100)),
+      });
+    };
+
+    window.addEventListener("pointermove", handleMove);
+    window.addEventListener("pointerup", handleUp, { once: true });
+  }
 
   function progressColor(item: WorkflowItem) {
     if (itemHasOverdueDate(item)) {
@@ -3205,6 +3252,109 @@ export default function TaskBoard() {
                                   placeholder="메모"
                                 />
                               </label>
+
+                              <div>
+                                <span className="tb-label">링크 / 자료</span>
+                                <div className="space-y-1">
+                                  {item.links.map((link, linkIndex) => (
+                                    <div
+                                      key={`${link.url}-${linkIndex}`}
+                                      className="flex items-center gap-1.5"
+                                    >
+                                      <a
+                                        href={link.url}
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        className="min-w-0 flex-1 truncate rounded-[var(--radius-sm)] border border-[var(--border)] bg-[var(--surface-2)] px-2 py-1.5 text-xs text-[var(--accent)] hover:border-[var(--accent)]"
+                                        title={link.url}
+                                      >
+                                        🔗 {link.title}
+                                      </a>
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          const nextLinks = item.links.filter(
+                                            (_, i) => i !== linkIndex
+                                          );
+                                          updateLocalItem(item.id, {
+                                            links: nextLinks,
+                                          });
+                                          void updateItem(item.id, {
+                                            links: nextLinks,
+                                          });
+                                        }}
+                                        className="tb-iconbtn tb-iconbtn-danger h-7 w-7 shrink-0"
+                                        title="링크 삭제"
+                                      >
+                                        ×
+                                      </button>
+                                    </div>
+                                  ))}
+                                </div>
+                                <form
+                                  onSubmit={(event) => {
+                                    event.preventDefault();
+                                    const draft = linkDrafts[item.id];
+                                    const url = draft?.url.trim() ?? "";
+                                    if (!/^https?:\/\//.test(url)) {
+                                      setError(
+                                        "링크는 http:// 또는 https:// 로 시작해야 합니다."
+                                      );
+                                      return;
+                                    }
+                                    const nextLinks = [
+                                      ...item.links,
+                                      {
+                                        title: draft?.title.trim() || url,
+                                        url,
+                                      },
+                                    ];
+                                    updateLocalItem(item.id, { links: nextLinks });
+                                    void updateItem(item.id, { links: nextLinks });
+                                    setLinkDrafts((current) => ({
+                                      ...current,
+                                      [item.id]: { title: "", url: "" },
+                                    }));
+                                  }}
+                                  className="mt-1.5 flex gap-1.5"
+                                >
+                                  <input
+                                    value={linkDrafts[item.id]?.title ?? ""}
+                                    onChange={(event) =>
+                                      setLinkDrafts((current) => ({
+                                        ...current,
+                                        [item.id]: {
+                                          title: event.target.value,
+                                          url: current[item.id]?.url ?? "",
+                                        },
+                                      }))
+                                    }
+                                    className="tb-field w-24 px-2 py-1.5 text-xs"
+                                    placeholder="이름"
+                                  />
+                                  <input
+                                    value={linkDrafts[item.id]?.url ?? ""}
+                                    onChange={(event) =>
+                                      setLinkDrafts((current) => ({
+                                        ...current,
+                                        [item.id]: {
+                                          title: current[item.id]?.title ?? "",
+                                          url: event.target.value,
+                                        },
+                                      }))
+                                    }
+                                    className="tb-field min-w-0 flex-1 px-2 py-1.5 text-xs"
+                                    placeholder="https://…"
+                                  />
+                                  <button
+                                    type="submit"
+                                    className="tb-btn shrink-0 !px-2.5 !py-1.5 text-xs"
+                                  >
+                                    추가
+                                  </button>
+                                </form>
+                              </div>
+
                               <div className="text-[10px] text-[var(--text-faint)]">
                                 수정 {formatDate(item.updatedAt)}
                               </div>
@@ -4177,7 +4327,7 @@ export default function TaskBoard() {
                           </div>
                         </button>
 
-                        <div className="relative h-12">
+                        <div className="relative h-12" data-gantt-timeline>
                           {gantt.ticks.slice(1, -1).map((tick) => (
                             <span
                               key={tick.pct}
@@ -4229,6 +4379,48 @@ export default function TaskBoard() {
                               title={marker.title}
                             />
                           ))}
+
+                          <button
+                            type="button"
+                            onPointerDown={(event) =>
+                              startGanttDrag(event, item.id)
+                            }
+                            className="absolute top-1/2 z-10 h-4 w-4 -translate-x-1/2 -translate-y-1/2 cursor-ew-resize rounded-full border-2 border-white shadow"
+                            style={{
+                              left: `${endPct ?? startPct}%`,
+                              background:
+                                endPct !== null
+                                  ? progressColor(item)
+                                  : "var(--text-faint)",
+                              touchAction: "none",
+                            }}
+                            title={
+                              endPct !== null
+                                ? "드래그해 마감일 조정"
+                                : "드래그해 마감일 설정"
+                            }
+                          />
+
+                          {ganttDrag?.itemId === item.id ? (
+                            <>
+                              <span
+                                className="pointer-events-none absolute bottom-0 top-0 w-0.5 bg-[var(--accent)]"
+                                style={{ left: `${ganttDrag.pct}%` }}
+                              />
+                              <span
+                                className="pointer-events-none absolute top-0 -translate-x-1/2 rounded bg-[var(--accent)] px-1.5 py-0.5 text-[10px] font-bold text-white"
+                                style={{ left: `${ganttDrag.pct}%` }}
+                              >
+                                {isoDate(
+                                  new Date(
+                                    gantt.min + (gantt.span * ganttDrag.pct) / 100
+                                  )
+                                )
+                                  .slice(5)
+                                  .replace("-", ".")}
+                              </span>
+                            </>
+                          ) : null}
                         </div>
                       </div>
                     );
@@ -4330,8 +4522,9 @@ export default function TaskBoard() {
                   발송 활성화
                 </label>
                 <p className="mt-1.5 text-[11px] leading-4 text-[var(--text-faint)]">
-                  알림(🔔) 패널의 &lsquo;웹훅으로 발송&rsquo; 버튼으로 담당자별
-                  임박·지연 목록을 채널에 보냅니다.
+                  알림(🔔) 패널의 &lsquo;웹훅으로 발송&rsquo; 버튼으로 즉시 보낼
+                  수 있고, 활성화 상태면 평일 오전 9시에 임박·지연 목록이 자동
+                  발송됩니다.
                 </p>
               </div>
             </div>

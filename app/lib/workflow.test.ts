@@ -75,6 +75,7 @@ function makeItem(overrides: Partial<WorkflowItem> = {}): WorkflowItem {
     location: "",
     lat: null,
     lng: null,
+    links: [],
     templateKey: "external-research-outsourcing",
     position: 1,
     updatedBy: "",

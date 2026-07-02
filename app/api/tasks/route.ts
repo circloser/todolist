@@ -14,6 +14,7 @@ type WorkflowItemRow = {
   location: string | null;
   lat: number | null;
   lng: number | null;
+  links: string | null;
   template_key: string;
   position: number;
   updated_by: string;
@@ -393,6 +394,41 @@ function resolveTemplate(list: ResolvedTemplate[], key?: string) {
   return list.find((template) => template.key === key) ?? list[0];
 }
 
+type ItemLink = { title: string; url: string };
+
+function normalizeLinks(value: unknown): ItemLink[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .map((entry) => {
+      const record = entry as { title?: unknown; url?: unknown };
+      const url =
+        typeof record.url === "string" ? record.url.trim().slice(0, 500) : "";
+      const title =
+        typeof record.title === "string"
+          ? record.title.trim().slice(0, 80)
+          : "";
+
+      return { title: title || url, url };
+    })
+    .filter((link) => /^https?:\/\//.test(link.url))
+    .slice(0, 20);
+}
+
+function parseLinks(raw: string | null): ItemLink[] {
+  if (!raw) {
+    return [];
+  }
+
+  try {
+    return normalizeLinks(JSON.parse(raw));
+  } catch {
+    return [];
+  }
+}
+
 function normalizeCoord(value: unknown, min: number, max: number) {
   if (value === null || value === undefined || value === "") {
     return null;
@@ -429,6 +465,7 @@ function toItem(
     location: row.location ?? "",
     lat: row.lat,
     lng: row.lng,
+    links: parseLinks(row.links),
     templateKey: row.template_key,
     position: row.position,
     updatedBy: row.updated_by,
@@ -493,6 +530,7 @@ async function ensureSchema() {
       location TEXT NOT NULL DEFAULT '',
       lat REAL,
       lng REAL,
+      links TEXT NOT NULL DEFAULT '[]',
       template_key TEXT NOT NULL DEFAULT 'general-service',
       position INTEGER NOT NULL,
       updated_by TEXT NOT NULL DEFAULT '',
@@ -607,6 +645,9 @@ async function ensureSchema() {
   );
   await addColumnIfMissing("ALTER TABLE workflow_items ADD COLUMN lat REAL");
   await addColumnIfMissing("ALTER TABLE workflow_items ADD COLUMN lng REAL");
+  await addColumnIfMissing(
+    "ALTER TABLE workflow_items ADD COLUMN links TEXT NOT NULL DEFAULT '[]'"
+  );
   await addColumnIfMissing("ALTER TABLE workflow_steps ADD COLUMN due_date TEXT");
   await addColumnIfMissing("ALTER TABLE workflow_subtasks ADD COLUMN due_date TEXT");
   await addColumnIfMissing(
@@ -1532,6 +1573,7 @@ export async function PATCH(request: Request) {
       location?: string;
       lat?: number | string | null;
       lng?: number | string | null;
+      links?: Array<{ title?: string; url?: string }>;
       blockers?: string;
       color?: string;
       organizationName?: string;
@@ -2197,6 +2239,9 @@ export async function PATCH(request: Request) {
         "lat" in payload ? normalizeCoord(payload.lat, -90, 90) : existing.lat;
       const lng =
         "lng" in payload ? normalizeCoord(payload.lng, -180, 180) : existing.lng;
+      const links = Array.isArray(payload.links)
+        ? JSON.stringify(normalizeLinks(payload.links))
+        : existing.links ?? "[]";
 
       if (!title) {
         return Response.json({ error: "업무명을 입력해 주세요." }, { status: 400 });
@@ -2214,6 +2259,7 @@ export async function PATCH(request: Request) {
             location = ?,
             lat = ?,
             lng = ?,
+            links = ?,
             updated_by = ?,
             updated_at = ?
           WHERE id = ?`)
@@ -2228,6 +2274,7 @@ export async function PATCH(request: Request) {
           location,
           lat,
           lng,
+          links,
           actor,
           now,
           itemId

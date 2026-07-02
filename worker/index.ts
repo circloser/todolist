@@ -42,6 +42,22 @@ const worker = {
 
     return handler.fetch(request, env, ctx);
   },
+
+  // Cron trigger (see scripts/prepare-cloudflare-config.mjs): reuse the app's
+  // own API route so the digest logic lives in one place. A 400 response
+  // (webhook not configured / disabled) makes this a harmless no-op.
+  async scheduled(_event: unknown, env: Env, ctx: ExecutionContext): Promise<void> {
+    const request = new Request("https://cron.internal/api/tasks", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        action: "send-deadline-alerts",
+        actor: "자동 알림",
+      }),
+    });
+
+    ctx.waitUntil(handler.fetch(request, env, ctx));
+  },
 };
 
 export default worker;

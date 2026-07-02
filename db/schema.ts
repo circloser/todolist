@@ -21,6 +21,7 @@ export const workflowItems = sqliteTable(
     location: text("location").notNull().default(""),
     lat: real("lat"),
     lng: real("lng"),
+    links: text("links").notNull().default("[]"),
     templateKey: text("template_key").notNull().default("general-service"),
     position: integer("position").notNull(),
     updatedBy: text("updated_by").notNull().default(""),

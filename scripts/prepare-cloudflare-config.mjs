@@ -29,6 +29,10 @@ config.d1_databases = [
     database_id: databaseId,
   },
 ];
+// Daily deadline-alert webhook: 00:00 UTC = 09:00 KST, weekdays.
+config.triggers = {
+  crons: [process.env.CLOUDFLARE_ALERT_CRON ?? "0 0 * * 1-5"],
+};
 
 await writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`);
 console.log(

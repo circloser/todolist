@@ -51,6 +51,7 @@ export type WorkflowItem = {
   location: string;
   lat: number | null;
   lng: number | null;
+  links: Array<{ title: string; url: string }>;
   templateKey: string;
   position: number;
   updatedBy: string;
