@@ -93,6 +93,7 @@ const DASHBOARD_WIDGETS: Array<{ key: string; label: string }> = [
   { key: "deadlines", label: "다가오는 마감" },
   { key: "budget", label: "예산 요약" },
   { key: "bottlenecks", label: "병목 단계" },
+  { key: "regions", label: "지역 현황" },
   { key: "activity", label: "최근 활동" },
 ];
 
@@ -171,6 +172,12 @@ export default function TaskBoard() {
   const leafletMapRef = useRef<LeafletNS.Map | null>(null);
   const markerLayerRef = useRef<LeafletNS.LayerGroup | null>(null);
   const openItemRef = useRef<(id: number) => void>(() => {});
+  const [placingItemId, setPlacingItemId] = useState<number | null>(null);
+  const placingItemIdRef = useRef<number | null>(null);
+  const placeItemAtRef = useRef<(id: number, lat: number, lng: number) => void>(
+    () => {}
+  );
+  const pendingFlyToRef = useRef<[number, number] | null>(null);
   const [assigneeFilter, setAssigneeFilter] = useState("all");
   const [categoryFilter, setCategoryFilter] = useState("all");
   const [templateFilter, setTemplateFilter] = useState("all");
@@ -624,7 +631,44 @@ export default function TaskBoard() {
       0
     );
 
+    const regionMap = new Map<
+      string,
+      { count: number; done: number; lat: number | null; lng: number | null }
+    >();
+    let unlocatedCount = 0;
+
+    for (const item of items) {
+      if (!item.location && (item.lat === null || item.lng === null)) {
+        unlocatedCount += 1;
+        continue;
+      }
+
+      const name = item.location || "이름 없는 위치";
+      const region = regionMap.get(name) ?? {
+        count: 0,
+        done: 0,
+        lat: null,
+        lng: null,
+      };
+      region.count += 1;
+      if (isItemDone(item)) {
+        region.done += 1;
+      }
+      if (region.lat === null && item.lat !== null && item.lng !== null) {
+        region.lat = item.lat;
+        region.lng = item.lng;
+      }
+      regionMap.set(name, region);
+    }
+
+    const regions = [...regionMap.entries()]
+      .map(([name, value]) => ({ name, ...value }))
+      .sort((first, second) => second.count - first.count)
+      .slice(0, 6);
+
     return {
+      regions,
+      unlocatedCount,
       total,
       done,
       overdue,
@@ -1395,10 +1439,18 @@ export default function TaskBoard() {
     });
   }
 
-  // Keep the latest openItem reachable from Leaflet popup event handlers
+  // Keep the latest callbacks/state reachable from Leaflet event handlers
   // without re-creating the map on every render.
   useEffect(() => {
     openItemRef.current = openItem;
+    placingItemIdRef.current = placingItemId;
+    placeItemAtRef.current = (id: number, lat: number, lng: number) => {
+      setPlacingItemId(null);
+      void updateItem(id, {
+        lat: Number(lat.toFixed(5)),
+        lng: Number(lng.toFixed(5)),
+      });
+    };
   });
 
   // Create the Leaflet map when entering the map view; destroy it on leave so
@@ -1436,6 +1488,22 @@ export default function TaskBoard() {
       }).addTo(map);
       markerLayerRef.current = L.layerGroup().addTo(map);
       leafletMapRef.current = map;
+
+      // Placement mode: clicking the map assigns coordinates to the task
+      // selected in the side panel.
+      map.on("click", (event: LeafletNS.LeafletMouseEvent) => {
+        const id = placingItemIdRef.current;
+        if (id !== null) {
+          placeItemAtRef.current(id, event.latlng.lat, event.latlng.lng);
+        }
+      });
+
+      // A dashboard region row may have queued a fly-to before the map existed.
+      if (pendingFlyToRef.current) {
+        map.setView(pendingFlyToRef.current, 11);
+        pendingFlyToRef.current = null;
+      }
+
       // Signal the marker effect that the (async-created) map now exists.
       setMapReady((value) => value + 1);
     })();
@@ -1446,6 +1514,7 @@ export default function TaskBoard() {
       leafletMapRef.current?.remove();
       leafletMapRef.current = null;
       markerLayerRef.current = null;
+      setPlacingItemId(null);
     };
   }, [viewMode]);
 
@@ -1460,38 +1529,83 @@ export default function TaskBoard() {
 
     layer.clearLayers();
 
+    // Tasks at the same wetland share preset coordinates, so a naive
+    // one-marker-per-task draw stacks them invisibly. Group by exact
+    // coordinate: one marker per place, sized by task count, with a popup
+    // listing every task there.
+    const groups = new Map<
+      string,
+      { lat: number; lng: number; location: string; items: WorkflowItem[] }
+    >();
+
     for (const item of visibleItems) {
       if (item.lat === null || item.lng === null) {
         continue;
       }
 
-      const done = isItemDone(item);
-      const color = done
+      const key = `${item.lat},${item.lng}`;
+      const group = groups.get(key) ?? {
+        lat: item.lat,
+        lng: item.lng,
+        location: item.location,
+        items: [],
+      };
+      group.items.push(item);
+      if (!group.location && item.location) {
+        group.location = item.location;
+      }
+      groups.set(key, group);
+    }
+
+    for (const group of groups.values()) {
+      const anyOverdue = group.items.some((item) => itemHasOverdueDate(item));
+      const anyUrgent = group.items.some((item) => itemHasUrgentDate(item));
+      const allDone = group.items.every((item) => isItemDone(item));
+      const color = allDone
         ? "#16a34a"
-        : itemHasOverdueDate(item)
+        : anyOverdue
           ? "#dc2626"
-          : itemHasUrgentDate(item)
+          : anyUrgent
             ? "#d97706"
             : "#5b5bd6";
-      const marker = L.circleMarker([item.lat, item.lng], {
-        radius: 9,
+      const count = group.items.length;
+      const marker = L.circleMarker([group.lat, group.lng], {
+        radius: Math.min(9 + (count - 1) * 2, 16),
         weight: 2,
         color: "#ffffff",
         fillColor: color,
         fillOpacity: 0.95,
       }).addTo(layer);
 
-      const title = escapeHtml(item.title || "제목 없음");
-      const location = escapeHtml(item.location);
-      const assignee = escapeHtml(assigneeName(item.assignee));
+      const locationLabel =
+        group.location || group.items[0].title || "이름 없는 위치";
+      marker.bindTooltip(
+        count > 1 ? `${locationLabel} · ${count}건` : locationLabel
+      );
 
-      marker.bindTooltip(item.title || "제목 없음");
+      const rows = group.items
+        .slice(0, 8)
+        .map((item) => {
+          const title = escapeHtml(item.title || "제목 없음");
+          const assignee = escapeHtml(assigneeName(item.assignee));
+          return `<div style="margin-top:7px;display:flex;align-items:center;gap:8px">
+            <div style="min-width:0;flex:1">
+              <div style="font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${title}</div>
+              <div style="color:#61667a;font-size:12px">${assignee} · ${itemProgress(item)}%</div>
+            </div>
+            <button type="button" data-open-item="${item.id}" style="flex-shrink:0;padding:3px 9px;border-radius:8px;border:1px solid #5b5bd6;background:#eef0fd;color:#5b5bd6;font-weight:600;cursor:pointer">열기</button>
+          </div>`;
+        })
+        .join("");
+      const more =
+        count > 8
+          ? `<div style="margin-top:6px;color:#9499ab;font-size:12px">외 ${count - 8}건</div>`
+          : "";
+
       marker.bindPopup(
-        `<div style="min-width:170px;font-size:13px;line-height:1.5">
-          <div style="font-weight:700">${title}</div>
-          ${location ? `<div style="color:#61667a">📍 ${location}</div>` : ""}
-          <div style="color:#61667a">${assignee} · ${itemProgress(item)}%</div>
-          <button type="button" data-open-item="${item.id}" style="margin-top:6px;padding:4px 10px;border-radius:8px;border:1px solid #5b5bd6;background:#eef0fd;color:#5b5bd6;font-weight:600;cursor:pointer">업무 열기</button>
+        `<div style="min-width:190px;max-width:240px;font-size:13px;line-height:1.5">
+          <div style="font-weight:700">📍 ${escapeHtml(locationLabel)}${count > 1 ? ` <span style="color:#61667a;font-weight:600">(${count}건)</span>` : ""}</div>
+          ${rows}${more}
         </div>`
       );
     }
@@ -2242,6 +2356,54 @@ export default function TaskBoard() {
                   </div>
                 </div>
                 ) : null}
+
+                {widgetPrefs.regions !== false ? (
+                <div className="tb-card p-5">
+                  <h2 className="text-sm font-semibold">지역 현황</h2>
+                  <div className="mt-3 space-y-1">
+                    {dashboard.regions.length ? (
+                      dashboard.regions.map((region) => (
+                        <button
+                          key={region.name}
+                          type="button"
+                          onClick={() => {
+                            if (region.lat !== null && region.lng !== null) {
+                              pendingFlyToRef.current = [region.lat, region.lng];
+                            }
+                            setViewMode("map");
+                          }}
+                          className="flex w-full items-center gap-2 rounded-[var(--radius-sm)] px-2 py-1.5 text-left text-sm transition hover:bg-[var(--surface-3)]"
+                          title="지도에서 보기"
+                        >
+                          <span className="min-w-0 flex-1 truncate">
+                            📍 {region.name}
+                          </span>
+                          <span className="tb-badge tb-badge-muted shrink-0">
+                            {region.done}/{region.count}
+                          </span>
+                        </button>
+                      ))
+                    ) : (
+                      <div className="text-sm text-[var(--text-faint)]">
+                        위치가 지정된 업무가 없습니다.
+                      </div>
+                    )}
+                    {dashboard.unlocatedCount ? (
+                      <button
+                        type="button"
+                        onClick={() => setViewMode("map")}
+                        className="flex w-full items-center gap-2 rounded-[var(--radius-sm)] px-2 py-1.5 text-left text-sm text-[var(--text-faint)] transition hover:bg-[var(--surface-3)]"
+                        title="지도 뷰에서 위치를 지정하세요"
+                      >
+                        <span className="min-w-0 flex-1">위치 미지정</span>
+                        <span className="tb-badge tb-badge-muted shrink-0">
+                          {dashboard.unlocatedCount}
+                        </span>
+                      </button>
+                    ) : null}
+                  </div>
+                </div>
+                ) : null}
               </div>
             </div>
 
@@ -2908,6 +3070,25 @@ export default function TaskBoard() {
         ) : viewMode === "map" ? (
           <div className="grid gap-4 lg:grid-cols-[1fr_300px]">
             <div className="tb-card overflow-hidden">
+              {placingItemId !== null ? (
+                <div className="flex items-center justify-between gap-3 border-b border-[var(--warning-border)] bg-[var(--warning-soft)] px-4 py-2 text-sm font-medium text-[var(--warning)]">
+                  <span>
+                    🖱 지도를 클릭해{" "}
+                    <strong>
+                      {items.find((item) => item.id === placingItemId)?.title ??
+                        "업무"}
+                    </strong>
+                    의 위치를 지정하세요
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setPlacingItemId(null)}
+                    className="tb-btn shrink-0 !py-1 text-xs"
+                  >
+                    취소
+                  </button>
+                </div>
+              ) : null}
               <div
                 ref={mapContainerRef}
                 className="h-[68vh] min-h-[420px] w-full"
@@ -2952,25 +3133,34 @@ export default function TaskBoard() {
                   {visibleItems
                     .filter((item) => item.lat !== null && item.lng !== null)
                     .map((item) => (
-                      <button
-                        key={item.id}
-                        type="button"
-                        onClick={() =>
-                          leafletMapRef.current?.setView(
-                            [item.lat as number, item.lng as number],
-                            11
-                          )
-                        }
-                        className="block w-full rounded-[var(--radius-sm)] px-2 py-1.5 text-left text-sm transition hover:bg-[var(--surface-3)]"
-                      >
-                        <div className="truncate font-medium">
-                          {item.title || "제목 없음"}
-                        </div>
-                        <div className="truncate text-[11px] text-[var(--text-faint)]">
-                          📍 {item.location || "이름 없는 위치"} ·{" "}
-                          {itemProgress(item)}%
-                        </div>
-                      </button>
+                      <div key={item.id} className="flex items-center gap-1">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            leafletMapRef.current?.setView(
+                              [item.lat as number, item.lng as number],
+                              11
+                            )
+                          }
+                          className="min-w-0 flex-1 rounded-[var(--radius-sm)] px-2 py-1.5 text-left text-sm transition hover:bg-[var(--surface-3)]"
+                        >
+                          <div className="truncate font-medium">
+                            {item.title || "제목 없음"}
+                          </div>
+                          <div className="truncate text-[11px] text-[var(--text-faint)]">
+                            📍 {item.location || "이름 없는 위치"} ·{" "}
+                            {itemProgress(item)}%
+                          </div>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setPlacingItemId(item.id)}
+                          className="tb-iconbtn h-7 w-7 shrink-0 text-xs"
+                          title="지도를 클릭해 위치 다시 지정"
+                        >
+                          📍
+                        </button>
+                      </div>
                     ))}
                   {!visibleItems.some(
                     (item) => item.lat !== null && item.lng !== null
@@ -2997,20 +3187,29 @@ export default function TaskBoard() {
                   {visibleItems
                     .filter((item) => item.lat === null || item.lng === null)
                     .map((item) => (
-                      <button
-                        key={item.id}
-                        type="button"
-                        onClick={() => openItem(item.id)}
-                        className="block w-full truncate rounded-[var(--radius-sm)] px-2 py-1.5 text-left text-sm transition hover:bg-[var(--surface-3)]"
-                        title="클릭해 상세에서 위치를 지정하세요"
-                      >
-                        {item.title || "제목 없음"}
-                      </button>
+                      <div key={item.id} className="flex items-center gap-1">
+                        <button
+                          type="button"
+                          onClick={() => openItem(item.id)}
+                          className="min-w-0 flex-1 truncate rounded-[var(--radius-sm)] px-2 py-1.5 text-left text-sm transition hover:bg-[var(--surface-3)]"
+                          title="클릭해 상세에서 위치를 지정하세요"
+                        >
+                          {item.title || "제목 없음"}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setPlacingItemId(item.id)}
+                          className="tb-iconbtn h-7 w-7 shrink-0 text-xs"
+                          title="지도를 클릭해 위치 지정"
+                        >
+                          📍
+                        </button>
+                      </div>
                     ))}
                 </div>
                 <p className="mt-2 text-[11px] leading-4 text-[var(--text-faint)]">
-                  업무를 클릭해 상세 패널의 &lsquo;위치&rsquo;에서 습지보호지역을
-                  선택하면 지도에 표시됩니다.
+                  📍 버튼을 누른 뒤 지도를 클릭하면 그 지점이 위치로 저장됩니다.
+                  이름은 상세 패널의 &lsquo;위치&rsquo;에서 지정할 수 있습니다.
                 </p>
               </div>
             </div>
