@@ -98,6 +98,8 @@ export type TaskResponse = {
   assigneeSettings?: Record<string, string>;
   history?: HistoryEntry[];
   settings?: AppSettings;
+  webhook?: { url: string; enabled: boolean };
+  sent?: number;
   viewer?: string;
   error?: string;
 };

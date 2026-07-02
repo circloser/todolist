@@ -548,6 +548,14 @@ async function ensureSchema() {
       value TEXT NOT NULL,
       updated_at TEXT NOT NULL
     )`),
+    d1.prepare(`CREATE TABLE IF NOT EXISTS webhook_settings (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL DEFAULT '팀 알림',
+      url TEXT NOT NULL,
+      enabled INTEGER NOT NULL DEFAULT 1,
+      updated_at TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    )`),
     d1.prepare(`CREATE TABLE IF NOT EXISTS workflow_templates (
       template_key TEXT PRIMARY KEY,
       name TEXT NOT NULL,
@@ -675,6 +683,9 @@ async function createItemWithDefaultSteps({
   allocatedBudget,
   requiredBudget,
   dueDate,
+  location,
+  lat,
+  lng,
   template,
   actor,
   position,
@@ -687,6 +698,9 @@ async function createItemWithDefaultSteps({
   allocatedBudget?: number | null;
   requiredBudget?: number | null;
   dueDate?: string | null;
+  location?: string;
+  lat?: number | null;
+  lng?: number | null;
   template: ResolvedTemplate;
   actor: string;
   position: number;
@@ -704,12 +718,15 @@ async function createItemWithDefaultSteps({
       allocated_budget,
       required_budget,
       due_date,
+      location,
+      lat,
+      lng,
       template_key,
       position,
       updated_by,
       updated_at,
       created_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
     .bind(
       title,
       assignee,
@@ -718,6 +735,9 @@ async function createItemWithDefaultSteps({
       allocatedBudget ?? null,
       requiredBudget ?? null,
       dueDate ?? null,
+      location ?? "",
+      lat ?? null,
+      lng ?? null,
       selectedTemplate.key,
       position,
       actor,
@@ -1166,6 +1186,41 @@ async function getAppSettings() {
   };
 }
 
+type WebhookRow = {
+  id: number;
+  name: string;
+  url: string;
+  enabled: number;
+  updated_at: string;
+  created_at: string;
+};
+
+async function getWebhookSettings() {
+  const row = await getD1()
+    .prepare("SELECT * FROM webhook_settings ORDER BY id LIMIT 1")
+    .first<WebhookRow>();
+
+  return row
+    ? { url: row.url, enabled: row.enabled === 1 }
+    : { url: "", enabled: false };
+}
+
+// Due-date math on the server uses the Korean calendar day, not UTC.
+function kstTodayIso() {
+  return new Date(Date.now() + 9 * 3_600_000).toISOString().slice(0, 10);
+}
+
+function daysFromKstToday(dateIso: string) {
+  const today = kstTodayIso();
+  const toUtcMs = (iso: string) =>
+    Date.UTC(
+      Number(iso.slice(0, 4)),
+      Number(iso.slice(5, 7)) - 1,
+      Number(iso.slice(8, 10))
+    );
+  return Math.round((toUtcMs(dateIso) - toUtcMs(today)) / 86_400_000);
+}
+
 export async function GET(request: Request) {
   try {
     await prepareWorkflow();
@@ -1180,6 +1235,7 @@ export async function GET(request: Request) {
       assigneeSettings: await getAssigneeSettings(),
       history: await getHistory(),
       settings: await getAppSettings(),
+      webhook: await getWebhookSettings(),
       viewer: getActor(request),
     });
   } catch (error) {
@@ -1205,11 +1261,132 @@ export async function POST(request: Request) {
       allocatedBudget?: number | string | null;
       requiredBudget?: number | string | null;
       dueDate?: string;
+      location?: string;
+      lat?: number | string | null;
+      lng?: number | string | null;
       templateKey?: string;
       blockers?: string;
     };
     const actor = getActor(request, payload.actor);
     const d1 = getD1();
+
+    if (payload.action === "send-deadline-alerts") {
+      const webhook = await getWebhookSettings();
+
+      if (!webhook.url || !webhook.enabled) {
+        return Response.json(
+          { error: "알림 웹훅이 설정되어 있지 않습니다. 보드 설정에서 웹훅 URL을 저장해 주세요." },
+          { status: 400 }
+        );
+      }
+
+      const items = await getItems();
+      type Alert = { label: string; date: string; days: number };
+      const groups = new Map<string, Alert[]>();
+      let overdueTotal = 0;
+      let urgentTotal = 0;
+
+      for (const item of items) {
+        const done =
+          item.steps.length > 0 &&
+          item.steps.every((step) => step.status === "done");
+
+        if (done) {
+          continue;
+        }
+
+        const entries: Alert[] = [];
+        const next = item.steps.find((step) => step.status !== "done");
+
+        if (next?.dueDate) {
+          const days = daysFromKstToday(next.dueDate);
+          if (days <= 3) {
+            entries.push({
+              label: `${item.title} — ${next.title}`,
+              date: next.dueDate,
+              days,
+            });
+          }
+        }
+
+        if (item.dueDate) {
+          const days = daysFromKstToday(item.dueDate);
+          if (days <= 3) {
+            entries.push({
+              label: `${item.title} — 최종 마감`,
+              date: item.dueDate,
+              days,
+            });
+          }
+        }
+
+        if (entries.length) {
+          const who = item.assignee.trim() || "미지정";
+          groups.set(who, [...(groups.get(who) ?? []), ...entries]);
+          for (const entry of entries) {
+            if (entry.days < 0) {
+              overdueTotal += 1;
+            } else {
+              urgentTotal += 1;
+            }
+          }
+        }
+      }
+
+      const total = overdueTotal + urgentTotal;
+
+      if (!total) {
+        return Response.json({ sent: 0 });
+      }
+
+      const settings = await getAppSettings();
+      const lines: string[] = [
+        `📋 [${settings.organizationName}] 마감 알림 (${kstTodayIso()})`,
+        `🔴 지연 ${overdueTotal}건 · 🟡 임박(D-3 이내) ${urgentTotal}건`,
+        "",
+      ];
+
+      for (const [assignee, entries] of groups) {
+        lines.push(`■ ${assignee}`);
+        for (const entry of entries.sort((a, b) => a.days - b.days)) {
+          const badge =
+            entry.days < 0
+              ? `🔴 D+${Math.abs(entry.days)}`
+              : entry.days <= 1
+                ? `🟠 D-${entry.days}`
+                : `🟡 D-${entry.days}`;
+          lines.push(
+            `  · ${badge} ${entry.label} (${entry.date.slice(5).replace("-", ".")})`
+          );
+        }
+      }
+
+      const text = lines.join("\n");
+      const body = webhook.url.includes("discord.com/api/webhooks")
+        ? { content: text }
+        : { text };
+      const response = await fetch(webhook.url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+
+      if (!response.ok) {
+        return Response.json(
+          { error: `웹훅 발송에 실패했습니다 (HTTP ${response.status}).` },
+          { status: 502 }
+        );
+      }
+
+      await logHistory({
+        entityType: "notification",
+        action: "send",
+        summary: `${actor}님이 마감 알림 ${total}건을 웹훅으로 발송함`,
+        actor,
+      });
+
+      return Response.json({ sent: total, history: await getHistory() });
+    }
 
     if (payload.action === "create-subtask") {
       const itemId = Number(payload.itemId);
@@ -1307,6 +1484,12 @@ export async function POST(request: Request) {
       allocatedBudget,
       requiredBudget,
       dueDate,
+      location:
+        typeof payload.location === "string"
+          ? payload.location.trim().slice(0, 120)
+          : "",
+      lat: normalizeCoord(payload.lat, -90, 90),
+      lng: normalizeCoord(payload.lng, -180, 180),
       template: selectedTemplate,
       actor,
       position: Number(last?.position ?? 0) + 1,
@@ -1357,6 +1540,8 @@ export async function PATCH(request: Request) {
       templateKey?: string;
       name?: string;
       description?: string;
+      url?: string;
+      enabled?: boolean;
       stages?: Array<{
         stageKey?: string;
         title?: string;
@@ -1577,6 +1762,44 @@ export async function PATCH(request: Request) {
       return Response.json({
         templates: await getTemplatesFromDb(),
         items: await getItems(),
+        history: await getHistory(),
+      });
+    }
+
+    if (payload.action === "save-webhook") {
+      const url = typeof payload.url === "string" ? payload.url.trim().slice(0, 500) : "";
+      const enabled = payload.enabled === true;
+
+      if (url && !/^https:\/\//.test(url)) {
+        return Response.json(
+          { error: "웹훅 URL은 https:// 로 시작해야 합니다." },
+          { status: 400 }
+        );
+      }
+
+      await d1.prepare("DELETE FROM webhook_settings").run();
+
+      if (url) {
+        await d1
+          .prepare(
+            `INSERT INTO webhook_settings (name, url, enabled, updated_at, created_at)
+             VALUES ('팀 알림', ?, ?, ?, ?)`
+          )
+          .bind(url, enabled ? 1 : 0, now, now)
+          .run();
+      }
+
+      await logHistory({
+        entityType: "settings",
+        action: "webhook",
+        summary: url
+          ? `${actor}님이 알림 웹훅을 ${enabled ? "활성화" : "비활성"} 상태로 저장함`
+          : `${actor}님이 알림 웹훅을 제거함`,
+        actor,
+      });
+
+      return Response.json({
+        webhook: await getWebhookSettings(),
         history: await getHistory(),
       });
     }

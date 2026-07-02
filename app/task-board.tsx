@@ -178,6 +178,20 @@ export default function TaskBoard() {
     () => {}
   );
   const pendingFlyToRef = useRef<[number, number] | null>(null);
+  const [creatingOnMap, setCreatingOnMap] = useState(false);
+  const creatingOnMapRef = useRef(false);
+  const mapCreateAtRef = useRef<(lat: number, lng: number) => void>(() => {});
+  const [mapDraft, setMapDraft] = useState<{ lat: number; lng: number } | null>(
+    null
+  );
+  const [mapNewTitle, setMapNewTitle] = useState("");
+  const [mapNewAssignee, setMapNewAssignee] = useState("");
+  const [mapNewLocation, setMapNewLocation] = useState("");
+  const [webhookUrl, setWebhookUrl] = useState("");
+  const [webhookEnabled, setWebhookEnabled] = useState(false);
+  const [savingWebhook, setSavingWebhook] = useState(false);
+  const [sendingAlerts, setSendingAlerts] = useState(false);
+  const [alertResult, setAlertResult] = useState("");
   const [assigneeFilter, setAssigneeFilter] = useState("all");
   const [categoryFilter, setCategoryFilter] = useState("all");
   const [templateFilter, setTemplateFilter] = useState("all");
@@ -228,6 +242,8 @@ export default function TaskBoard() {
         data.settings?.organizationName ?? defaultSettings.organizationName
       );
       setBoardTitle(data.settings?.boardTitle ?? defaultSettings.boardTitle);
+      setWebhookUrl(data.webhook?.url ?? "");
+      setWebhookEnabled(data.webhook?.enabled ?? false);
 
       const storedUserName = window.localStorage
         .getItem("team-progress-user-name")
@@ -753,6 +769,89 @@ export default function TaskBoard() {
     };
   }, [items]);
 
+  // Date-axis timeline for the gantt view: range spans every known date
+  // (creation, item due, step due) plus today, with light padding.
+  const gantt = useMemo(() => {
+    const DAY = 86_400_000;
+    const parse = (iso: string) => new Date(`${iso}T00:00:00`).getTime();
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const todayMs = today.getTime();
+
+    let min = Infinity;
+    let max = -Infinity;
+
+    for (const item of visibleItems) {
+      min = Math.min(min, parse(item.createdAt.slice(0, 10)));
+      if (item.dueDate) {
+        const due = parse(item.dueDate);
+        min = Math.min(min, due);
+        max = Math.max(max, due);
+      }
+      for (const step of item.steps) {
+        if (step.dueDate) {
+          const due = parse(step.dueDate);
+          min = Math.min(min, due);
+          max = Math.max(max, due);
+        }
+      }
+    }
+
+    if (!Number.isFinite(min)) {
+      min = todayMs - 7 * DAY;
+    }
+    if (max === -Infinity) {
+      max = todayMs + 21 * DAY;
+    }
+    min = Math.min(min, todayMs) - 2 * DAY;
+    max = Math.max(max, todayMs) + 3 * DAY;
+    if (max - min < 14 * DAY) {
+      max = min + 14 * DAY;
+    }
+
+    const span = max - min;
+    const pct = (ms: number) => ((ms - min) / span) * 100;
+    const tickCount = 6;
+    const ticks = Array.from({ length: tickCount + 1 }, (_, index) => {
+      const ms = min + (span * index) / tickCount;
+      const date = new Date(ms);
+      return {
+        pct: (index / tickCount) * 100,
+        label: `${date.getMonth() + 1}.${String(date.getDate()).padStart(2, "0")}`,
+      };
+    });
+
+    const rows = visibleItems.map((item) => {
+      const created = parse(item.createdAt.slice(0, 10));
+      const stepDues = item.steps
+        .filter((step) => step.dueDate)
+        .map((step) => parse(step.dueDate as string));
+      const end = item.dueDate
+        ? parse(item.dueDate)
+        : stepDues.length
+          ? Math.max(...stepDues)
+          : null;
+      const start = Math.min(created, end ?? created);
+      const markers = item.steps
+        .filter((step) => step.dueDate)
+        .map((step) => ({
+          id: step.id,
+          pct: pct(parse(step.dueDate as string)),
+          done: step.status === "done",
+          title: `${step.title} · ${step.dueDate}`,
+        }));
+
+      return {
+        item,
+        startPct: pct(start),
+        endPct: end !== null ? pct(end) : null,
+        markers,
+      };
+    });
+
+    return { ticks, todayPct: pct(todayMs), rows };
+  }, [visibleItems]);
+
   function replaceItem(nextItem: WorkflowItem) {
     setItems((current) =>
       current.map((item) => (item.id === nextItem.id ? nextItem : item))
@@ -1155,6 +1254,124 @@ export default function TaskBoard() {
     }
   }
 
+  async function saveWebhook(nextUrl: string, nextEnabled: boolean) {
+    setSavingWebhook(true);
+    setError("");
+
+    try {
+      const response = await fetch("/api/tasks", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "save-webhook",
+          actor: currentActor,
+          url: nextUrl,
+          enabled: nextEnabled,
+        }),
+      });
+      const data = (await response.json()) as TaskResponse;
+
+      if (!response.ok || !data.webhook) {
+        throw new Error(data.error ?? "웹훅 설정을 저장하지 못했습니다.");
+      }
+
+      setWebhookUrl(data.webhook.url);
+      setWebhookEnabled(data.webhook.enabled);
+      setHistory(data.history ?? history);
+    } catch (saveError) {
+      setError(
+        saveError instanceof Error
+          ? saveError.message
+          : "웹훅 설정을 저장하지 못했습니다."
+      );
+    } finally {
+      setSavingWebhook(false);
+    }
+  }
+
+  async function sendDeadlineAlerts() {
+    setSendingAlerts(true);
+    setAlertResult("");
+    setError("");
+
+    try {
+      const response = await fetch("/api/tasks", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "send-deadline-alerts",
+          actor: currentActor,
+        }),
+      });
+      const data = (await response.json()) as TaskResponse;
+
+      if (!response.ok) {
+        throw new Error(data.error ?? "알림을 발송하지 못했습니다.");
+      }
+
+      setAlertResult(
+        data.sent ? `✅ ${data.sent}건 발송 완료` : "보낼 임박·지연 알림이 없습니다."
+      );
+      setHistory(data.history ?? history);
+    } catch (sendError) {
+      setAlertResult(
+        `⚠️ ${sendError instanceof Error ? sendError.message : "알림을 발송하지 못했습니다."}`
+      );
+    } finally {
+      setSendingAlerts(false);
+    }
+  }
+
+  async function createItemOnMap() {
+    if (!mapDraft) {
+      return;
+    }
+
+    const title = mapNewTitle.trim();
+
+    if (!title) {
+      setError("업무명을 입력해 주세요.");
+      return;
+    }
+
+    setAdding(true);
+    setError("");
+
+    try {
+      const response = await fetch("/api/tasks", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title,
+          actor: currentActor,
+          assignee: mapNewAssignee,
+          templateKey: newTemplateKey,
+          location: mapNewLocation.trim(),
+          lat: mapDraft.lat,
+          lng: mapDraft.lng,
+        }),
+      });
+      const data = (await response.json()) as TaskResponse;
+
+      if (!response.ok || !data.item) {
+        throw new Error(data.error ?? "업무를 추가하지 못했습니다.");
+      }
+
+      setItems((current) => [...current, data.item!]);
+      setHistory(data.history ?? history);
+      setMapDraft(null);
+      setMapNewTitle("");
+      setMapNewAssignee("");
+      setMapNewLocation("");
+    } catch (addError) {
+      setError(
+        addError instanceof Error ? addError.message : "업무를 추가하지 못했습니다."
+      );
+    } finally {
+      setAdding(false);
+    }
+  }
+
   function openTemplateEditor(template: TemplateOption | null) {
     setError("");
     setTemplateDraft(
@@ -1444,9 +1661,17 @@ export default function TaskBoard() {
   useEffect(() => {
     openItemRef.current = openItem;
     placingItemIdRef.current = placingItemId;
+    creatingOnMapRef.current = creatingOnMap;
     placeItemAtRef.current = (id: number, lat: number, lng: number) => {
       setPlacingItemId(null);
       void updateItem(id, {
+        lat: Number(lat.toFixed(5)),
+        lng: Number(lng.toFixed(5)),
+      });
+    };
+    mapCreateAtRef.current = (lat: number, lng: number) => {
+      setCreatingOnMap(false);
+      setMapDraft({
         lat: Number(lat.toFixed(5)),
         lng: Number(lng.toFixed(5)),
       });
@@ -1495,6 +1720,10 @@ export default function TaskBoard() {
         const id = placingItemIdRef.current;
         if (id !== null) {
           placeItemAtRef.current(id, event.latlng.lat, event.latlng.lng);
+          return;
+        }
+        if (creatingOnMapRef.current) {
+          mapCreateAtRef.current(event.latlng.lat, event.latlng.lng);
         }
       });
 
@@ -1515,6 +1744,7 @@ export default function TaskBoard() {
       leafletMapRef.current = null;
       markerLayerRef.current = null;
       setPlacingItemId(null);
+      setCreatingOnMap(false);
     };
   }, [viewMode]);
 
@@ -3070,19 +3300,28 @@ export default function TaskBoard() {
         ) : viewMode === "map" ? (
           <div className="grid gap-4 lg:grid-cols-[1fr_300px]">
             <div className="tb-card overflow-hidden">
-              {placingItemId !== null ? (
+              {placingItemId !== null || creatingOnMap ? (
                 <div className="flex items-center justify-between gap-3 border-b border-[var(--warning-border)] bg-[var(--warning-soft)] px-4 py-2 text-sm font-medium text-[var(--warning)]">
                   <span>
-                    🖱 지도를 클릭해{" "}
-                    <strong>
-                      {items.find((item) => item.id === placingItemId)?.title ??
-                        "업무"}
-                    </strong>
-                    의 위치를 지정하세요
+                    {placingItemId !== null ? (
+                      <>
+                        🖱 지도를 클릭해{" "}
+                        <strong>
+                          {items.find((item) => item.id === placingItemId)
+                            ?.title ?? "업무"}
+                        </strong>
+                        의 위치를 지정하세요
+                      </>
+                    ) : (
+                      <>🖱 지도를 클릭해 새 업무의 위치를 선택하세요</>
+                    )}
                   </span>
                   <button
                     type="button"
-                    onClick={() => setPlacingItemId(null)}
+                    onClick={() => {
+                      setPlacingItemId(null);
+                      setCreatingOnMap(false);
+                    }}
                     className="tb-btn shrink-0 !py-1 text-xs"
                   >
                     취소
@@ -3096,6 +3335,18 @@ export default function TaskBoard() {
             </div>
 
             <div className="space-y-4">
+              <button
+                type="button"
+                onClick={() => {
+                  setPlacingItemId(null);
+                  setCreatingOnMap(true);
+                }}
+                disabled={creatingOnMap}
+                className="tb-btn tb-btn-primary w-full"
+              >
+                ＋ 지도를 클릭해 새 업무 추가
+              </button>
+
               <div className="tb-card p-4">
                 <h2 className="text-sm font-semibold">범례</h2>
                 <div className="mt-2.5 space-y-1.5 text-sm">
@@ -3860,55 +4111,134 @@ export default function TaskBoard() {
             </div>
           </div>
         ) : (
-          <div className="tb-card p-4">
-            <div className="grid gap-2.5">
-              {visibleItems.map((item) => {
-                const progress = itemProgress(item);
-                const next = nextStep(item);
-                const rowColor = rowAccentColor(
-                  assigneeSettings[assigneeName(item.assignee)]
-                );
+          <div className="tb-card overflow-hidden">
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-1 border-b border-[var(--border)] px-4 py-2.5 text-[11px] text-[var(--text-muted)]">
+              <span className="flex items-center gap-1.5">
+                <span className="h-2 w-6 rounded-full bg-[var(--accent)]" />
+                등록 → 마감 (채움 = 진행률)
+              </span>
+              <span className="flex items-center gap-1.5">
+                <span className="h-2.5 w-2.5 rounded-full border-2 border-[var(--accent)] bg-white" />
+                단계 목표일
+              </span>
+              <span className="flex items-center gap-1.5">
+                <span className="h-2.5 w-2.5 rounded-full bg-[var(--success)]" />
+                완료 단계
+              </span>
+              <span className="flex items-center gap-1.5">
+                <span className="h-3 w-0.5 bg-[var(--danger)]" />
+                오늘
+              </span>
+            </div>
 
-                return (
-                  <div
-                    key={item.id}
-                    className="grid items-center gap-3 rounded-[var(--radius)] border border-[var(--border)] bg-[var(--surface)] p-3 md:grid-cols-[280px_1fr_56px]"
-                    style={{ boxShadow: `inset 3px 0 0 ${rowColor}` }}
-                  >
-                    <div>
-                      <div className="font-semibold">{item.title}</div>
-                      <div className="mt-0.5 text-xs text-[var(--text-muted)]">
-                        {assigneeName(item.assignee)} · {next?.title ?? "완료"}
-                      </div>
-                      <div className="mt-1 text-[11px] text-[var(--text-faint)]">
-                        편성 {formatBudget(item.allocatedBudget) || "-"} · 소요{" "}
-                        {formatBudget(item.requiredBudget) || "-"}
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-1">
-                      {item.steps.map((step) => (
-                        <div
-                          key={step.id}
-                          className={`h-7 flex-1 rounded-[4px] border ${
-                            step.status === "done"
-                              ? "border-[var(--success)] bg-[var(--success)]"
-                              : urgency(step.dueDate) === "overdue"
-                                ? "border-[var(--danger-border)] bg-[var(--danger-soft)]"
-                                : urgency(step.dueDate) === "warning" ||
-                                    urgency(step.dueDate) === "danger"
-                                  ? "border-[var(--warning-border)] bg-[var(--warning-soft)]"
-                                  : "border-[var(--border)] bg-[var(--surface-3)]"
-                          }`}
-                          title={`${step.title} ${formatDay(step.dueDate)}`}
-                        />
-                      ))}
-                    </div>
-                    <div className="text-right text-sm font-bold text-[var(--accent)]">
-                      {progress}%
-                    </div>
+            <div className="overflow-x-auto">
+              <div className="min-w-[760px]">
+                <div className="grid grid-cols-[230px_1fr] border-b border-[var(--border)] bg-[var(--surface-2)]">
+                  <div className="px-3 py-2 text-[11px] font-semibold text-[var(--text-muted)]">
+                    업무
                   </div>
-                );
-              })}
+                  <div className="relative h-8">
+                    {gantt.ticks.map((tick) => (
+                      <span
+                        key={tick.pct}
+                        className="absolute top-1/2 -translate-x-1/2 -translate-y-1/2 text-[10px] font-medium text-[var(--text-faint)]"
+                        style={{ left: `${tick.pct}%` }}
+                      >
+                        {tick.label}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+
+                {gantt.rows.length ? (
+                  gantt.rows.map(({ item, startPct, endPct, markers }) => {
+                    const rowColor = rowAccentColor(
+                      assigneeSettings[assigneeName(item.assignee)]
+                    );
+                    const progress = itemProgress(item);
+
+                    return (
+                      <div
+                        key={item.id}
+                        className="grid grid-cols-[230px_1fr] border-b border-[var(--border)] last:border-b-0 hover:bg-[var(--surface-2)]"
+                      >
+                        <button
+                          type="button"
+                          onClick={() => openItem(item.id)}
+                          className="min-w-0 px-3 py-2 text-left"
+                          style={{ boxShadow: `inset 3px 0 0 ${rowColor}` }}
+                          title="목록에서 열기"
+                        >
+                          <div className="truncate text-sm font-medium">
+                            {item.title || "제목 없음"}
+                          </div>
+                          <div className="truncate text-[11px] text-[var(--text-faint)]">
+                            {assigneeName(item.assignee)} · {progress}%
+                          </div>
+                        </button>
+
+                        <div className="relative h-12">
+                          {gantt.ticks.slice(1, -1).map((tick) => (
+                            <span
+                              key={tick.pct}
+                              className="absolute bottom-0 top-0 w-px bg-[var(--border)] opacity-60"
+                              style={{ left: `${tick.pct}%` }}
+                            />
+                          ))}
+                          <span
+                            className="absolute bottom-0 top-0 w-0.5 bg-[var(--danger)] opacity-70"
+                            style={{ left: `${gantt.todayPct}%` }}
+                            title="오늘"
+                          />
+
+                          {endPct !== null ? (
+                            <div
+                              className="absolute top-1/2 h-2.5 -translate-y-1/2 overflow-hidden rounded-full bg-[var(--surface-3)]"
+                              style={{
+                                left: `${startPct}%`,
+                                width: `${Math.max(endPct - startPct, 0.8)}%`,
+                              }}
+                              title={`${item.title} · ${formatDay(item.dueDate) || "마감 미지정"}`}
+                            >
+                              <span
+                                className="block h-full rounded-full"
+                                style={{
+                                  width: `${progress}%`,
+                                  background: progressColor(item),
+                                }}
+                              />
+                            </div>
+                          ) : (
+                            <span
+                              className="absolute top-1/2 -translate-y-1/2 text-[10px] text-[var(--text-faint)]"
+                              style={{ left: `${startPct}%` }}
+                            >
+                              ◦ 일정 미지정
+                            </span>
+                          )}
+
+                          {markers.map((marker) => (
+                            <span
+                              key={marker.id}
+                              className={`absolute top-1/2 h-2.5 w-2.5 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 ${
+                                marker.done
+                                  ? "border-[var(--success)] bg-[var(--success)]"
+                                  : "border-[var(--accent)] bg-white"
+                              }`}
+                              style={{ left: `${marker.pct}%` }}
+                              title={marker.title}
+                            />
+                          ))}
+                        </div>
+                      </div>
+                    );
+                  })
+                ) : (
+                  <div className="px-4 py-14 text-center text-sm text-[var(--text-muted)]">
+                    표시할 업무가 없습니다.
+                  </div>
+                )}
+              </div>
             </div>
           </div>
         )}
@@ -3973,6 +4303,37 @@ export default function TaskBoard() {
                   placeholder="이름"
                 />
               </label>
+
+              <div className="border-t border-[var(--border)] pt-3">
+                <span className="tb-label">
+                  알림 웹훅 (Slack / Discord){savingWebhook ? " · 저장 중…" : ""}
+                </span>
+                <input
+                  value={webhookUrl}
+                  onChange={(event) => setWebhookUrl(event.target.value)}
+                  onBlur={(event) =>
+                    void saveWebhook(event.target.value, webhookEnabled)
+                  }
+                  className="tb-field"
+                  placeholder="https://hooks.slack.com/services/… 또는 Discord 웹훅 URL"
+                />
+                <label className="mt-2 flex cursor-pointer items-center gap-2 text-sm text-[var(--text-muted)]">
+                  <input
+                    type="checkbox"
+                    checked={webhookEnabled}
+                    onChange={(event) => {
+                      setWebhookEnabled(event.target.checked);
+                      void saveWebhook(webhookUrl, event.target.checked);
+                    }}
+                    className="h-4 w-4 accent-[var(--accent)]"
+                  />
+                  발송 활성화
+                </label>
+                <p className="mt-1.5 text-[11px] leading-4 text-[var(--text-faint)]">
+                  알림(🔔) 패널의 &lsquo;웹훅으로 발송&rsquo; 버튼으로 담당자별
+                  임박·지연 목록을 채널에 보냅니다.
+                </p>
+              </div>
             </div>
           </section>
         </div>
@@ -4317,6 +4678,126 @@ export default function TaskBoard() {
                 </div>
               )}
             </div>
+
+            <div className="flex items-center gap-2 border-t border-[var(--border)] px-5 py-3">
+              <button
+                type="button"
+                disabled={
+                  !webhookUrl || !webhookEnabled || sendingAlerts ||
+                  !notifications.total
+                }
+                onClick={() => void sendDeadlineAlerts()}
+                className="tb-btn tb-btn-primary"
+                title={
+                  !webhookUrl || !webhookEnabled
+                    ? "보드 설정에서 웹훅을 먼저 저장하세요"
+                    : "담당자별 임박·지연 목록을 웹훅으로 발송"
+                }
+              >
+                {sendingAlerts ? "발송 중…" : "웹훅으로 발송"}
+              </button>
+              <span className="min-w-0 flex-1 truncate text-xs text-[var(--text-muted)]">
+                {alertResult ||
+                  (!webhookUrl || !webhookEnabled
+                    ? "보드 설정에서 Slack/Discord 웹훅을 등록하면 발송할 수 있습니다."
+                    : "")}
+              </span>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {mapDraft ? (
+        <div
+          className="fixed inset-0 z-50 flex items-start justify-center overflow-auto bg-black/40 p-4 backdrop-blur-sm"
+          onClick={() => setMapDraft(null)}
+        >
+          <div
+            className="tb-card my-10 w-full max-w-[420px] shadow-[var(--shadow-lg)]"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="flex items-center justify-between border-b border-[var(--border)] px-5 py-3.5">
+              <h2 className="text-base font-semibold">지도에서 새 업무</h2>
+              <button
+                type="button"
+                onClick={() => setMapDraft(null)}
+                className="tb-iconbtn h-8 w-8"
+              >
+                ×
+              </button>
+            </div>
+            <form
+              onSubmit={(event) => {
+                event.preventDefault();
+                void createItemOnMap();
+              }}
+              className="space-y-3 p-5"
+            >
+              <div className="text-xs text-[var(--text-faint)]">
+                선택한 좌표 {mapDraft.lat.toFixed(4)}, {mapDraft.lng.toFixed(4)}
+              </div>
+              <label className="block">
+                <span className="tb-label">업무명 *</span>
+                <input
+                  value={mapNewTitle}
+                  onChange={(event) => setMapNewTitle(event.target.value)}
+                  className="tb-field"
+                  placeholder="새 업무명"
+                  autoFocus
+                />
+              </label>
+              <label className="block">
+                <span className="tb-label">유형 (단계 세트)</span>
+                <select
+                  value={newTemplateKey}
+                  onChange={(event) => setNewTemplateKey(event.target.value)}
+                  className="tb-field"
+                >
+                  {templates.map((template) => (
+                    <option key={template.key} value={template.key}>
+                      {template.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <div className="grid grid-cols-2 gap-2">
+                <label className="block">
+                  <span className="tb-label">담당자</span>
+                  <input
+                    value={mapNewAssignee}
+                    onChange={(event) => setMapNewAssignee(event.target.value)}
+                    className="tb-field"
+                    placeholder="담당자"
+                  />
+                </label>
+                <label className="block">
+                  <span className="tb-label">위치명</span>
+                  <input
+                    list="wetland-presets"
+                    value={mapNewLocation}
+                    onChange={(event) => setMapNewLocation(event.target.value)}
+                    className="tb-field"
+                    placeholder="예: 우포늪"
+                  />
+                </label>
+              </div>
+              <div className="flex gap-2 pt-1">
+                <button
+                  type="submit"
+                  disabled={!mapNewTitle.trim() || adding}
+                  className="tb-btn tb-btn-primary flex-1"
+                >
+                  {adding ? "추가 중…" : "이 위치에 추가"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setMapDraft(null)}
+                  className="tb-btn"
+                >
+                  취소
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       ) : null}
