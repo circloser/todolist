@@ -11,6 +11,9 @@ type WorkflowItemRow = {
   allocated_budget: number | null;
   required_budget: number | null;
   due_date: string | null;
+  location: string | null;
+  lat: number | null;
+  lng: number | null;
   template_key: string;
   position: number;
   updated_by: string;
@@ -390,6 +393,25 @@ function resolveTemplate(list: ResolvedTemplate[], key?: string) {
   return list.find((template) => template.key === key) ?? list[0];
 }
 
+function normalizeCoord(value: unknown, min: number, max: number) {
+  if (value === null || value === undefined || value === "") {
+    return null;
+  }
+
+  const amount =
+    typeof value === "number"
+      ? value
+      : typeof value === "string"
+        ? Number(value.trim())
+        : Number.NaN;
+
+  if (!Number.isFinite(amount) || amount < min || amount > max) {
+    return null;
+  }
+
+  return amount;
+}
+
 function toItem(
   row: WorkflowItemRow,
   steps: WorkflowStepRow[],
@@ -404,6 +426,9 @@ function toItem(
     allocatedBudget: row.allocated_budget,
     requiredBudget: row.required_budget,
     dueDate: row.due_date,
+    location: row.location ?? "",
+    lat: row.lat,
+    lng: row.lng,
     templateKey: row.template_key,
     position: row.position,
     updatedBy: row.updated_by,
@@ -465,6 +490,9 @@ async function ensureSchema() {
       allocated_budget INTEGER,
       required_budget INTEGER,
       due_date TEXT,
+      location TEXT NOT NULL DEFAULT '',
+      lat REAL,
+      lng REAL,
       template_key TEXT NOT NULL DEFAULT 'general-service',
       position INTEGER NOT NULL,
       updated_by TEXT NOT NULL DEFAULT '',
@@ -566,6 +594,11 @@ async function ensureSchema() {
   await addColumnIfMissing(
     "ALTER TABLE workflow_items ADD COLUMN template_key TEXT NOT NULL DEFAULT 'general-service'"
   );
+  await addColumnIfMissing(
+    "ALTER TABLE workflow_items ADD COLUMN location TEXT NOT NULL DEFAULT ''"
+  );
+  await addColumnIfMissing("ALTER TABLE workflow_items ADD COLUMN lat REAL");
+  await addColumnIfMissing("ALTER TABLE workflow_items ADD COLUMN lng REAL");
   await addColumnIfMissing("ALTER TABLE workflow_steps ADD COLUMN due_date TEXT");
   await addColumnIfMissing("ALTER TABLE workflow_subtasks ADD COLUMN due_date TEXT");
   await addColumnIfMissing(
@@ -1313,6 +1346,9 @@ export async function PATCH(request: Request) {
       allocatedBudget?: number | string | null;
       requiredBudget?: number | string | null;
       dueDate?: string | null;
+      location?: string;
+      lat?: number | string | null;
+      lng?: number | string | null;
       blockers?: string;
       color?: string;
       organizationName?: string;
@@ -1930,6 +1966,14 @@ export async function PATCH(request: Request) {
         typeof payload.dueDate === "string" || payload.dueDate === null
           ? normalizeDate(payload.dueDate)
           : existing.due_date;
+      const location =
+        typeof payload.location === "string"
+          ? payload.location.trim().slice(0, 120)
+          : existing.location ?? "";
+      const lat =
+        "lat" in payload ? normalizeCoord(payload.lat, -90, 90) : existing.lat;
+      const lng =
+        "lng" in payload ? normalizeCoord(payload.lng, -180, 180) : existing.lng;
 
       if (!title) {
         return Response.json({ error: "업무명을 입력해 주세요." }, { status: 400 });
@@ -1944,6 +1988,9 @@ export async function PATCH(request: Request) {
             allocated_budget = ?,
             required_budget = ?,
             due_date = ?,
+            location = ?,
+            lat = ?,
+            lng = ?,
             updated_by = ?,
             updated_at = ?
           WHERE id = ?`)
@@ -1955,6 +2002,9 @@ export async function PATCH(request: Request) {
           allocatedBudget,
           requiredBudget,
           dueDate,
+          location,
+          lat,
+          lng,
           actor,
           now,
           itemId

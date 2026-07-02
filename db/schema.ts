@@ -1,6 +1,7 @@
 import {
   index,
   integer,
+  real,
   sqliteTable,
   text,
   uniqueIndex,
@@ -17,6 +18,9 @@ export const workflowItems = sqliteTable(
     allocatedBudget: integer("allocated_budget"),
     requiredBudget: integer("required_budget"),
     dueDate: text("due_date"),
+    location: text("location").notNull().default(""),
+    lat: real("lat"),
+    lng: real("lng"),
     templateKey: text("template_key").notNull().default("general-service"),
     position: integer("position").notNull(),
     updatedBy: text("updated_by").notNull().default(""),

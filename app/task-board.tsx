@@ -6,8 +6,13 @@ import {
   Fragment,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from "react";
+import type * as LeafletNS from "leaflet";
+import "leaflet/dist/leaflet.css";
+
+import { WETLAND_PRESETS } from "./lib/wetlands";
 
 import {
   applyManualPositions,
@@ -95,6 +100,16 @@ const defaultWidgetPrefs: Record<string, boolean> = Object.fromEntries(
   DASHBOARD_WIDGETS.map((widget) => [widget.key, true])
 );
 
+// User text is interpolated into Leaflet popup HTML strings — escape it.
+function escapeHtml(value: string) {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
+}
+
 function isoDate(date: Date) {
   const year = date.getFullYear();
   const month = `${date.getMonth() + 1}`.padStart(2, "0");
@@ -150,6 +165,12 @@ export default function TaskBoard() {
   const [widgetMenuOpen, setWidgetMenuOpen] = useState(false);
   const [widgetPrefs, setWidgetPrefs] =
     useState<Record<string, boolean>>(defaultWidgetPrefs);
+  const [mapReady, setMapReady] = useState(0);
+  const mapContainerRef = useRef<HTMLDivElement | null>(null);
+  const leafletLibRef = useRef<typeof LeafletNS | null>(null);
+  const leafletMapRef = useRef<LeafletNS.Map | null>(null);
+  const markerLayerRef = useRef<LeafletNS.LayerGroup | null>(null);
+  const openItemRef = useRef<(id: number) => void>(() => {});
   const [assigneeFilter, setAssigneeFilter] = useState("all");
   const [categoryFilter, setCategoryFilter] = useState("all");
   const [templateFilter, setTemplateFilter] = useState("all");
@@ -706,6 +727,9 @@ export default function TaskBoard() {
         | "allocatedBudget"
         | "requiredBudget"
         | "dueDate"
+        | "location"
+        | "lat"
+        | "lng"
       >
     >
   ) {
@@ -742,6 +766,9 @@ export default function TaskBoard() {
         | "allocatedBudget"
         | "requiredBudget"
         | "dueDate"
+        | "location"
+        | "lat"
+        | "lng"
       >
     >
   ) {
@@ -1368,6 +1395,108 @@ export default function TaskBoard() {
     });
   }
 
+  // Keep the latest openItem reachable from Leaflet popup event handlers
+  // without re-creating the map on every render.
+  useEffect(() => {
+    openItemRef.current = openItem;
+  });
+
+  // Create the Leaflet map when entering the map view; destroy it on leave so
+  // the (conditionally rendered) container never holds a stale instance.
+  useEffect(() => {
+    if (viewMode !== "map") {
+      return;
+    }
+
+    let disposed = false;
+    const container = mapContainerRef.current;
+
+    const handlePopupClick = (event: Event) => {
+      const target = (event.target as HTMLElement).closest("[data-open-item]");
+      if (target) {
+        openItemRef.current(Number(target.getAttribute("data-open-item")));
+      }
+    };
+    container?.addEventListener("click", handlePopupClick);
+
+    void (async () => {
+      const leafletModule = await import("leaflet");
+      const L = (leafletModule.default ?? leafletModule) as typeof LeafletNS;
+
+      if (disposed || !mapContainerRef.current || leafletMapRef.current) {
+        return;
+      }
+
+      leafletLibRef.current = L;
+      const map = L.map(mapContainerRef.current).setView([36.2, 127.9], 7);
+      L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+        attribution:
+          '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+        maxZoom: 19,
+      }).addTo(map);
+      markerLayerRef.current = L.layerGroup().addTo(map);
+      leafletMapRef.current = map;
+      // Signal the marker effect that the (async-created) map now exists.
+      setMapReady((value) => value + 1);
+    })();
+
+    return () => {
+      disposed = true;
+      container?.removeEventListener("click", handlePopupClick);
+      leafletMapRef.current?.remove();
+      leafletMapRef.current = null;
+      markerLayerRef.current = null;
+    };
+  }, [viewMode]);
+
+  // Redraw markers whenever the filtered items change while the map is open.
+  useEffect(() => {
+    const L = leafletLibRef.current;
+    const layer = markerLayerRef.current;
+
+    if (viewMode !== "map" || !L || !layer || !leafletMapRef.current) {
+      return;
+    }
+
+    layer.clearLayers();
+
+    for (const item of visibleItems) {
+      if (item.lat === null || item.lng === null) {
+        continue;
+      }
+
+      const done = isItemDone(item);
+      const color = done
+        ? "#16a34a"
+        : itemHasOverdueDate(item)
+          ? "#dc2626"
+          : itemHasUrgentDate(item)
+            ? "#d97706"
+            : "#5b5bd6";
+      const marker = L.circleMarker([item.lat, item.lng], {
+        radius: 9,
+        weight: 2,
+        color: "#ffffff",
+        fillColor: color,
+        fillOpacity: 0.95,
+      }).addTo(layer);
+
+      const title = escapeHtml(item.title || "제목 없음");
+      const location = escapeHtml(item.location);
+      const assignee = escapeHtml(assigneeName(item.assignee));
+
+      marker.bindTooltip(item.title || "제목 없음");
+      marker.bindPopup(
+        `<div style="min-width:170px;font-size:13px;line-height:1.5">
+          <div style="font-weight:700">${title}</div>
+          ${location ? `<div style="color:#61667a">📍 ${location}</div>` : ""}
+          <div style="color:#61667a">${assignee} · ${itemProgress(item)}%</div>
+          <button type="button" data-open-item="${item.id}" style="margin-top:6px;padding:4px 10px;border-radius:8px;border:1px solid #5b5bd6;background:#eef0fd;color:#5b5bd6;font-weight:600;cursor:pointer">업무 열기</button>
+        </div>`
+      );
+    }
+  }, [viewMode, visibleItems, mapReady]);
+
   function progressColor(item: WorkflowItem) {
     if (itemHasOverdueDate(item)) {
       return "#d9452f";
@@ -1577,23 +1706,27 @@ export default function TaskBoard() {
               </button>
 
               <div className="tb-seg ml-auto">
-                {(["dashboard", "list", "grid", "gantt"] as const).map((mode) => (
-                  <button
-                    key={mode}
-                    type="button"
-                    onClick={() => setViewMode(mode)}
-                    data-active={viewMode === mode}
-                    className="tb-seg-btn"
-                  >
-                    {mode === "dashboard"
-                      ? "대시보드"
-                      : mode === "list"
-                        ? "목록"
-                        : mode === "grid"
-                          ? "표"
-                          : "간트"}
-                  </button>
-                ))}
+                {(["dashboard", "list", "map", "grid", "gantt"] as const).map(
+                  (mode) => (
+                    <button
+                      key={mode}
+                      type="button"
+                      onClick={() => setViewMode(mode)}
+                      data-active={viewMode === mode}
+                      className="tb-seg-btn"
+                    >
+                      {mode === "dashboard"
+                        ? "대시보드"
+                        : mode === "list"
+                          ? "목록"
+                          : mode === "map"
+                            ? "지도"
+                            : mode === "grid"
+                              ? "표"
+                              : "간트"}
+                    </button>
+                  )
+                )}
               </div>
             </div>
 
@@ -2234,6 +2367,11 @@ export default function TaskBoard() {
                               마감 {formatDay(item.dueDate)} · {shortDueLabel(item.dueDate)}
                             </span>
                           ) : null}
+                          {item.location ? (
+                            <span className="tb-badge tb-badge-muted">
+                              📍 {item.location}
+                            </span>
+                          ) : null}
                           {subProgress !== null ? (
                             <span>세부 {subProgress}%</span>
                           ) : null}
@@ -2562,6 +2700,49 @@ export default function TaskBoard() {
                                   className="tb-field"
                                 />
                               </label>
+                              <label className="block">
+                                <span className="tb-label">위치 (습지보호지역)</span>
+                                <input
+                                  list="wetland-presets"
+                                  value={item.location}
+                                  onChange={(event) =>
+                                    updateLocalItem(item.id, {
+                                      location: event.target.value,
+                                    })
+                                  }
+                                  onBlur={(event) => {
+                                    const value = event.target.value.trim();
+                                    const preset = WETLAND_PRESETS.find(
+                                      (candidate) => candidate.name === value
+                                    );
+                                    void updateItem(
+                                      item.id,
+                                      preset
+                                        ? {
+                                            location: preset.name,
+                                            lat: preset.lat,
+                                            lng: preset.lng,
+                                          }
+                                        : value
+                                          ? { location: value }
+                                          : { location: "", lat: null, lng: null }
+                                    );
+                                  }}
+                                  className="tb-field"
+                                  placeholder="습지보호지역 선택 또는 직접 입력"
+                                />
+                                {item.lat !== null && item.lng !== null ? (
+                                  <span className="mt-1 block text-[10px] text-[var(--text-faint)]">
+                                    좌표 {item.lat.toFixed(3)},{" "}
+                                    {item.lng.toFixed(3)} · 지도에 표시됨
+                                  </span>
+                                ) : item.location ? (
+                                  <span className="mt-1 block text-[10px] text-[var(--text-faint)]">
+                                    좌표 미지정 — 목록의 습지보호지역을 선택하면
+                                    자동 입력됩니다
+                                  </span>
+                                ) : null}
+                              </label>
                               <div className="grid grid-cols-2 gap-2">
                                 <label className="block">
                                   <span className="tb-label">편성 예산</span>
@@ -2722,6 +2903,116 @@ export default function TaskBoard() {
                   {adding ? "추가 중…" : "+ 추가"}
                 </button>
               </form>
+            </div>
+          </div>
+        ) : viewMode === "map" ? (
+          <div className="grid gap-4 lg:grid-cols-[1fr_300px]">
+            <div className="tb-card overflow-hidden">
+              <div
+                ref={mapContainerRef}
+                className="h-[68vh] min-h-[420px] w-full"
+              />
+            </div>
+
+            <div className="space-y-4">
+              <div className="tb-card p-4">
+                <h2 className="text-sm font-semibold">범례</h2>
+                <div className="mt-2.5 space-y-1.5 text-sm">
+                  {[
+                    { color: "#5b5bd6", label: "진행 중" },
+                    { color: "#d97706", label: "마감 임박 (D-3 이내)" },
+                    { color: "#dc2626", label: "지연" },
+                    { color: "#16a34a", label: "완료" },
+                  ].map((entry) => (
+                    <div key={entry.label} className="flex items-center gap-2">
+                      <span
+                        className="h-3 w-3 rounded-full border-2 border-white shadow"
+                        style={{ background: entry.color }}
+                      />
+                      <span className="text-[var(--text-muted)]">
+                        {entry.label}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div className="tb-card p-4">
+                <h2 className="text-sm font-semibold">
+                  지도 표시 업무{" "}
+                  <span className="text-[var(--text-faint)]">
+                    {
+                      visibleItems.filter(
+                        (item) => item.lat !== null && item.lng !== null
+                      ).length
+                    }
+                  </span>
+                </h2>
+                <div className="mt-2 max-h-[26vh] space-y-1 overflow-auto">
+                  {visibleItems
+                    .filter((item) => item.lat !== null && item.lng !== null)
+                    .map((item) => (
+                      <button
+                        key={item.id}
+                        type="button"
+                        onClick={() =>
+                          leafletMapRef.current?.setView(
+                            [item.lat as number, item.lng as number],
+                            11
+                          )
+                        }
+                        className="block w-full rounded-[var(--radius-sm)] px-2 py-1.5 text-left text-sm transition hover:bg-[var(--surface-3)]"
+                      >
+                        <div className="truncate font-medium">
+                          {item.title || "제목 없음"}
+                        </div>
+                        <div className="truncate text-[11px] text-[var(--text-faint)]">
+                          📍 {item.location || "이름 없는 위치"} ·{" "}
+                          {itemProgress(item)}%
+                        </div>
+                      </button>
+                    ))}
+                  {!visibleItems.some(
+                    (item) => item.lat !== null && item.lng !== null
+                  ) ? (
+                    <div className="py-4 text-sm text-[var(--text-faint)]">
+                      좌표가 지정된 업무가 없습니다.
+                    </div>
+                  ) : null}
+                </div>
+              </div>
+
+              <div className="tb-card p-4">
+                <h2 className="text-sm font-semibold">
+                  위치 미지정{" "}
+                  <span className="text-[var(--text-faint)]">
+                    {
+                      visibleItems.filter(
+                        (item) => item.lat === null || item.lng === null
+                      ).length
+                    }
+                  </span>
+                </h2>
+                <div className="mt-2 max-h-[22vh] space-y-1 overflow-auto">
+                  {visibleItems
+                    .filter((item) => item.lat === null || item.lng === null)
+                    .map((item) => (
+                      <button
+                        key={item.id}
+                        type="button"
+                        onClick={() => openItem(item.id)}
+                        className="block w-full truncate rounded-[var(--radius-sm)] px-2 py-1.5 text-left text-sm transition hover:bg-[var(--surface-3)]"
+                        title="클릭해 상세에서 위치를 지정하세요"
+                      >
+                        {item.title || "제목 없음"}
+                      </button>
+                    ))}
+                </div>
+                <p className="mt-2 text-[11px] leading-4 text-[var(--text-faint)]">
+                  업무를 클릭해 상세 패널의 &lsquo;위치&rsquo;에서 습지보호지역을
+                  선택하면 지도에 표시됩니다.
+                </p>
+              </div>
             </div>
           </div>
         ) : viewMode === "grid" ? (
@@ -3830,6 +4121,12 @@ export default function TaskBoard() {
           </div>
         </div>
       ) : null}
+
+      <datalist id="wetland-presets">
+        {WETLAND_PRESETS.map((preset) => (
+          <option key={preset.name} value={preset.name} />
+        ))}
+      </datalist>
     </main>
   );
 }
