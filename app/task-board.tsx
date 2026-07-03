@@ -195,6 +195,9 @@ export default function TaskBoard() {
   const [linkDrafts, setLinkDrafts] = useState<
     Record<number, { title: string; url: string }>
   >({});
+  const [duplicateTarget, setDuplicateTarget] = useState<WorkflowItem | null>(
+    null
+  );
   const [reportOpen, setReportOpen] = useState(false);
   const [reportMonth, setReportMonth] = useState(() =>
     isoDate(new Date()).slice(0, 7)
@@ -843,6 +846,18 @@ export default function TaskBoard() {
         inMonth(row.item.createdAt.slice(0, 10))
       ).length,
       overdueNow: itemRows.filter((row) => row.status === "지연").length,
+      statusCounts: (
+        [
+          ["완료", "#16a34a"],
+          ["진행", "#5b5bd6"],
+          ["임박", "#d97706"],
+          ["지연", "#dc2626"],
+        ] as const
+      ).map(([label, color]) => ({
+        label,
+        color,
+        value: itemRows.filter((row) => row.status === label).length,
+      })),
       assigneeRows,
       itemRows,
     };
@@ -1372,8 +1387,9 @@ export default function TaskBoard() {
     }
   }
 
-  async function duplicateItem(item: WorkflowItem) {
+  async function duplicateItem(item: WorkflowItem, keepSchedule: boolean) {
     setError("");
+    setDuplicateTarget(null);
     setSavingItemIds((current) => new Set(current).add(item.id));
 
     try {
@@ -1384,6 +1400,7 @@ export default function TaskBoard() {
           action: "duplicate-item",
           actor: currentActor,
           itemId: item.id,
+          keepSchedule,
         }),
       });
       const data = (await response.json()) as TaskResponse;
@@ -2127,7 +2144,7 @@ export default function TaskBoard() {
               <select
                 value={filter}
                 onChange={(event) => setFilter(event.target.value as TaskFilter)}
-                className="tb-field w-auto"
+                className="tb-field hidden w-auto md:block"
                 title="상태"
               >
                 {filters.map((option) => (
@@ -2140,7 +2157,7 @@ export default function TaskBoard() {
               <select
                 value={assigneeFilter}
                 onChange={(event) => setAssigneeFilter(event.target.value)}
-                className="tb-field w-auto"
+                className="tb-field hidden w-auto md:block"
                 title="담당자"
               >
                 <option value="all">모든 담당자</option>
@@ -2154,7 +2171,7 @@ export default function TaskBoard() {
               <select
                 value={sortMode}
                 onChange={(event) => setSortMode(event.target.value as SortMode)}
-                className="tb-field w-auto"
+                className="tb-field hidden w-auto md:block"
                 title="정렬"
               >
                 {sortOptions.map((option) => (
@@ -2185,10 +2202,14 @@ export default function TaskBoard() {
                 </svg>
                 필터
                 {(() => {
-                  const n =
-                    [templateFilter, categoryFilter, stageFilter].filter(
-                      (value) => value !== "all"
-                    ).length + (dueFilter !== "all" ? 1 : 0);
+                  const n = [
+                    templateFilter,
+                    categoryFilter,
+                    stageFilter,
+                    dueFilter,
+                    filter,
+                    assigneeFilter,
+                  ].filter((value) => value !== "all").length;
                   return n ? (
                     <span className="tb-badge tb-badge-muted">{n}</span>
                   ) : null;
@@ -2225,7 +2246,7 @@ export default function TaskBoard() {
               <button
                 type="button"
                 onClick={() => setReportOpen(true)}
-                className="tb-btn"
+                className="tb-btn hidden md:inline-flex"
                 title="월간 보고서 (CSV/인쇄)"
               >
                 <svg
@@ -2249,7 +2270,7 @@ export default function TaskBoard() {
               <button
                 type="button"
                 onClick={() => openTemplateEditor(null)}
-                className="tb-btn"
+                className="tb-btn hidden md:inline-flex"
                 title="업무 유형과 단계 관리"
               >
                 <svg
@@ -2294,7 +2315,7 @@ export default function TaskBoard() {
             </div>
 
             {showFilters ? (
-              <div className="flex flex-wrap items-center gap-2 rounded-[var(--radius)] border border-[var(--border)] bg-[var(--surface-2)] p-2.5">
+              <div className="hidden flex-wrap items-center gap-2 rounded-[var(--radius)] border border-[var(--border)] bg-[var(--surface-2)] p-2.5 md:flex">
                 <select
                   value={templateFilter}
                   onChange={(event) => {
@@ -3020,9 +3041,9 @@ export default function TaskBoard() {
                         <button
                           type="button"
                           disabled={savingItemIds.has(item.id)}
-                          onClick={() => void duplicateItem(item)}
+                          onClick={() => setDuplicateTarget(item)}
                           className="tb-iconbtn h-8 w-8 disabled:cursor-not-allowed disabled:opacity-40"
-                          title="업무 복제 (단계·체크리스트 구조 복사, 일정·진행은 초기화)"
+                          title="업무 복제"
                         >
                           ⧉
                         </button>
@@ -5176,6 +5197,243 @@ export default function TaskBoard() {
         </div>
       ) : null}
 
+      {showFilters ? (
+        <div
+          className="fixed inset-0 z-50 md:hidden"
+          onClick={() => setShowFilters(false)}
+        >
+          <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" />
+          <div
+            className="absolute inset-x-0 bottom-0 max-h-[82vh] overflow-auto rounded-t-2xl border-t border-[var(--border)] bg-[var(--surface)] p-4 pb-6 shadow-[var(--shadow-lg)]"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="mx-auto mb-3 h-1 w-10 rounded-full bg-[var(--border-strong)]" />
+            <div className="mb-3 flex items-center justify-between">
+              <h2 className="text-base font-semibold">필터 · 도구</h2>
+              <button
+                type="button"
+                onClick={() => setShowFilters(false)}
+                className="tb-iconbtn h-8 w-8"
+              >
+                ×
+              </button>
+            </div>
+
+            <div className="grid grid-cols-2 gap-2.5">
+              <label className="block">
+                <span className="tb-label">상태</span>
+                <select
+                  value={filter}
+                  onChange={(event) =>
+                    setFilter(event.target.value as TaskFilter)
+                  }
+                  className="tb-field"
+                >
+                  {filters.map((option) => (
+                    <option key={option.key} value={option.key}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="block">
+                <span className="tb-label">담당자</span>
+                <select
+                  value={assigneeFilter}
+                  onChange={(event) => setAssigneeFilter(event.target.value)}
+                  className="tb-field"
+                >
+                  <option value="all">모든 담당자</option>
+                  {assignees.map((assignee) => (
+                    <option key={assignee} value={assignee}>
+                      {assignee}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="block">
+                <span className="tb-label">정렬</span>
+                <select
+                  value={sortMode}
+                  onChange={(event) =>
+                    setSortMode(event.target.value as SortMode)
+                  }
+                  className="tb-field"
+                >
+                  {sortOptions.map((option) => (
+                    <option key={option.key} value={option.key}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="block">
+                <span className="tb-label">유형</span>
+                <select
+                  value={templateFilter}
+                  onChange={(event) => {
+                    const value = event.target.value;
+                    setTemplateFilter(value);
+                    setStageFilter("all");
+                    if (value !== "all") {
+                      setNewTemplateKey(value);
+                    }
+                  }}
+                  className="tb-field"
+                >
+                  <option value="all">모든 유형</option>
+                  {templates.map((template) => (
+                    <option key={template.key} value={template.key}>
+                      {template.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="block">
+                <span className="tb-label">대분류</span>
+                <select
+                  value={categoryFilter}
+                  onChange={(event) => setCategoryFilter(event.target.value)}
+                  className="tb-field"
+                >
+                  <option value="all">모든 대분류</option>
+                  {categories.map((category) => (
+                    <option key={category} value={category}>
+                      {category}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="block">
+                <span className="tb-label">단계</span>
+                <select
+                  value={stageFilter}
+                  onChange={(event) => setStageFilter(event.target.value)}
+                  className="tb-field"
+                >
+                  <option value="all">모든 단계</option>
+                  {stages.map((stage) => (
+                    <option key={stage.stageKey} value={stage.stageKey}>
+                      {stage.title}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="col-span-2 block">
+                <span className="tb-label">일정</span>
+                <select
+                  value={dueFilter}
+                  onChange={(event) =>
+                    setDueFilter(event.target.value as DueFilter)
+                  }
+                  className="tb-field"
+                >
+                  {dueFilters.map((option) => (
+                    <option key={option.key} value={option.key}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+
+            <div className="mt-4 grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setShowFilters(false);
+                  setReportOpen(true);
+                }}
+                className="tb-btn"
+              >
+                📄 월간 보고서
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowFilters(false);
+                  openTemplateEditor(null);
+                }}
+                className="tb-btn"
+              >
+                ✏️ 유형·단계 관리
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setFilter("all");
+                  setAssigneeFilter("all");
+                  setSortMode("manual");
+                  setTemplateFilter("all");
+                  setCategoryFilter("all");
+                  setStageFilter("all");
+                  setDueFilter("all");
+                }}
+                className="tb-btn"
+              >
+                초기화
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowFilters(false)}
+                className="tb-btn tb-btn-primary"
+              >
+                적용
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {duplicateTarget ? (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4 backdrop-blur-sm"
+          onClick={() => setDuplicateTarget(null)}
+        >
+          <div
+            className="tb-card w-full max-w-[380px] shadow-[var(--shadow-lg)]"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="border-b border-[var(--border)] px-5 py-3.5">
+              <h2 className="text-base font-semibold">업무 복제</h2>
+              <p className="mt-1 text-xs text-[var(--text-muted)]">
+                &lsquo;{duplicateTarget.title}&rsquo;의 단계·체크리스트 구조를
+                복사합니다. 진행 상태는 항상 초기화됩니다.
+              </p>
+            </div>
+            <div className="space-y-2 p-5">
+              <button
+                type="button"
+                onClick={() => void duplicateItem(duplicateTarget, false)}
+                className="tb-btn tb-btn-primary w-full"
+              >
+                일정 초기화 복제
+                <span className="text-xs font-normal opacity-80">
+                  (마감·목표일 비움)
+                </span>
+              </button>
+              <button
+                type="button"
+                onClick={() => void duplicateItem(duplicateTarget, true)}
+                className="tb-btn w-full"
+              >
+                일정 유지 복제
+                <span className="text-xs font-normal text-[var(--text-faint)]">
+                  (마감·목표일 그대로)
+                </span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setDuplicateTarget(null)}
+                className="tb-btn w-full"
+              >
+                취소
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
       {reportOpen ? (
         <div
           className="fixed inset-0 z-50 flex items-start justify-center overflow-auto bg-black/40 p-4 backdrop-blur-sm"
@@ -5249,6 +5507,151 @@ export default function TaskBoard() {
                   <div className="tb-stat-value text-[var(--danger)]">
                     {report.overdueNow}
                   </div>
+                </div>
+              </div>
+
+              <div className="mb-6 grid gap-4 sm:grid-cols-2">
+                <div className="rounded-[var(--radius)] border border-[var(--border)] p-4">
+                  <div className="mb-2 text-sm font-semibold">상태 분포</div>
+                  <div className="flex items-center gap-4">
+                    {(() => {
+                      const total =
+                        report.statusCounts.reduce(
+                          (sum, entry) => sum + entry.value,
+                          0
+                        ) || 1;
+                      const R = 34;
+                      const C = 2 * Math.PI * R;
+                      let offset = 0;
+
+                      return (
+                        <svg
+                          width="96"
+                          height="96"
+                          viewBox="0 0 96 96"
+                          role="img"
+                          aria-label="상태 분포 도넛 차트"
+                        >
+                          <circle
+                            cx="48"
+                            cy="48"
+                            r={R}
+                            fill="none"
+                            stroke="#eef0f5"
+                            strokeWidth="14"
+                          />
+                          {report.statusCounts
+                            .filter((entry) => entry.value > 0)
+                            .map((entry) => {
+                              const length = (entry.value / total) * C;
+                              const segment = (
+                                <circle
+                                  key={entry.label}
+                                  cx="48"
+                                  cy="48"
+                                  r={R}
+                                  fill="none"
+                                  stroke={entry.color}
+                                  strokeWidth="14"
+                                  strokeDasharray={`${length} ${C - length}`}
+                                  strokeDashoffset={-offset}
+                                  transform="rotate(-90 48 48)"
+                                />
+                              );
+                              offset += length;
+                              return segment;
+                            })}
+                          <text
+                            x="48"
+                            y="52"
+                            textAnchor="middle"
+                            fontSize="16"
+                            fontWeight="700"
+                            fill="#1a1a2e"
+                          >
+                            {total}
+                          </text>
+                        </svg>
+                      );
+                    })()}
+                    <div className="flex-1 space-y-1">
+                      {report.statusCounts.map((entry) => (
+                        <div
+                          key={entry.label}
+                          className="flex items-center gap-2 text-xs"
+                        >
+                          <span
+                            className="h-2.5 w-2.5 rounded-full"
+                            style={{ background: entry.color }}
+                          />
+                          <span className="flex-1 text-[var(--text-muted)]">
+                            {entry.label}
+                          </span>
+                          <span className="font-semibold">{entry.value}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="rounded-[var(--radius)] border border-[var(--border)] p-4">
+                  <div className="mb-2 text-sm font-semibold">
+                    담당자별 업무 수
+                  </div>
+                  {(() => {
+                    const rows = report.assigneeRows.slice(0, 6);
+                    const maxCount = Math.max(
+                      ...rows.map((row) => row.count),
+                      1
+                    );
+                    const rowH = 24;
+
+                    return (
+                      <svg
+                        width="100%"
+                        height={rows.length * rowH || rowH}
+                        viewBox={`0 0 280 ${rows.length * rowH || rowH}`}
+                        preserveAspectRatio="xMinYMin meet"
+                        role="img"
+                        aria-label="담당자별 업무 수 막대 차트"
+                      >
+                        {rows.map((row, index) => (
+                          <g
+                            key={row.assignee}
+                            transform={`translate(0 ${index * rowH})`}
+                          >
+                            <text
+                              x="0"
+                              y="15"
+                              fontSize="11"
+                              fill="#61667a"
+                            >
+                              {row.assignee.length > 6
+                                ? `${row.assignee.slice(0, 6)}…`
+                                : row.assignee}
+                            </text>
+                            <rect
+                              x="76"
+                              y="5"
+                              width={(row.count / maxCount) * 170}
+                              height="12"
+                              rx="6"
+                              fill="#5b5bd6"
+                            />
+                            <text
+                              x={80 + (row.count / maxCount) * 170}
+                              y="15"
+                              fontSize="11"
+                              fontWeight="700"
+                              fill="#1a1a2e"
+                            >
+                              {row.count}
+                            </text>
+                          </g>
+                        ))}
+                      </svg>
+                    );
+                  })()}
                 </div>
               </div>
 

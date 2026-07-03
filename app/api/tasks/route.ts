@@ -1307,6 +1307,7 @@ export async function POST(request: Request) {
       lng?: number | string | null;
       templateKey?: string;
       blockers?: string;
+      keepSchedule?: boolean;
     };
     const actor = getActor(request, payload.actor);
     const d1 = getD1();
@@ -1447,15 +1448,17 @@ export async function POST(request: Request) {
         .prepare("SELECT MAX(position) AS position FROM workflow_items")
         .first<{ position: number | null }>();
 
-      // Copy the structure (steps, subtasks, info) but reset schedule and
-      // progress — a duplicate is a fresh run of the same work.
+      // Copy the structure (steps, subtasks, info); progress always resets —
+      // a duplicate is a fresh run. keepSchedule chooses whether the due
+      // dates come along or start blank.
+      const keepSchedule = payload.keepSchedule === true;
       const insertResult = await d1
         .prepare(`INSERT INTO workflow_items (
           title, assignee, category, memo,
           allocated_budget, required_budget, due_date,
           location, lat, lng, links,
           template_key, position, updated_by, updated_at, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
         .bind(
           `${source.title} (복사)`.slice(0, 120),
           source.assignee,
@@ -1463,6 +1466,7 @@ export async function POST(request: Request) {
           source.memo,
           source.allocatedBudget,
           source.requiredBudget,
+          keepSchedule ? source.dueDate : null,
           source.location,
           source.lat,
           source.lng,
@@ -1482,7 +1486,7 @@ export async function POST(request: Request) {
             item_id, stage_key, title, description, phase_group, position,
             progress_value, status, due_date, completed_at,
             updated_by, updated_at, created_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, 'todo', NULL, NULL, ?, ?, ?)`)
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, 'todo', ?, NULL, ?, ?, ?)`)
           .bind(
             newItemId,
             step.stageKey,
@@ -1491,6 +1495,7 @@ export async function POST(request: Request) {
             step.phaseGroup,
             step.position,
             step.progressValue,
+            keepSchedule ? step.dueDate : null,
             actor,
             now,
             now
@@ -1503,8 +1508,16 @@ export async function POST(request: Request) {
             .prepare(`INSERT INTO workflow_subtasks (
               item_id, title, status, due_date, blockers, position,
               updated_by, updated_at, created_at
-            ) VALUES (?, ?, 'todo', NULL, '', ?, ?, ?, ?)`)
-            .bind(newItemId, subtask.title, subtask.position, actor, now, now)
+            ) VALUES (?, ?, 'todo', ?, '', ?, ?, ?, ?)`)
+            .bind(
+              newItemId,
+              subtask.title,
+              keepSchedule ? subtask.dueDate : null,
+              subtask.position,
+              actor,
+              now,
+              now
+            )
         );
       }
 

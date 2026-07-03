@@ -78,6 +78,21 @@ select {
   background: var(--accent-soft-2);
 }
 
+/* Compact header controls on phones */
+@media (max-width: 640px) {
+  .tb-seg-btn {
+    padding: 5px 9px;
+    font-size: 12px;
+  }
+  .tb-stat {
+    min-width: 84px;
+    padding: 8px 10px;
+  }
+  .tb-stat-value {
+    font-size: 17px;
+  }
+}
+
 /* Print: only the report area (#report-print) is rendered on paper */
 @media print {
   body * {
