@@ -1,10 +1,12 @@
 import { readFile, writeFile } from "node:fs/promises";
 
 const configPath = new URL("../dist/server/wrangler.json", import.meta.url);
+// `||` (not `??`): CI passes unset secrets as EMPTY strings, which must
+// still fall back to the defaults.
 const databaseName =
-  process.env.CLOUDFLARE_D1_DATABASE_NAME ?? "team-progress-checklist-db";
+  process.env.CLOUDFLARE_D1_DATABASE_NAME || "team-progress-checklist-db";
 const databaseId =
-  process.env.CLOUDFLARE_D1_DATABASE_ID ??
+  process.env.CLOUDFLARE_D1_DATABASE_ID ||
   "f6269837-168c-4774-922f-b04ca08eb9cf";
 
 if (!databaseId) {
@@ -20,7 +22,7 @@ if (!databaseId) {
 }
 
 const config = JSON.parse(await readFile(configPath, "utf8"));
-config.name = process.env.CLOUDFLARE_WORKER_NAME ?? "team-progress-checklist";
+config.name = process.env.CLOUDFLARE_WORKER_NAME || "team-progress-checklist";
 config.topLevelName = config.name;
 config.d1_databases = [
   {
@@ -31,7 +33,7 @@ config.d1_databases = [
 ];
 // Daily deadline-alert webhook: 00:00 UTC = 09:00 KST, weekdays.
 config.triggers = {
-  crons: [process.env.CLOUDFLARE_ALERT_CRON ?? "0 0 * * 1-5"],
+  crons: [process.env.CLOUDFLARE_ALERT_CRON || "0 0 * * 1-5"],
 };
 
 await writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`);
