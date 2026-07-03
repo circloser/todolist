@@ -1429,6 +1429,107 @@ export async function POST(request: Request) {
       return Response.json({ sent: total, history: await getHistory() });
     }
 
+    if (payload.action === "duplicate-item") {
+      const sourceId = Number(payload.itemId);
+
+      if (!Number.isFinite(sourceId)) {
+        return Response.json({ error: "복제할 업무가 필요합니다." }, { status: 400 });
+      }
+
+      const source = await getItem(sourceId);
+
+      if (!source) {
+        return Response.json({ error: "업무를 찾을 수 없습니다." }, { status: 404 });
+      }
+
+      const now = new Date().toISOString();
+      const last = await d1
+        .prepare("SELECT MAX(position) AS position FROM workflow_items")
+        .first<{ position: number | null }>();
+
+      // Copy the structure (steps, subtasks, info) but reset schedule and
+      // progress — a duplicate is a fresh run of the same work.
+      const insertResult = await d1
+        .prepare(`INSERT INTO workflow_items (
+          title, assignee, category, memo,
+          allocated_budget, required_budget, due_date,
+          location, lat, lng, links,
+          template_key, position, updated_by, updated_at, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+        .bind(
+          `${source.title} (복사)`.slice(0, 120),
+          source.assignee,
+          source.category,
+          source.memo,
+          source.allocatedBudget,
+          source.requiredBudget,
+          source.location,
+          source.lat,
+          source.lng,
+          JSON.stringify(source.links ?? []),
+          source.templateKey,
+          Number(last?.position ?? 0) + 1,
+          actor,
+          now,
+          now
+        )
+        .run();
+      const newItemId = Number(insertResult.meta.last_row_id);
+
+      const statements: D1PreparedStatement[] = source.steps.map((step) =>
+        d1
+          .prepare(`INSERT INTO workflow_steps (
+            item_id, stage_key, title, description, phase_group, position,
+            progress_value, status, due_date, completed_at,
+            updated_by, updated_at, created_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, 'todo', NULL, NULL, ?, ?, ?)`)
+          .bind(
+            newItemId,
+            step.stageKey,
+            step.title,
+            step.description,
+            step.phaseGroup,
+            step.position,
+            step.progressValue,
+            actor,
+            now,
+            now
+          )
+      );
+
+      for (const subtask of source.subtasks) {
+        statements.push(
+          d1
+            .prepare(`INSERT INTO workflow_subtasks (
+              item_id, title, status, due_date, blockers, position,
+              updated_by, updated_at, created_at
+            ) VALUES (?, ?, 'todo', NULL, '', ?, ?, ?, ?)`)
+            .bind(newItemId, subtask.title, subtask.position, actor, now, now)
+        );
+      }
+
+      if (statements.length) {
+        await d1.batch(statements);
+      }
+
+      await logHistory({
+        itemId: newItemId,
+        entityType: "item",
+        entityId: newItemId,
+        action: "duplicate",
+        summary: `${actor}님이 '${source.title}' 업무를 복제함`,
+        actor,
+      });
+
+      return Response.json(
+        {
+          item: await getItem(newItemId),
+          history: await getHistory(),
+        },
+        { status: 201 }
+      );
+    }
+
     if (payload.action === "create-subtask") {
       const itemId = Number(payload.itemId);
       const title = payload.title?.trim().slice(0, 160) ?? "";

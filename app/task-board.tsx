@@ -195,6 +195,10 @@ export default function TaskBoard() {
   const [linkDrafts, setLinkDrafts] = useState<
     Record<number, { title: string; url: string }>
   >({});
+  const [reportOpen, setReportOpen] = useState(false);
+  const [reportMonth, setReportMonth] = useState(() =>
+    isoDate(new Date()).slice(0, 7)
+  );
   const [webhookUrl, setWebhookUrl] = useState("");
   const [webhookEnabled, setWebhookEnabled] = useState(false);
   const [savingWebhook, setSavingWebhook] = useState(false);
@@ -777,6 +781,110 @@ export default function TaskBoard() {
     };
   }, [items]);
 
+  // Monthly report: everything is derived client-side from loaded items.
+  const report = useMemo(() => {
+    const month = reportMonth;
+    const inMonth = (iso?: string | null) => !!iso && iso.startsWith(month);
+
+    const itemRows = items.map((item) => {
+      const done = isItemDone(item);
+
+      return {
+        item,
+        progress: itemProgress(item),
+        done,
+        completedSteps: item.steps.filter((step) =>
+          inMonth(step.completedAt?.slice(0, 10))
+        ).length,
+        typeName: templatesByKey.get(item.templateKey)?.name ?? item.category,
+        status: done
+          ? "완료"
+          : itemHasOverdueDate(item)
+            ? "지연"
+            : itemHasUrgentDate(item)
+              ? "임박"
+              : "진행",
+      };
+    });
+
+    const dueRows = itemRows.filter((row) => inMonth(row.item.dueDate));
+    const assignees = [
+      ...new Set(itemRows.map((row) => assigneeName(row.item.assignee))),
+    ];
+    const assigneeRows = assignees
+      .map((assignee) => {
+        const rows = itemRows.filter(
+          (row) => assigneeName(row.item.assignee) === assignee
+        );
+
+        return {
+          assignee,
+          count: rows.length,
+          avgProgress: Math.round(
+            rows.reduce((sum, row) => sum + row.progress, 0) / rows.length
+          ),
+          completedSteps: rows.reduce(
+            (sum, row) => sum + row.completedSteps,
+            0
+          ),
+        };
+      })
+      .sort((first, second) => second.count - first.count);
+
+    return {
+      month,
+      stepsCompletedInMonth: itemRows.reduce(
+        (sum, row) => sum + row.completedSteps,
+        0
+      ),
+      dueInMonth: dueRows.length,
+      dueInMonthDone: dueRows.filter((row) => row.done).length,
+      createdInMonth: itemRows.filter((row) =>
+        inMonth(row.item.createdAt.slice(0, 10))
+      ).length,
+      overdueNow: itemRows.filter((row) => row.status === "지연").length,
+      assigneeRows,
+      itemRows,
+    };
+  }, [items, reportMonth, templatesByKey]);
+
+  function downloadReportCsv() {
+    const rows: string[][] = [
+      [`업무 보고서`, `${report.month}`, organizationName, boardTitle],
+      [],
+      ["요약"],
+      ["이번 달 완료 단계", String(report.stepsCompletedInMonth)],
+      [
+        "이번 달 마감 업무",
+        `${report.dueInMonthDone}/${report.dueInMonth} 완료`,
+      ],
+      ["이번 달 신규 업무", String(report.createdInMonth)],
+      ["현재 지연 업무", String(report.overdueNow)],
+      [],
+      ["업무명", "유형", "담당", "진행률(%)", "마감일", "상태", "이달 완료 단계"],
+      ...report.itemRows.map((row) => [
+        row.item.title,
+        row.typeName,
+        assigneeName(row.item.assignee),
+        String(row.progress),
+        row.item.dueDate ?? "",
+        row.status,
+        String(row.completedSteps),
+      ]),
+    ];
+    const escapeCell = (value: string) =>
+      /[",\n]/.test(value) ? `"${value.replaceAll('"', '""')}"` : value;
+    // UTF-8 BOM so Excel opens Korean text correctly.
+    const csv =
+      "﻿" + rows.map((row) => row.map(escapeCell).join(",")).join("\r\n");
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+    const link = document.createElement("a");
+    link.href = URL.createObjectURL(blob);
+    link.download = `업무보고서_${report.month}.csv`;
+    link.click();
+    URL.revokeObjectURL(link.href);
+  }
+
   // Date-axis timeline for the gantt view: range spans every known date
   // (creation, item due, step due) plus today, with light padding.
   const gantt = useMemo(() => {
@@ -1261,6 +1369,44 @@ export default function TaskBoard() {
           ? saveError.message
           : "담당자 색상을 저장하지 못했습니다."
       );
+    }
+  }
+
+  async function duplicateItem(item: WorkflowItem) {
+    setError("");
+    setSavingItemIds((current) => new Set(current).add(item.id));
+
+    try {
+      const response = await fetch("/api/tasks", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "duplicate-item",
+          actor: currentActor,
+          itemId: item.id,
+        }),
+      });
+      const data = (await response.json()) as TaskResponse;
+
+      if (!response.ok || !data.item) {
+        throw new Error(data.error ?? "업무를 복제하지 못했습니다.");
+      }
+
+      setItems((current) => [...current, data.item!]);
+      setHistory(data.history ?? history);
+      openItem(data.item.id);
+    } catch (duplicateError) {
+      setError(
+        duplicateError instanceof Error
+          ? duplicateError.message
+          : "업무를 복제하지 못했습니다."
+      );
+    } finally {
+      setSavingItemIds((current) => {
+        const next = new Set(current);
+        next.delete(item.id);
+        return next;
+      });
     }
   }
 
@@ -1902,7 +2048,9 @@ export default function TaskBoard() {
 
   return (
     <main className="min-h-dvh">
-      <header className="sticky top-0 z-30 border-b border-[var(--border)] bg-[var(--surface)]/90 shadow-[var(--shadow-xs)] backdrop-blur">
+      {/* On phones the full header would cover most of the viewport, so it
+          only sticks from lg upward. */}
+      <header className="z-30 border-b border-[var(--border)] bg-[var(--surface)]/90 shadow-[var(--shadow-xs)] backdrop-blur lg:sticky lg:top-0">
         <div className="mx-auto flex max-w-[1600px] flex-col gap-4 px-4 py-4 sm:px-6 lg:px-8">
           <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
             <div className="min-w-0">
@@ -2076,6 +2224,30 @@ export default function TaskBoard() {
 
               <button
                 type="button"
+                onClick={() => setReportOpen(true)}
+                className="tb-btn"
+                title="월간 보고서 (CSV/인쇄)"
+              >
+                <svg
+                  width="15"
+                  height="15"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                >
+                  <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                  <path d="M14 2v6h6" />
+                  <path d="M16 13H8" />
+                  <path d="M16 17H8" />
+                </svg>
+                보고서
+              </button>
+
+              <button
+                type="button"
                 onClick={() => openTemplateEditor(null)}
                 className="tb-btn"
                 title="업무 유형과 단계 관리"
@@ -2201,7 +2373,7 @@ export default function TaskBoard() {
             ) : null}
 
             {bottlenecks.length || assigneeStats.length ? (
-              <div className="flex flex-wrap items-center gap-2">
+              <div className="hidden flex-wrap items-center gap-2 md:flex">
                 {savingOrder ? (
                   <span className="text-xs font-medium text-[var(--accent)]">
                     순서 저장 중…
@@ -2844,6 +3016,15 @@ export default function TaskBoard() {
                           title="펼치기"
                         >
                           {expanded ? "▴" : "▾"}
+                        </button>
+                        <button
+                          type="button"
+                          disabled={savingItemIds.has(item.id)}
+                          onClick={() => void duplicateItem(item)}
+                          className="tb-iconbtn h-8 w-8 disabled:cursor-not-allowed disabled:opacity-40"
+                          title="업무 복제 (단계·체크리스트 구조 복사, 일정·진행은 초기화)"
+                        >
+                          ⧉
                         </button>
                         <button
                           type="button"
@@ -4991,6 +5172,152 @@ export default function TaskBoard() {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      ) : null}
+
+      {reportOpen ? (
+        <div
+          className="fixed inset-0 z-50 flex items-start justify-center overflow-auto bg-black/40 p-4 backdrop-blur-sm"
+          onClick={() => setReportOpen(false)}
+        >
+          <div
+            className="tb-card my-6 w-full max-w-[820px] shadow-[var(--shadow-lg)]"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="flex flex-wrap items-center gap-2 border-b border-[var(--border)] px-5 py-3.5">
+              <h2 className="text-base font-semibold">월간 보고서</h2>
+              <input
+                type="month"
+                value={reportMonth}
+                onChange={(event) => setReportMonth(event.target.value)}
+                className="tb-field w-auto px-2 py-1.5 text-sm"
+              />
+              <div className="ml-auto flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={downloadReportCsv}
+                  className="tb-btn text-sm"
+                >
+                  CSV 다운로드
+                </button>
+                <button
+                  type="button"
+                  onClick={() => window.print()}
+                  className="tb-btn tb-btn-primary text-sm"
+                >
+                  인쇄 / PDF
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setReportOpen(false)}
+                  className="tb-iconbtn h-8 w-8"
+                >
+                  ×
+                </button>
+              </div>
+            </div>
+
+            <div id="report-print" className="max-h-[74vh] overflow-auto p-6">
+              <div className="mb-1 text-lg font-bold">
+                {organizationName} 업무 보고서 — {report.month}
+              </div>
+              <div className="mb-5 text-xs text-[var(--text-faint)]">
+                {boardTitle} · 생성 {formatDate(new Date().toISOString())} ·{" "}
+                {currentActor}
+              </div>
+
+              <div className="mb-6 grid grid-cols-2 gap-3 sm:grid-cols-4">
+                <div className="tb-stat">
+                  <div className="tb-stat-label">이달 완료 단계</div>
+                  <div className="tb-stat-value text-[var(--success)]">
+                    {report.stepsCompletedInMonth}
+                  </div>
+                </div>
+                <div className="tb-stat">
+                  <div className="tb-stat-label">이달 마감 업무</div>
+                  <div className="tb-stat-value">
+                    {report.dueInMonthDone}/{report.dueInMonth}
+                  </div>
+                </div>
+                <div className="tb-stat">
+                  <div className="tb-stat-label">이달 신규 업무</div>
+                  <div className="tb-stat-value">{report.createdInMonth}</div>
+                </div>
+                <div className="tb-stat">
+                  <div className="tb-stat-label">현재 지연</div>
+                  <div className="tb-stat-value text-[var(--danger)]">
+                    {report.overdueNow}
+                  </div>
+                </div>
+              </div>
+
+              <div className="mb-2 text-sm font-semibold">담당자별 현황</div>
+              <table className="tb-table mb-6 text-xs">
+                <thead>
+                  <tr className="text-left">
+                    <th className="px-3 py-2">담당자</th>
+                    <th className="px-3 py-2 text-right">업무 수</th>
+                    <th className="px-3 py-2 text-right">평균 진행률</th>
+                    <th className="px-3 py-2 text-right">이달 완료 단계</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {report.assigneeRows.map((row) => (
+                    <tr key={row.assignee}>
+                      <td className="px-3 py-2">{row.assignee}</td>
+                      <td className="px-3 py-2 text-right">{row.count}</td>
+                      <td className="px-3 py-2 text-right">{row.avgProgress}%</td>
+                      <td className="px-3 py-2 text-right">
+                        {row.completedSteps}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+
+              <div className="mb-2 text-sm font-semibold">업무 목록</div>
+              <table className="tb-table text-xs">
+                <thead>
+                  <tr className="text-left">
+                    <th className="px-3 py-2">업무명</th>
+                    <th className="px-3 py-2">유형</th>
+                    <th className="px-3 py-2">담당</th>
+                    <th className="px-3 py-2 text-right">진행률</th>
+                    <th className="px-3 py-2">마감일</th>
+                    <th className="px-3 py-2">상태</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {report.itemRows.map((row) => (
+                    <tr key={row.item.id}>
+                      <td className="px-3 py-2">{row.item.title}</td>
+                      <td className="px-3 py-2">{row.typeName}</td>
+                      <td className="px-3 py-2">
+                        {assigneeName(row.item.assignee)}
+                      </td>
+                      <td className="px-3 py-2 text-right">{row.progress}%</td>
+                      <td className="px-3 py-2">{row.item.dueDate ?? "—"}</td>
+                      <td className="px-3 py-2">
+                        <span
+                          className={`tb-badge ${
+                            row.status === "완료"
+                              ? "tb-badge-success"
+                              : row.status === "지연"
+                                ? "tb-badge-danger"
+                                : row.status === "임박"
+                                  ? "tb-badge-warning"
+                                  : "tb-badge-muted"
+                          }`}
+                        >
+                          {row.status}
+                        </span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           </div>
         </div>
       ) : null}

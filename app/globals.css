@@ -78,6 +78,26 @@ select {
   background: var(--accent-soft-2);
 }
 
+/* Print: only the report area (#report-print) is rendered on paper */
+@media print {
+  body * {
+    visibility: hidden;
+  }
+  #report-print,
+  #report-print * {
+    visibility: visible;
+  }
+  #report-print {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+    max-height: none !important;
+    overflow: visible !important;
+    padding: 0 !important;
+  }
+}
+
 /* Refined scrollbars */
 * {
   scrollbar-width: thin;
