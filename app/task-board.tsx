@@ -45,6 +45,7 @@ import {
   type TaskFilter,
   type TaskResponse,
   type TemplateOption,
+  type DocumentTemplate,
   type ViewMode,
   type WorkflowItem,
   type WorkflowStep,
@@ -199,6 +200,12 @@ export default function TaskBoard() {
     null
   );
   const [reportOpen, setReportOpen] = useState(false);
+  const [docsOpen, setDocsOpen] = useState(false);
+  const [documents, setDocuments] = useState<DocumentTemplate[]>([]);
+  const [docsLoading, setDocsLoading] = useState(false);
+  const [uploadingDoc, setUploadingDoc] = useState(false);
+  const [docName, setDocName] = useState("");
+  const [docFile, setDocFile] = useState<File | null>(null);
   const [reportMonth, setReportMonth] = useState(() =>
     isoDate(new Date()).slice(0, 7)
   );
@@ -1427,6 +1434,108 @@ export default function TaskBoard() {
     }
   }
 
+  async function openDocuments() {
+    setDocsOpen(true);
+    setDocsLoading(true);
+    setError("");
+
+    try {
+      const response = await fetch("/api/documents");
+      const data = (await response.json()) as {
+        documents?: DocumentTemplate[];
+        error?: string;
+      };
+
+      if (!response.ok || !data.documents) {
+        throw new Error(data.error ?? "양식 목록을 불러오지 못했습니다.");
+      }
+
+      setDocuments(data.documents);
+    } catch (loadError) {
+      setError(
+        loadError instanceof Error
+          ? loadError.message
+          : "양식 목록을 불러오지 못했습니다."
+      );
+    } finally {
+      setDocsLoading(false);
+    }
+  }
+
+  async function uploadDocument() {
+    if (!docFile) {
+      setError("업로드할 파일을 선택해 주세요.");
+      return;
+    }
+
+    setUploadingDoc(true);
+    setError("");
+
+    try {
+      const form = new FormData();
+      form.append("file", docFile);
+      form.append("name", docName.trim() || docFile.name);
+      form.append("actor", currentActor);
+
+      const response = await fetch("/api/documents", {
+        method: "POST",
+        body: form,
+      });
+      const data = (await response.json()) as {
+        documents?: DocumentTemplate[];
+        error?: string;
+      };
+
+      if (!response.ok || !data.documents) {
+        throw new Error(data.error ?? "양식을 업로드하지 못했습니다.");
+      }
+
+      setDocuments(data.documents);
+      setDocName("");
+      setDocFile(null);
+    } catch (uploadError) {
+      setError(
+        uploadError instanceof Error
+          ? uploadError.message
+          : "양식을 업로드하지 못했습니다."
+      );
+    } finally {
+      setUploadingDoc(false);
+    }
+  }
+
+  async function deleteDocument(document: DocumentTemplate) {
+    if (!window.confirm(`'${document.name}' 양식을 삭제할까요?`)) {
+      return;
+    }
+
+    setError("");
+
+    try {
+      const response = await fetch("/api/documents", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: document.id, actor: currentActor }),
+      });
+      const data = (await response.json()) as {
+        documents?: DocumentTemplate[];
+        error?: string;
+      };
+
+      if (!response.ok || !data.documents) {
+        throw new Error(data.error ?? "양식을 삭제하지 못했습니다.");
+      }
+
+      setDocuments(data.documents);
+    } catch (deleteError) {
+      setError(
+        deleteError instanceof Error
+          ? deleteError.message
+          : "양식을 삭제하지 못했습니다."
+      );
+    }
+  }
+
   async function saveWebhook(nextUrl: string, nextEnabled: boolean) {
     setSavingWebhook(true);
     setError("");
@@ -2253,6 +2362,27 @@ export default function TaskBoard() {
                     {notifications.total}
                   </span>
                 ) : null}
+              </button>
+
+              <button
+                type="button"
+                onClick={() => void openDocuments()}
+                className="tb-btn hidden md:inline-flex"
+                title="기안문 등 공용 양식 보관함"
+              >
+                <svg
+                  width="15"
+                  height="15"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                >
+                  <path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48" />
+                </svg>
+                양식
               </button>
 
               <button
@@ -5402,6 +5532,16 @@ export default function TaskBoard() {
                 type="button"
                 onClick={() => {
                   setShowFilters(false);
+                  void openDocuments();
+                }}
+                className="tb-btn"
+              >
+                📎 기안문 양식
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowFilters(false);
                   openTemplateEditor(null);
                 }}
                 className="tb-btn"
@@ -5430,6 +5570,111 @@ export default function TaskBoard() {
               >
                 적용
               </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {docsOpen ? (
+        <div
+          className="fixed inset-0 z-50 flex items-start justify-center overflow-auto bg-black/40 p-4 backdrop-blur-sm"
+          onClick={() => setDocsOpen(false)}
+        >
+          <div
+            className="tb-card my-6 w-full max-w-[640px] shadow-[var(--shadow-lg)]"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="flex items-center justify-between border-b border-[var(--border)] px-5 py-3.5">
+              <h2 className="text-base font-semibold">기안문 · 공용 양식</h2>
+              <button
+                type="button"
+                onClick={() => setDocsOpen(false)}
+                className="tb-iconbtn h-8 w-8"
+              >
+                ×
+              </button>
+            </div>
+
+            <div className="space-y-4 p-5">
+              <div className="rounded-[var(--radius)] border border-[var(--border)] bg-[var(--surface-2)] p-3.5">
+                <div className="tb-label">새 양식 업로드 (hwp, hwpx, doc, docx, pdf, xlsx · 최대 1MB)</div>
+                <div className="flex flex-col gap-2 sm:flex-row">
+                  <input
+                    type="file"
+                    accept=".hwp,.hwpx,.doc,.docx,.pdf,.xlsx"
+                    onChange={(event) => {
+                      const file = event.target.files?.[0] ?? null;
+                      setDocFile(file);
+                      if (file && !docName.trim()) {
+                        setDocName(file.name.replace(/\.[^.]+$/, ""));
+                      }
+                    }}
+                    className="tb-field flex-1 file:mr-2 file:rounded-[var(--radius-sm)] file:border-0 file:bg-[var(--accent-soft)] file:px-2.5 file:py-1 file:text-xs file:font-semibold file:text-[var(--accent)]"
+                  />
+                  <input
+                    value={docName}
+                    onChange={(event) => setDocName(event.target.value)}
+                    className="tb-field flex-1"
+                    placeholder="양식 이름 (예: 표준 기안문)"
+                  />
+                  <button
+                    type="button"
+                    disabled={!docFile || uploadingDoc}
+                    onClick={() => void uploadDocument()}
+                    className="tb-btn tb-btn-primary shrink-0"
+                  >
+                    {uploadingDoc ? "업로드 중…" : "업로드"}
+                  </button>
+                </div>
+              </div>
+
+              <div className="space-y-1.5">
+                {docsLoading ? (
+                  <div className="py-8 text-center text-sm text-[var(--text-muted)]">
+                    불러오는 중…
+                  </div>
+                ) : documents.length ? (
+                  documents.map((doc) => (
+                    <div
+                      key={doc.id}
+                      className="flex items-center gap-2.5 rounded-[var(--radius)] border border-[var(--border)] bg-[var(--surface)] px-3 py-2.5"
+                    >
+                      <span className="text-lg">
+                        {/\.hwpx?$/i.test(doc.filename) ? "📝" : "📄"}
+                      </span>
+                      <div className="min-w-0 flex-1">
+                        <div className="truncate text-sm font-medium">
+                          {doc.name}
+                        </div>
+                        <div className="truncate text-[11px] text-[var(--text-faint)]">
+                          {doc.filename} · {Math.max(1, Math.round(doc.size / 1024))}
+                          KB · {doc.uploadedBy} · {formatDate(doc.createdAt)}
+                        </div>
+                      </div>
+                      <a
+                        href={`/api/documents?id=${doc.id}`}
+                        className="tb-btn shrink-0 !px-3 !py-1.5 text-xs"
+                        title="다운로드"
+                      >
+                        ⬇ 다운로드
+                      </a>
+                      <button
+                        type="button"
+                        onClick={() => void deleteDocument(doc)}
+                        className="tb-iconbtn tb-iconbtn-danger h-8 w-8 shrink-0"
+                        title="양식 삭제"
+                      >
+                        ×
+                      </button>
+                    </div>
+                  ))
+                ) : (
+                  <div className="py-8 text-center text-sm text-[var(--text-muted)]">
+                    등록된 양식이 없습니다. 팀이 공용으로 쓸 기안문 양식(hwpx)을
+                    업로드해 보세요.
+                  </div>
+                )}
+              </div>
             </div>
           </div>
         </div>

@@ -111,6 +111,16 @@ export type SubtaskDraft = {
   blockers: string;
 };
 
+export type DocumentTemplate = {
+  id: number;
+  name: string;
+  filename: string;
+  mimeType: string;
+  size: number;
+  uploadedBy: string;
+  createdAt: string;
+};
+
 const MS_PER_DAY = 86_400_000;
 
 export function formatDate(value?: string | null) {

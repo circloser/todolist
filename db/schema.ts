@@ -1,4 +1,5 @@
 import {
+  blob,
   index,
   integer,
   real,
@@ -6,6 +7,18 @@ import {
   text,
   uniqueIndex,
 } from "drizzle-orm/sqlite-core";
+
+export const documentTemplates = sqliteTable("document_templates", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  name: text("name").notNull(),
+  filename: text("filename").notNull(),
+  mimeType: text("mime_type").notNull().default("application/octet-stream"),
+  size: integer("size").notNull(),
+  data: blob("data").notNull(),
+  uploadedBy: text("uploaded_by").notNull().default(""),
+  updatedAt: text("updated_at").notNull(),
+  createdAt: text("created_at").notNull(),
+});
 
 export const workflowItems = sqliteTable(
   "workflow_items",
