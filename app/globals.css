@@ -93,16 +93,19 @@ select {
   }
 }
 
-/* Print: only the report area (#report-print) is rendered on paper */
+/* Print: only the open print area (report or manual) is rendered on paper */
 @media print {
   body * {
     visibility: hidden;
   }
   #report-print,
-  #report-print * {
+  #report-print *,
+  #manual-print,
+  #manual-print * {
     visibility: visible;
   }
-  #report-print {
+  #report-print,
+  #manual-print {
     position: absolute;
     left: 0;
     top: 0;
