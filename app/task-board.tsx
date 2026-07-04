@@ -1612,6 +1612,18 @@ export default function TaskBoard() {
         throw new Error(data.error ?? "유형을 저장하지 못했습니다.");
       }
 
+      // A brand-new preset becomes the add-form's selected type so the next
+      // task starts from it right away.
+      if (!templateDraft.key) {
+        const previousKeys = new Set(templates.map((template) => template.key));
+        const created = data.templates.find(
+          (template) => !previousKeys.has(template.key)
+        );
+        if (created) {
+          setNewTemplateKey(created.key);
+        }
+      }
+
       setTemplates(data.templates);
       if (data.items) {
         setItems(data.items);
@@ -3608,6 +3620,10 @@ export default function TaskBoard() {
                 <select
                   value={newTemplateKey}
                   onChange={(event) => {
+                    if (event.target.value === "__new__") {
+                      openTemplateEditor(null);
+                      return;
+                    }
                     setNewTemplateKey(event.target.value);
                     setStageFilter("all");
                   }}
@@ -3616,9 +3632,10 @@ export default function TaskBoard() {
                 >
                   {templates.map((template) => (
                     <option key={template.key} value={template.key}>
-                      {template.name}
+                      {template.name} ({template.stages.length}단계)
                     </option>
                   ))}
+                  <option value="__new__">＋ 새 유형 만들기…</option>
                 </select>
                 <input
                   value={newTitle}
@@ -3647,6 +3664,22 @@ export default function TaskBoard() {
                   {adding ? "추가 중…" : "+ 추가"}
                 </button>
               </form>
+
+              {(() => {
+                const preview = templatesByKey.get(newTemplateKey);
+                return preview?.stages.length ? (
+                  <div className="mt-2.5 flex flex-wrap items-center gap-1 text-[11px] text-[var(--text-muted)]">
+                    <span className="mr-1 font-semibold">
+                      불러올 진행 단계 {preview.stages.length}개:
+                    </span>
+                    {preview.stages.map((stage, index) => (
+                      <span key={stage.key} className="tb-badge tb-badge-muted">
+                        {index + 1}. {stage.title}
+                      </span>
+                    ))}
+                  </div>
+                ) : null;
+              })()}
             </div>
           </div>
         ) : viewMode === "map" ? (
@@ -4396,6 +4429,10 @@ export default function TaskBoard() {
                 <select
                   value={newTemplateKey}
                   onChange={(event) => {
+                    if (event.target.value === "__new__") {
+                      openTemplateEditor(null);
+                      return;
+                    }
                     setNewTemplateKey(event.target.value);
                     setTemplateFilter(event.target.value);
                     setStageFilter("all");
@@ -4405,9 +4442,10 @@ export default function TaskBoard() {
                 >
                   {templates.map((template) => (
                     <option key={template.key} value={template.key}>
-                      {template.name}
+                      {template.name} ({template.stages.length}단계)
                     </option>
                   ))}
+                  <option value="__new__">＋ 새 유형 만들기…</option>
                 </select>
                 <input
                   value={newTitle}
@@ -5145,15 +5183,27 @@ export default function TaskBoard() {
                 <span className="tb-label">유형 (단계 세트)</span>
                 <select
                   value={newTemplateKey}
-                  onChange={(event) => setNewTemplateKey(event.target.value)}
+                  onChange={(event) => {
+                    if (event.target.value === "__new__") {
+                      setMapDraft(null);
+                      openTemplateEditor(null);
+                      return;
+                    }
+                    setNewTemplateKey(event.target.value);
+                  }}
                   className="tb-field"
                 >
                   {templates.map((template) => (
                     <option key={template.key} value={template.key}>
-                      {template.name}
+                      {template.name} ({template.stages.length}단계)
                     </option>
                   ))}
+                  <option value="__new__">＋ 새 유형 만들기…</option>
                 </select>
+                <span className="mt-1 block text-[10px] text-[var(--text-faint)]">
+                  {templatesByKey.get(newTemplateKey)?.stages.length ?? 0}개
+                  단계가 진행 체크리스트로 생성됩니다
+                </span>
               </label>
               <div className="grid grid-cols-2 gap-2">
                 <label className="block">
