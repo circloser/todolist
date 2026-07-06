@@ -788,8 +788,9 @@ async function createItemWithDefaultSteps({
     .run();
   const itemId = Number(insertResult.meta.last_row_id);
 
-  await d1.batch(
-    selectedTemplate.stages.map((stage, index) => {
+  // Guard: a template could theoretically have zero stages, and D1 rejects
+  // empty batches.
+  const stepStatements = selectedTemplate.stages.map((stage, index) => {
       const legacyStatus = legacyStatuses?.get(stage.key);
       const status = legacyStatus?.status ?? "todo";
 
@@ -824,8 +825,11 @@ async function createItemWithDefaultSteps({
           now,
           now
         );
-    })
-  );
+    });
+
+  if (stepStatements.length) {
+    await d1.batch(stepStatements);
+  }
 
   await logHistory({
     itemId,
@@ -894,15 +898,19 @@ async function ensureDefaultSettings() {
     .all<{ assignee: string }>();
   const colors = ["#e6f4ef", "#edf2ff", "#fff4d6", "#fbe7df", "#efe8ff"];
 
-  await d1.batch(
-    (assignees.results ?? []).map((row, index) =>
-      d1
-        .prepare(
-          "INSERT OR IGNORE INTO assignee_settings (assignee, color, updated_at) VALUES (?, ?, ?)"
-        )
-        .bind(row.assignee, colors[index % colors.length], now)
-    )
+  // D1 rejects an empty batch ("No SQL statements detected") — with an empty
+  // board there are no assignees, and this runs on every cold start.
+  const assigneeStatements = (assignees.results ?? []).map((row, index) =>
+    d1
+      .prepare(
+        "INSERT OR IGNORE INTO assignee_settings (assignee, color, updated_at) VALUES (?, ?, ?)"
+      )
+      .bind(row.assignee, colors[index % colors.length], now)
   );
+
+  if (assigneeStatements.length) {
+    await d1.batch(assigneeStatements);
+  }
 
   await d1.batch(
     Object.entries(defaultAppSettings).map(([key, value]) =>
