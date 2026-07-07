@@ -50,6 +50,7 @@ function makeSubtask(overrides: Partial<WorkflowSubtask> = {}): WorkflowSubtask 
   return {
     id: 1,
     itemId: 1,
+    stepId: null,
     title: "세부",
     status: "todo",
     dueDate: null,

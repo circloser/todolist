@@ -12,6 +12,7 @@ export type Urgency = "none" | "overdue" | "danger" | "warning" | "normal";
 export type WorkflowSubtask = {
   id: number;
   itemId: number;
+  stepId: number | null;
   title: string;
   status: StepStatus;
   dueDate: string | null;

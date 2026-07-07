@@ -42,6 +42,7 @@ type WorkflowStepRow = {
 type WorkflowSubtaskRow = {
   id: number;
   item_id: number;
+  step_id: number | null;
   title: string;
   status: StepStatus;
   due_date: string | null;
@@ -490,6 +491,7 @@ function toItem(
     subtasks: subtasks.map((subtask) => ({
       id: subtask.id,
       itemId: subtask.item_id,
+      stepId: subtask.step_id ?? null,
       title: subtask.title,
       status: subtask.status,
       dueDate: subtask.due_date,
@@ -557,6 +559,7 @@ async function ensureSchema() {
     d1.prepare(`CREATE TABLE IF NOT EXISTS workflow_subtasks (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       item_id INTEGER NOT NULL,
+      step_id INTEGER,
       title TEXT NOT NULL,
       status TEXT NOT NULL DEFAULT 'todo' CHECK(status IN ('todo', 'done')),
       due_date TEXT,
@@ -652,6 +655,9 @@ async function ensureSchema() {
   await addColumnIfMissing("ALTER TABLE workflow_subtasks ADD COLUMN due_date TEXT");
   await addColumnIfMissing(
     "ALTER TABLE workflow_subtasks ADD COLUMN blockers TEXT NOT NULL DEFAULT ''"
+  );
+  await addColumnIfMissing(
+    "ALTER TABLE workflow_subtasks ADD COLUMN step_id INTEGER"
   );
 }
 
@@ -1049,6 +1055,9 @@ async function reconcileItemsForTemplate(
     for (const step of existing) {
       if (!desiredKeys.has(step.stage_key)) {
         statements.push(
+          d1
+            .prepare("DELETE FROM workflow_subtasks WHERE step_id = ?")
+            .bind(step.id),
           d1.prepare("DELETE FROM workflow_steps WHERE id = ?").bind(step.id)
         );
       }
@@ -1316,6 +1325,7 @@ export async function POST(request: Request) {
       templateKey?: string;
       blockers?: string;
       keepSchedule?: boolean;
+      stepId?: number;
     };
     const actor = getActor(request, payload.actor);
     const d1 = getD1();
@@ -1488,7 +1498,7 @@ export async function POST(request: Request) {
         .run();
       const newItemId = Number(insertResult.meta.last_row_id);
 
-      const statements: D1PreparedStatement[] = source.steps.map((step) =>
+      const stepStatements: D1PreparedStatement[] = source.steps.map((step) =>
         d1
           .prepare(`INSERT INTO workflow_steps (
             item_id, stage_key, title, description, phase_group, position,
@@ -1510,27 +1520,53 @@ export async function POST(request: Request) {
           )
       );
 
-      for (const subtask of source.subtasks) {
-        statements.push(
-          d1
+      if (stepStatements.length) {
+        await d1.batch(stepStatements);
+      }
+
+      // Re-point stage-scoped subtasks at the newly created steps (matched by
+      // stage key) so they stay attached to the correct stage.
+      const sourceStageByStepId = new Map(
+        source.steps.map((step) => [step.id, step.stageKey])
+      );
+      const newSteps = await d1
+        .prepare("SELECT id, stage_key FROM workflow_steps WHERE item_id = ?")
+        .bind(newItemId)
+        .all<{ id: number; stage_key: string }>();
+      const newStepIdByStage = new Map(
+        (newSteps.results ?? []).map((step) => [step.stage_key, step.id])
+      );
+
+      const subtaskStatements: D1PreparedStatement[] = source.subtasks.map(
+        (subtask) => {
+          const stageKey =
+            subtask.stepId !== null
+              ? sourceStageByStepId.get(subtask.stepId)
+              : undefined;
+          const newStepId = stageKey
+            ? newStepIdByStage.get(stageKey) ?? null
+            : null;
+
+          return d1
             .prepare(`INSERT INTO workflow_subtasks (
-              item_id, title, status, due_date, blockers, position,
+              item_id, step_id, title, status, due_date, blockers, position,
               updated_by, updated_at, created_at
-            ) VALUES (?, ?, 'todo', ?, '', ?, ?, ?, ?)`)
+            ) VALUES (?, ?, ?, 'todo', ?, '', ?, ?, ?, ?)`)
             .bind(
               newItemId,
+              newStepId,
               subtask.title,
               keepSchedule ? subtask.dueDate : null,
               subtask.position,
               actor,
               now,
               now
-            )
-        );
-      }
+            );
+        }
+      );
 
-      if (statements.length) {
-        await d1.batch(statements);
+      if (subtaskStatements.length) {
+        await d1.batch(subtaskStatements);
       }
 
       await logHistory({
@@ -1570,6 +1606,23 @@ export async function POST(request: Request) {
         return Response.json({ error: "업무를 찾을 수 없습니다." }, { status: 404 });
       }
 
+      // Optionally attach the checklist item to one of the task's stages.
+      let stepId: number | null = null;
+      if (Number.isFinite(Number(payload.stepId))) {
+        const step = await d1
+          .prepare("SELECT id FROM workflow_steps WHERE id = ? AND item_id = ?")
+          .bind(Number(payload.stepId), itemId)
+          .first<{ id: number }>();
+
+        if (!step) {
+          return Response.json(
+            { error: "단계를 찾을 수 없습니다." },
+            { status: 400 }
+          );
+        }
+        stepId = step.id;
+      }
+
       const last = await d1
         .prepare("SELECT MAX(position) AS position FROM workflow_subtasks WHERE item_id = ?")
         .bind(itemId)
@@ -1579,6 +1632,7 @@ export async function POST(request: Request) {
       await d1
         .prepare(`INSERT INTO workflow_subtasks (
           item_id,
+          step_id,
           title,
           due_date,
           blockers,
@@ -1587,9 +1641,10 @@ export async function POST(request: Request) {
           updated_by,
           updated_at,
           created_at
-        ) VALUES (?, ?, ?, ?, 'todo', ?, ?, ?, ?)`)
+        ) VALUES (?, ?, ?, ?, ?, 'todo', ?, ?, ?, ?)`)
         .bind(
           itemId,
+          stepId,
           title,
           dueDate,
           blockers,
@@ -2442,10 +2497,52 @@ export async function DELETE(request: Request) {
     const payload = (await request.json().catch(() => ({}))) as {
       actor?: string;
       itemId?: number;
+      subtaskId?: number;
     };
-    const itemId = Number(payload.itemId);
     const actor = getActor(request, payload.actor);
     const d1 = getD1();
+
+    // Delete a single checklist item.
+    if (Number.isFinite(Number(payload.subtaskId))) {
+      const subtaskId = Number(payload.subtaskId);
+      const subtask = await d1
+        .prepare(
+          `SELECT s.item_id, s.title, i.title AS item_title
+           FROM workflow_subtasks s
+           JOIN workflow_items i ON i.id = s.item_id
+           WHERE s.id = ?`
+        )
+        .bind(subtaskId)
+        .first<{ item_id: number; title: string; item_title: string }>();
+
+      if (!subtask) {
+        return Response.json(
+          { error: "세부 체크리스트를 찾을 수 없습니다." },
+          { status: 404 }
+        );
+      }
+
+      await d1
+        .prepare("DELETE FROM workflow_subtasks WHERE id = ?")
+        .bind(subtaskId)
+        .run();
+
+      await logHistory({
+        itemId: subtask.item_id,
+        entityType: "subtask",
+        entityId: subtaskId,
+        action: "delete",
+        summary: `${actor}님이 '${subtask.item_title}'의 세부 체크리스트 '${subtask.title}'을 삭제함`,
+        actor,
+      });
+
+      return Response.json({
+        item: await getItem(subtask.item_id),
+        history: await getHistory(),
+      });
+    }
+
+    const itemId = Number(payload.itemId);
 
     if (!Number.isFinite(itemId)) {
       return Response.json({ error: "삭제할 업무를 선택해 주세요." }, { status: 400 });

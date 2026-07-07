@@ -231,9 +231,13 @@ export default function TaskBoard() {
     "external-research-outsourcing"
   );
   const [expandedIds, setExpandedIds] = useState<Set<number>>(new Set());
+  const [expandedStepIds, setExpandedStepIds] = useState<Set<number>>(
+    new Set()
+  );
   const [subtaskDrafts, setSubtaskDrafts] = useState<
     Record<number, SubtaskDraft>
   >({});
+  const [stepDrafts, setStepDrafts] = useState<Record<number, string>>({});
   const [loading, setLoading] = useState(true);
   const [adding, setAdding] = useState(false);
   const [savingSettings, setSavingSettings] = useState(false);
@@ -1312,6 +1316,98 @@ export default function TaskBoard() {
           : "세부 체크리스트를 추가하지 못했습니다."
       );
     }
+  }
+
+  // Add a checklist item scoped to a single stage (step) of a task.
+  async function addStepSubtask(itemId: number, stepId: number) {
+    const title = (stepDrafts[stepId] ?? "").trim();
+
+    if (!title) {
+      return;
+    }
+
+    setError("");
+
+    try {
+      const response = await fetch("/api/tasks", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "create-subtask",
+          actor: currentActor,
+          itemId,
+          stepId,
+          title,
+        }),
+      });
+      const data = (await response.json()) as TaskResponse;
+
+      if (!response.ok || !data.item) {
+        throw new Error(data.error ?? "세부 체크리스트를 추가하지 못했습니다.");
+      }
+
+      replaceItem(data.item);
+      setStepDrafts((current) => ({ ...current, [stepId]: "" }));
+      setHistory(data.history ?? history);
+    } catch (addError) {
+      setError(
+        addError instanceof Error
+          ? addError.message
+          : "세부 체크리스트를 추가하지 못했습니다."
+      );
+    }
+  }
+
+  async function deleteSubtask(subtask: WorkflowSubtask) {
+    const previousItems = items;
+    setError("");
+    setItems((current) =>
+      current.map((item) =>
+        item.id === subtask.itemId
+          ? {
+              ...item,
+              subtasks: item.subtasks.filter(
+                (candidate) => candidate.id !== subtask.id
+              ),
+            }
+          : item
+      )
+    );
+
+    try {
+      const response = await fetch("/api/tasks", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ subtaskId: subtask.id, actor: currentActor }),
+      });
+      const data = (await response.json()) as TaskResponse;
+
+      if (!response.ok || !data.item) {
+        throw new Error(data.error ?? "세부 체크리스트를 삭제하지 못했습니다.");
+      }
+
+      replaceItem(data.item);
+      setHistory(data.history ?? history);
+    } catch (deleteError) {
+      setItems(previousItems);
+      setError(
+        deleteError instanceof Error
+          ? deleteError.message
+          : "세부 체크리스트를 삭제하지 못했습니다."
+      );
+    }
+  }
+
+  function toggleStepExpanded(stepId: number) {
+    setExpandedStepIds((current) => {
+      const next = new Set(current);
+      if (next.has(stepId)) {
+        next.delete(stepId);
+      } else {
+        next.add(stepId);
+      }
+      return next;
+    });
   }
 
   async function addItem(event: FormEvent<HTMLFormElement>) {
@@ -3230,70 +3326,228 @@ export default function TaskBoard() {
                                         : state === "warning"
                                           ? "is-warning"
                                           : "is-available";
+                                  const stepSubs = item.subtasks.filter(
+                                    (subtask) => subtask.stepId === step.id
+                                  );
+                                  const stepSubsDone = stepSubs.filter(
+                                    (subtask) => subtask.status === "done"
+                                  ).length;
+                                  const stepPanelOpen = expandedStepIds.has(
+                                    step.id
+                                  );
 
                                   return (
                                     <div
                                       key={step.id}
-                                      className="flex items-center gap-2.5 rounded-[var(--radius)] border border-[var(--border)] bg-[var(--surface)] px-2.5 py-2"
+                                      className="overflow-hidden rounded-[var(--radius)] border border-[var(--border)] bg-[var(--surface)]"
                                     >
-                                      <button
-                                        type="button"
-                                        disabled={disabled}
-                                        onClick={() =>
-                                          updateStep(
-                                            item,
-                                            step,
-                                            checked ? "todo" : "done"
-                                          )
-                                        }
-                                        className={`tb-stage !h-6 !w-6 shrink-0 rounded-full ${dotClass}`}
-                                        title={step.description}
-                                      >
-                                        {saving ? "…" : checked ? "✓" : index + 1}
-                                      </button>
-                                      <div className="min-w-0 flex-1">
-                                        <div
-                                          className={`truncate text-sm ${
-                                            checked
-                                              ? "text-[var(--text-faint)] line-through"
-                                              : "font-medium"
-                                          }`}
-                                        >
-                                          {step.title}
-                                        </div>
-                                        {step.phaseGroup ? (
-                                          <div className="text-[10px] text-[var(--text-faint)]">
-                                            {step.phaseGroup}
-                                          </div>
-                                        ) : null}
-                                      </div>
-                                      {step.dueDate && !checked ? (
-                                        <span
-                                          className={`tb-badge ${
-                                            state === "overdue" || state === "danger"
-                                              ? "tb-badge-danger"
-                                              : state === "warning"
-                                                ? "tb-badge-warning"
-                                                : "tb-badge-muted"
-                                          }`}
-                                        >
-                                          {shortDueLabel(step.dueDate)}
-                                        </span>
-                                      ) : null}
-                                      <label
-                                        className="tb-stage-due relative !w-auto px-2"
-                                        title="목표일 설정"
-                                      >
-                                        {step.dueDate ? formatDay(step.dueDate) : "+ 기한"}
-                                        <input
-                                          type="date"
-                                          value={step.dueDate ?? ""}
-                                          onChange={(event) =>
-                                            updateStepDueDate(step, event.target.value)
+                                      <div className="flex items-center gap-2.5 px-2.5 py-2">
+                                        <button
+                                          type="button"
+                                          disabled={disabled}
+                                          onClick={() =>
+                                            updateStep(
+                                              item,
+                                              step,
+                                              checked ? "todo" : "done"
+                                            )
                                           }
-                                          className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
-                                        />
-                                      </label>
+                                          className={`tb-stage !h-6 !w-6 shrink-0 rounded-full ${dotClass}`}
+                                          title={step.description}
+                                        >
+                                          {saving ? "…" : checked ? "✓" : index + 1}
+                                        </button>
+                                        <div className="min-w-0 flex-1">
+                                          <div
+                                            className={`truncate text-sm ${
+                                              checked
+                                                ? "text-[var(--text-faint)] line-through"
+                                                : "font-medium"
+                                            }`}
+                                          >
+                                            {step.title}
+                                          </div>
+                                          {step.phaseGroup ? (
+                                            <div className="text-[10px] text-[var(--text-faint)]">
+                                              {step.phaseGroup}
+                                            </div>
+                                          ) : null}
+                                        </div>
+                                        <button
+                                          type="button"
+                                          onClick={() =>
+                                            toggleStepExpanded(step.id)
+                                          }
+                                          data-active={stepPanelOpen}
+                                          className={`tb-badge shrink-0 cursor-pointer ${
+                                            stepSubs.length &&
+                                            stepSubsDone === stepSubs.length
+                                              ? "tb-badge-success"
+                                              : "tb-badge-muted"
+                                          }`}
+                                          title="이 단계의 세부 체크리스트"
+                                        >
+                                          ☑{" "}
+                                          {stepSubs.length
+                                            ? `${stepSubsDone}/${stepSubs.length}`
+                                            : "세부"}
+                                        </button>
+                                        {step.dueDate && !checked ? (
+                                          <span
+                                            className={`tb-badge ${
+                                              state === "overdue" ||
+                                              state === "danger"
+                                                ? "tb-badge-danger"
+                                                : state === "warning"
+                                                  ? "tb-badge-warning"
+                                                  : "tb-badge-muted"
+                                            }`}
+                                          >
+                                            {shortDueLabel(step.dueDate)}
+                                          </span>
+                                        ) : null}
+                                        <label
+                                          className="tb-stage-due relative !w-auto px-2"
+                                          title="목표일 설정"
+                                        >
+                                          {step.dueDate
+                                            ? formatDay(step.dueDate)
+                                            : "+ 기한"}
+                                          <input
+                                            type="date"
+                                            value={step.dueDate ?? ""}
+                                            onChange={(event) =>
+                                              updateStepDueDate(
+                                                step,
+                                                event.target.value
+                                              )
+                                            }
+                                            className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
+                                          />
+                                        </label>
+                                      </div>
+
+                                      {stepPanelOpen ? (
+                                        <div className="space-y-1.5 border-t border-[var(--border)] bg-[var(--surface-2)] px-2.5 py-2 pl-9">
+                                          {stepSubs.map((subtask) => (
+                                            <div
+                                              key={subtask.id}
+                                              className="flex items-center gap-2"
+                                            >
+                                              <input
+                                                type="checkbox"
+                                                checked={
+                                                  subtask.status === "done"
+                                                }
+                                                onChange={(event) => {
+                                                  updateLocalSubtask(
+                                                    subtask.id,
+                                                    {
+                                                      status: event.target
+                                                        .checked
+                                                        ? "done"
+                                                        : "todo",
+                                                    }
+                                                  );
+                                                  void updateSubtask(
+                                                    subtask.id,
+                                                    {
+                                                      status: event.target
+                                                        .checked
+                                                        ? "done"
+                                                        : "todo",
+                                                    }
+                                                  );
+                                                }}
+                                                className="h-4 w-4 shrink-0 accent-[var(--accent)]"
+                                              />
+                                              <input
+                                                value={subtask.title}
+                                                onChange={(event) =>
+                                                  updateLocalSubtask(
+                                                    subtask.id,
+                                                    { title: event.target.value }
+                                                  )
+                                                }
+                                                onBlur={(event) =>
+                                                  updateSubtask(subtask.id, {
+                                                    title: event.target.value,
+                                                  })
+                                                }
+                                                className={`tb-ghost flex-1 text-sm ${
+                                                  subtask.status === "done"
+                                                    ? "text-[var(--text-faint)] line-through"
+                                                    : ""
+                                                }`}
+                                              />
+                                              <label className="tb-stage-due relative !w-auto px-2">
+                                                {subtask.dueDate
+                                                  ? formatDay(subtask.dueDate)
+                                                  : "+ 기한"}
+                                                <input
+                                                  type="date"
+                                                  value={subtask.dueDate ?? ""}
+                                                  onChange={(event) => {
+                                                    updateLocalSubtask(
+                                                      subtask.id,
+                                                      {
+                                                        dueDate:
+                                                          event.target.value,
+                                                      }
+                                                    );
+                                                    void updateSubtask(
+                                                      subtask.id,
+                                                      {
+                                                        dueDate:
+                                                          event.target.value,
+                                                      }
+                                                    );
+                                                  }}
+                                                  className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
+                                                />
+                                              </label>
+                                              <button
+                                                type="button"
+                                                onClick={() =>
+                                                  void deleteSubtask(subtask)
+                                                }
+                                                className="tb-iconbtn tb-iconbtn-danger h-7 w-7 shrink-0"
+                                                title="삭제"
+                                              >
+                                                ×
+                                              </button>
+                                            </div>
+                                          ))}
+                                          <form
+                                            onSubmit={(event) => {
+                                              event.preventDefault();
+                                              void addStepSubtask(
+                                                item.id,
+                                                step.id
+                                              );
+                                            }}
+                                            className="flex gap-1.5"
+                                          >
+                                            <input
+                                              value={stepDrafts[step.id] ?? ""}
+                                              onChange={(event) =>
+                                                setStepDrafts((current) => ({
+                                                  ...current,
+                                                  [step.id]: event.target.value,
+                                                }))
+                                              }
+                                              className="tb-field flex-1 px-2 py-1.5 text-sm"
+                                              placeholder="이 단계에 세부 항목 추가"
+                                            />
+                                            <button
+                                              type="submit"
+                                              className="tb-btn shrink-0 !px-2.5 !py-1.5 text-xs"
+                                            >
+                                              추가
+                                            </button>
+                                          </form>
+                                        </div>
+                                      ) : null}
                                     </div>
                                   );
                                 })}
@@ -3302,10 +3556,16 @@ export default function TaskBoard() {
 
                             <div>
                               <div className="mb-2 text-sm font-semibold">
-                                세부 체크리스트
+                                공통 세부 체크리스트{" "}
+                                <span className="text-xs font-normal text-[var(--text-faint)]">
+                                  (단계와 무관한 항목 · 각 단계별 항목은 위
+                                  단계의 ☑ 배지에서)
+                                </span>
                               </div>
                               <div className="space-y-1.5">
-                                {item.subtasks.map((subtask) => (
+                                {item.subtasks
+                                  .filter((subtask) => subtask.stepId === null)
+                                  .map((subtask) => (
                                   <div
                                     key={subtask.id}
                                     className="flex items-center gap-2.5 rounded-[var(--radius)] border border-[var(--border)] bg-[var(--surface)] px-2.5 py-2"
@@ -3372,6 +3632,14 @@ export default function TaskBoard() {
                                         className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
                                       />
                                     </label>
+                                    <button
+                                      type="button"
+                                      onClick={() => void deleteSubtask(subtask)}
+                                      className="tb-iconbtn tb-iconbtn-danger h-7 w-7 shrink-0"
+                                      title="삭제"
+                                    >
+                                      ×
+                                    </button>
                                   </div>
                                 ))}
                               </div>

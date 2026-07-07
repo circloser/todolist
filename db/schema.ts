@@ -78,6 +78,7 @@ export const workflowSubtasks = sqliteTable(
   {
     id: integer("id").primaryKey({ autoIncrement: true }),
     itemId: integer("item_id").notNull(),
+    stepId: integer("step_id"),
     title: text("title").notNull(),
     status: text("status").notNull().default("todo"),
     dueDate: text("due_date"),
