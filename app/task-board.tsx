@@ -20,7 +20,6 @@ import {
   applyManualPositions,
   assigneeName,
   canToggleStep,
-  categoryName,
   completionCount,
   formatBudget,
   formatDate,
@@ -238,6 +237,8 @@ export default function TaskBoard() {
     Record<number, SubtaskDraft>
   >({});
   const [stepDrafts, setStepDrafts] = useState<Record<number, string>>({});
+  const [newGroup, setNewGroup] = useState("");
+  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
   const [adding, setAdding] = useState(false);
   const [savingSettings, setSavingSettings] = useState(false);
@@ -355,10 +356,15 @@ export default function TaskBoard() {
     [items]
   );
 
+  // 대분류(그룹): a free-text grouping stored in item.category. Empty → "미분류".
+  function groupName(item: WorkflowItem) {
+    return item.category.trim() || "미분류";
+  }
+
   const categories = useMemo(
     () =>
-      [...new Set(items.map((item) => categoryName(item.category)))].sort(
-        (first, second) => first.localeCompare(second, "ko-KR")
+      [...new Set(items.map((item) => groupName(item)))].sort((first, second) =>
+        first.localeCompare(second, "ko-KR")
       ),
     [items]
   );
@@ -369,7 +375,7 @@ export default function TaskBoard() {
   );
 
   function itemTypeName(item: WorkflowItem) {
-    return templatesByKey.get(item.templateKey)?.name ?? categoryName(item.category);
+    return templatesByKey.get(item.templateKey)?.name ?? "기타 유형";
   }
 
   const selectedTemplate =
@@ -389,7 +395,7 @@ export default function TaskBoard() {
         return false;
       }
 
-      if (categoryFilter !== "all" && categoryName(item.category) !== categoryFilter) {
+      if (categoryFilter !== "all" && groupName(item) !== categoryFilter) {
         return false;
       }
 
@@ -486,6 +492,27 @@ export default function TaskBoard() {
 
     return next.sort((first, second) => first.position - second.position);
   }, [baseItems, sortMode]);
+
+  // Group the (already filtered/sorted) list by 대분류 for the grouped list view.
+  const listGroups = useMemo(() => {
+    const groups: Array<{ name: string; items: WorkflowItem[] }> = [];
+    const indexByName = new Map<string, number>();
+
+    for (const item of visibleItems) {
+      const name = item.category.trim() || "미분류";
+      let index = indexByName.get(name);
+
+      if (index === undefined) {
+        index = groups.length;
+        indexByName.set(name, index);
+        groups.push({ name, items: [] });
+      }
+
+      groups[index].items.push(item);
+    }
+
+    return groups;
+  }, [visibleItems]);
 
   const stages =
     selectedTemplate?.stages.map((stage) => ({
@@ -1428,6 +1455,7 @@ export default function TaskBoard() {
         body: JSON.stringify({
           title,
           actor: currentActor,
+          category: newGroup,
           assignee: newAssignee,
           memo: newMemo,
           allocatedBudget: newAllocatedBudget,
@@ -1724,6 +1752,7 @@ export default function TaskBoard() {
         body: JSON.stringify({
           title,
           actor: currentActor,
+          category: newGroup,
           assignee: mapNewAssignee,
           templateKey: newTemplateKey,
           location: mapNewLocation.trim(),
@@ -3156,10 +3185,85 @@ export default function TaskBoard() {
             ) : null}
 
             {!loading &&
-              visibleItems.map((item) => {
-                const progress = itemProgress(item);
-                const done = isItemDone(item);
-                const expanded = expandedIds.has(item.id);
+              listGroups.map((group) => {
+                const groupCollapsed = collapsedGroups.has(group.name);
+                const groupProgress = group.items.length
+                  ? Math.round(
+                      group.items.reduce(
+                        (sum, current) => sum + itemProgress(current),
+                        0
+                      ) / group.items.length
+                    )
+                  : 0;
+                const groupDone = group.items.filter((current) =>
+                  isItemDone(current)
+                ).length;
+
+                return (
+                  <div key={`group-${group.name}`} className="space-y-2.5">
+                    <div className="flex items-center gap-2.5 rounded-[var(--radius)] border border-[var(--border)] bg-[var(--surface-2)] px-3 py-2">
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setCollapsedGroups((current) => {
+                            const nextSet = new Set(current);
+                            if (nextSet.has(group.name)) {
+                              nextSet.delete(group.name);
+                            } else {
+                              nextSet.add(group.name);
+                            }
+                            return nextSet;
+                          })
+                        }
+                        className="tb-iconbtn h-6 w-6 shrink-0"
+                        title={groupCollapsed ? "펼치기" : "접기"}
+                      >
+                        {groupCollapsed ? "▸" : "▾"}
+                      </button>
+                      <span className="truncate text-sm font-semibold">
+                        📁 {group.name}
+                      </span>
+                      <span className="tb-badge tb-badge-muted shrink-0">
+                        {groupDone}/{group.items.length}
+                      </span>
+                      <div className="hidden min-w-0 max-w-[220px] flex-1 items-center gap-2 sm:flex">
+                        <div className="tb-progress flex-1">
+                          <span
+                            style={{
+                              width: `${groupProgress}%`,
+                              background: "var(--accent)",
+                            }}
+                          />
+                        </div>
+                        <span className="w-9 text-right text-xs font-bold">
+                          {groupProgress}%
+                        </span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setNewGroup(group.name === "미분류" ? "" : group.name);
+                          const titleInput =
+                            document.getElementById("new-task-title");
+                          titleInput?.scrollIntoView({
+                            behavior: "smooth",
+                            block: "center",
+                          });
+                          (titleInput as HTMLInputElement | null)?.focus();
+                        }}
+                        className="tb-btn ml-auto shrink-0 !px-2.5 !py-1 text-xs"
+                        title="이 그룹으로 새 업무 추가"
+                      >
+                        ＋ 업무
+                      </button>
+                    </div>
+
+                    {groupCollapsed
+                      ? null
+                      : group.items.map((item) => {
+                          const progress = itemProgress(item);
+                          const done = isItemDone(item);
+                          const expanded = expandedIds.has(item.id);
                 const rowColor = rowAccentColor(
                   assigneeSettings[assigneeName(item.assignee)]
                 );
@@ -3710,6 +3814,25 @@ export default function TaskBoard() {
                                 </div>
                               </label>
                               <label className="block">
+                                <span className="tb-label">대분류 (그룹)</span>
+                                <input
+                                  list="group-list"
+                                  value={item.category}
+                                  onChange={(event) =>
+                                    updateLocalItem(item.id, {
+                                      category: event.target.value,
+                                    })
+                                  }
+                                  onBlur={(event) =>
+                                    updateItem(item.id, {
+                                      category: event.target.value,
+                                    })
+                                  }
+                                  className="tb-field"
+                                  placeholder="비우면 미분류"
+                                />
+                              </label>
+                              <label className="block">
                                 <span className="tb-label">유형 (단계 세트)</span>
                                 <select
                                   value={item.templateKey}
@@ -4005,6 +4128,9 @@ export default function TaskBoard() {
                   </div>
                 );
               })}
+                  </div>
+                );
+              })}
 
             <div className="tb-card p-3.5">
               <div className="mb-2.5 flex items-center gap-2 text-sm font-semibold text-[var(--text-muted)]">
@@ -4015,8 +4141,16 @@ export default function TaskBoard() {
               </div>
               <form
                 onSubmit={addItem}
-                className="grid gap-2 md:grid-cols-2 xl:grid-cols-[180px_minmax(180px,1fr)_120px_130px_96px]"
+                className="grid gap-2 md:grid-cols-2 xl:grid-cols-[150px_170px_minmax(160px,1fr)_120px_130px_96px]"
               >
+                <input
+                  list="group-list"
+                  value={newGroup}
+                  onChange={(event) => setNewGroup(event.target.value)}
+                  className="tb-field"
+                  placeholder="대분류 (그룹)"
+                  title="대분류 (그룹) — 비우면 미분류"
+                />
                 <select
                   value={newTemplateKey}
                   onChange={(event) => {
@@ -4038,6 +4172,7 @@ export default function TaskBoard() {
                   <option value="__new__">＋ 새 유형 만들기…</option>
                 </select>
                 <input
+                  id="new-task-title"
                   value={newTitle}
                   onChange={(event) => setNewTitle(event.target.value)}
                   className="tb-field"
@@ -4824,8 +4959,15 @@ export default function TaskBoard() {
               </div>
               <form
                 onSubmit={addItem}
-                className="grid gap-2 md:grid-cols-2 xl:grid-cols-[180px_minmax(180px,1fr)_110px_120px_110px_110px_minmax(160px,1fr)_88px]"
+                className="grid gap-2 md:grid-cols-2 xl:grid-cols-[130px_150px_minmax(150px,1fr)_100px_120px_100px_100px_minmax(140px,1fr)_84px]"
               >
+                <input
+                  list="group-list"
+                  value={newGroup}
+                  onChange={(event) => setNewGroup(event.target.value)}
+                  className="tb-field"
+                  placeholder="대분류 (그룹)"
+                />
                 <select
                   value={newTemplateKey}
                   onChange={(event) => {
@@ -5679,6 +5821,16 @@ export default function TaskBoard() {
               </label>
               <div className="grid grid-cols-2 gap-2">
                 <label className="block">
+                  <span className="tb-label">대분류 (그룹)</span>
+                  <input
+                    list="group-list"
+                    value={newGroup}
+                    onChange={(event) => setNewGroup(event.target.value)}
+                    className="tb-field"
+                    placeholder="비우면 미분류"
+                  />
+                </label>
+                <label className="block">
                   <span className="tb-label">담당자</span>
                   <input
                     value={mapNewAssignee}
@@ -6366,6 +6518,14 @@ export default function TaskBoard() {
         {WETLAND_PRESETS.map((preset) => (
           <option key={preset.name} value={preset.name} />
         ))}
+      </datalist>
+
+      <datalist id="group-list">
+        {categories
+          .filter((name) => name !== "미분류")
+          .map((name) => (
+            <option key={name} value={name} />
+          ))}
       </datalist>
     </main>
   );

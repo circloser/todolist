@@ -458,7 +458,7 @@ function toItem(
     id: row.id,
     title: row.title,
     assignee: row.assignee,
-    category: row.category || "일반 업무",
+    category: row.category ?? "",
     memo: row.memo,
     allocatedBudget: row.allocated_budget,
     requiredBudget: row.required_budget,
@@ -1687,9 +1687,9 @@ export async function POST(request: Request) {
       await getTemplatesFromDb(),
       payload.templateKey
     );
-    // The type (template) is the task's category — they are one concept now.
-    const category =
-      payload.category?.trim().slice(0, 80) || selectedTemplate.name;
+    // 대분류(그룹) is an independent free-text grouping, separate from the
+    // type/stage preset. Empty means "미분류".
+    const category = payload.category?.trim().slice(0, 80) ?? "";
 
     const last = await d1
       .prepare("SELECT MAX(position) AS position FROM workflow_items")
@@ -2052,11 +2052,12 @@ export async function PATCH(request: Request) {
         return Response.json({ error: "유형을 찾을 수 없습니다." }, { status: 404 });
       }
 
+      // Changing the type must not disturb the task's 대분류(그룹).
       await d1
         .prepare(
-          "UPDATE workflow_items SET template_key = ?, category = ?, updated_by = ?, updated_at = ? WHERE id = ?"
+          "UPDATE workflow_items SET template_key = ?, updated_by = ?, updated_at = ? WHERE id = ?"
         )
-        .bind(templateKey, template.name, actor, now, itemId)
+        .bind(templateKey, actor, now, itemId)
         .run();
       await reconcileItemsForTemplate(templateKey, template.stages, actor);
 
