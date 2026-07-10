@@ -1244,6 +1244,26 @@ async function getAppSettings() {
   };
 }
 
+// Saved display order for 대분류(그룹) sections (a preference list of names).
+async function getGroupOrder(): Promise<string[]> {
+  const row = await getD1()
+    .prepare("SELECT value FROM app_settings WHERE key = 'groupOrder'")
+    .first<{ value: string }>();
+
+  if (!row) {
+    return [];
+  }
+
+  try {
+    const parsed = JSON.parse(row.value);
+    return Array.isArray(parsed)
+      ? parsed.filter((name): name is string => typeof name === "string")
+      : [];
+  } catch {
+    return [];
+  }
+}
+
 type WebhookRow = {
   id: number;
   name: string;
@@ -1294,6 +1314,7 @@ export async function GET(request: Request) {
       history: await getHistory(),
       settings: await getAppSettings(),
       webhook: await getWebhookSettings(),
+      groupOrder: await getGroupOrder(),
       viewer: getActor(request),
     });
   } catch (error) {
@@ -1768,10 +1789,29 @@ export async function PATCH(request: Request) {
         group?: string;
         progress?: number | string | null;
       }>;
+      groupOrder?: string[];
     };
     const now = new Date().toISOString();
     const actor = getActor(request, payload.actor);
     const d1 = getD1();
+
+    if (payload.action === "save-group-order") {
+      const order = Array.isArray(payload.groupOrder)
+        ? payload.groupOrder
+            .filter((name): name is string => typeof name === "string")
+            .map((name) => name.slice(0, 80))
+            .slice(0, 300)
+        : [];
+
+      await d1
+        .prepare(`INSERT INTO app_settings (key, value, updated_at)
+          VALUES ('groupOrder', ?, ?)
+          ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`)
+        .bind(JSON.stringify(order), now)
+        .run();
+
+      return Response.json({ groupOrder: await getGroupOrder() });
+    }
 
     if (payload.action === "save-template") {
       const name =

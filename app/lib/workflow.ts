@@ -102,6 +102,7 @@ export type TaskResponse = {
   settings?: AppSettings;
   webhook?: { url: string; enabled: boolean };
   sent?: number;
+  groupOrder?: string[];
   viewer?: string;
   error?: string;
 };

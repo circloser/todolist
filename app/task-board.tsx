@@ -239,6 +239,8 @@ export default function TaskBoard() {
   const [stepDrafts, setStepDrafts] = useState<Record<number, string>>({});
   const [newGroup, setNewGroup] = useState("");
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
+  const [groupOrder, setGroupOrder] = useState<string[]>([]);
+  const [draggedGroup, setDraggedGroup] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [adding, setAdding] = useState(false);
   const [savingSettings, setSavingSettings] = useState(false);
@@ -273,6 +275,7 @@ export default function TaskBoard() {
       setBoardTitle(data.settings?.boardTitle ?? defaultSettings.boardTitle);
       setWebhookUrl(data.webhook?.url ?? "");
       setWebhookEnabled(data.webhook?.enabled ?? false);
+      setGroupOrder(data.groupOrder ?? []);
 
       const storedUserName = window.localStorage
         .getItem("team-progress-user-name")
@@ -511,8 +514,17 @@ export default function TaskBoard() {
       groups[index].items.push(item);
     }
 
+    // Apply the saved group order; unknown groups keep their appearance order
+    // at the end (Array.sort is stable, both map to Infinity).
+    const orderIndex = new Map(groupOrder.map((name, i) => [name, i]));
+    groups.sort(
+      (first, second) =>
+        (orderIndex.get(first.name) ?? Infinity) -
+        (orderIndex.get(second.name) ?? Infinity)
+    );
+
     return groups;
-  }, [visibleItems]);
+  }, [visibleItems, groupOrder]);
 
   const stages =
     selectedTemplate?.stages.map((stage) => ({
@@ -2021,6 +2033,56 @@ export default function TaskBoard() {
     event.dataTransfer.dropEffect = "move";
   }
 
+  async function persistGroupOrder(order: string[]) {
+    const previous = groupOrder;
+    setGroupOrder(order);
+    setError("");
+
+    try {
+      const response = await fetch("/api/tasks", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "save-group-order",
+          actor: currentActor,
+          groupOrder: order,
+        }),
+      });
+      const data = (await response.json()) as TaskResponse;
+
+      if (!response.ok || !data.groupOrder) {
+        throw new Error(data.error ?? "그룹 순서를 저장하지 못했습니다.");
+      }
+
+      setGroupOrder(data.groupOrder);
+    } catch (saveError) {
+      setGroupOrder(previous);
+      setError(
+        saveError instanceof Error
+          ? saveError.message
+          : "그룹 순서를 저장하지 못했습니다."
+      );
+    }
+  }
+
+  function handleGroupDrop(targetName: string) {
+    if (!draggedGroup || draggedGroup === targetName) {
+      setDraggedGroup(null);
+      return;
+    }
+
+    const names = listGroups.map((group) => group.name);
+    const from = names.indexOf(draggedGroup);
+    const to = names.indexOf(targetName);
+    setDraggedGroup(null);
+
+    if (from < 0 || to < 0) {
+      return;
+    }
+
+    void persistGroupOrder(moveItem(names, from, to));
+  }
+
   function toggleExpanded(id: number) {
     setExpandedIds((current) => {
       const next = new Set(current);
@@ -3201,7 +3263,33 @@ export default function TaskBoard() {
 
                 return (
                   <div key={`group-${group.name}`} className="space-y-2.5">
-                    <div className="flex items-center gap-2.5 rounded-[var(--radius)] border border-[var(--border)] bg-[var(--surface-2)] px-3 py-2">
+                    <div
+                      onDragOver={(event) => {
+                        if (draggedGroup) {
+                          event.preventDefault();
+                          event.dataTransfer.dropEffect = "move";
+                        }
+                      }}
+                      onDrop={() => handleGroupDrop(group.name)}
+                      className={`flex items-center gap-2.5 rounded-[var(--radius)] border bg-[var(--surface-2)] px-3 py-2 ${
+                        draggedGroup === group.name
+                          ? "border-[var(--accent)] ring-2 ring-[var(--accent-ring)]"
+                          : "border-[var(--border)]"
+                      }`}
+                    >
+                      <button
+                        type="button"
+                        draggable
+                        onDragStart={(event) => {
+                          setDraggedGroup(group.name);
+                          event.dataTransfer.effectAllowed = "move";
+                        }}
+                        onDragEnd={() => setDraggedGroup(null)}
+                        className="tb-iconbtn h-6 w-6 shrink-0 cursor-grab active:cursor-grabbing"
+                        title="드래그해 대분류 순서 변경"
+                      >
+                        ⋮⋮
+                      </button>
                       <button
                         type="button"
                         onClick={() =>
