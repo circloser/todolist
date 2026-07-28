@@ -48,6 +48,10 @@ export type WorkflowItem = {
   memo: string;
   allocatedBudget: number | null;
   requiredBudget: number | null;
+  contractVendor: string;
+  contractManager: string;
+  contractPhone: string;
+  contractAmount: number | null;
   dueDate: string | null;
   location: string;
   lat: number | null;

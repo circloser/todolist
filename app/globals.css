@@ -508,6 +508,9 @@ select {
   .tb-list-quick-edit .tb-field {
     background: rgba(255, 254, 250, 0.54);
   }
+  .tb-list-quick-edit .tb-list-full {
+    grid-column: 1 / -1;
+  }
   .tb-list-quick-edit textarea {
     min-height: 42px;
   }

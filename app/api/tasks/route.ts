@@ -10,6 +10,10 @@ type WorkflowItemRow = {
   memo: string;
   allocated_budget: number | null;
   required_budget: number | null;
+  contract_vendor: string | null;
+  contract_manager: string | null;
+  contract_phone: string | null;
+  contract_amount: number | null;
   due_date: string | null;
   location: string | null;
   lat: number | null;
@@ -374,6 +378,10 @@ function normalizeBudget(value: unknown) {
   return Math.round(amount);
 }
 
+function normalizeText(value: unknown, maxLength = 120) {
+  return typeof value === "string" ? value.trim().slice(0, maxLength) : "";
+}
+
 type TemplateRow = {
   template_key: string;
   name: string;
@@ -462,6 +470,10 @@ function toItem(
     memo: row.memo,
     allocatedBudget: row.allocated_budget,
     requiredBudget: row.required_budget,
+    contractVendor: row.contract_vendor ?? "",
+    contractManager: row.contract_manager ?? "",
+    contractPhone: row.contract_phone ?? "",
+    contractAmount: row.contract_amount,
     dueDate: row.due_date,
     location: row.location ?? "",
     lat: row.lat,
@@ -528,6 +540,10 @@ async function ensureSchema() {
       memo TEXT NOT NULL DEFAULT '',
       allocated_budget INTEGER,
       required_budget INTEGER,
+      contract_vendor TEXT NOT NULL DEFAULT '',
+      contract_manager TEXT NOT NULL DEFAULT '',
+      contract_phone TEXT NOT NULL DEFAULT '',
+      contract_amount INTEGER,
       due_date TEXT,
       location TEXT NOT NULL DEFAULT '',
       lat REAL,
@@ -638,6 +654,18 @@ async function ensureSchema() {
     "ALTER TABLE workflow_items ADD COLUMN required_budget INTEGER"
   );
   await addColumnIfMissing(
+    "ALTER TABLE workflow_items ADD COLUMN contract_vendor TEXT NOT NULL DEFAULT ''"
+  );
+  await addColumnIfMissing(
+    "ALTER TABLE workflow_items ADD COLUMN contract_manager TEXT NOT NULL DEFAULT ''"
+  );
+  await addColumnIfMissing(
+    "ALTER TABLE workflow_items ADD COLUMN contract_phone TEXT NOT NULL DEFAULT ''"
+  );
+  await addColumnIfMissing(
+    "ALTER TABLE workflow_items ADD COLUMN contract_amount INTEGER"
+  );
+  await addColumnIfMissing(
     "ALTER TABLE workflow_items ADD COLUMN category TEXT NOT NULL DEFAULT '일반 업무'"
   );
   await addColumnIfMissing(
@@ -729,6 +757,10 @@ async function createItemWithDefaultSteps({
   memo,
   allocatedBudget,
   requiredBudget,
+  contractVendor,
+  contractManager,
+  contractPhone,
+  contractAmount,
   dueDate,
   location,
   lat,
@@ -744,6 +776,10 @@ async function createItemWithDefaultSteps({
   memo: string;
   allocatedBudget?: number | null;
   requiredBudget?: number | null;
+  contractVendor?: string;
+  contractManager?: string;
+  contractPhone?: string;
+  contractAmount?: number | null;
   dueDate?: string | null;
   location?: string;
   lat?: number | null;
@@ -764,6 +800,10 @@ async function createItemWithDefaultSteps({
       memo,
       allocated_budget,
       required_budget,
+      contract_vendor,
+      contract_manager,
+      contract_phone,
+      contract_amount,
       due_date,
       location,
       lat,
@@ -773,7 +813,7 @@ async function createItemWithDefaultSteps({
       updated_by,
       updated_at,
       created_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
     .bind(
       title,
       assignee,
@@ -781,6 +821,10 @@ async function createItemWithDefaultSteps({
       memo,
       allocatedBudget ?? null,
       requiredBudget ?? null,
+      contractVendor ?? "",
+      contractManager ?? "",
+      contractPhone ?? "",
+      contractAmount ?? null,
       dueDate ?? null,
       location ?? "",
       lat ?? null,
@@ -1339,6 +1383,10 @@ export async function POST(request: Request) {
       memo?: string;
       allocatedBudget?: number | string | null;
       requiredBudget?: number | string | null;
+      contractVendor?: string;
+      contractManager?: string;
+      contractPhone?: string;
+      contractAmount?: number | string | null;
       dueDate?: string;
       location?: string;
       lat?: number | string | null;
@@ -1494,10 +1542,12 @@ export async function POST(request: Request) {
       const insertResult = await d1
         .prepare(`INSERT INTO workflow_items (
           title, assignee, category, memo,
-          allocated_budget, required_budget, due_date,
+          allocated_budget, required_budget,
+          contract_vendor, contract_manager, contract_phone, contract_amount,
+          due_date,
           location, lat, lng, links,
           template_key, position, updated_by, updated_at, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
         .bind(
           `${source.title} (복사)`.slice(0, 120),
           source.assignee,
@@ -1505,6 +1555,10 @@ export async function POST(request: Request) {
           source.memo,
           source.allocatedBudget,
           source.requiredBudget,
+          source.contractVendor,
+          source.contractManager,
+          source.contractPhone,
+          source.contractAmount,
           keepSchedule ? source.dueDate : null,
           source.location,
           source.lat,
@@ -1698,6 +1752,10 @@ export async function POST(request: Request) {
     const memo = payload.memo?.trim().slice(0, 1000) ?? "";
     const allocatedBudget = normalizeBudget(payload.allocatedBudget);
     const requiredBudget = normalizeBudget(payload.requiredBudget);
+    const contractVendor = normalizeText(payload.contractVendor, 120);
+    const contractManager = normalizeText(payload.contractManager, 80);
+    const contractPhone = normalizeText(payload.contractPhone, 80);
+    const contractAmount = normalizeBudget(payload.contractAmount);
     const dueDate = normalizeDate(payload.dueDate);
 
     if (!title) {
@@ -1722,6 +1780,10 @@ export async function POST(request: Request) {
       memo,
       allocatedBudget,
       requiredBudget,
+      contractVendor,
+      contractManager,
+      contractPhone,
+      contractAmount,
       dueDate,
       location:
         typeof payload.location === "string"
@@ -1767,6 +1829,10 @@ export async function PATCH(request: Request) {
       memo?: string;
       allocatedBudget?: number | string | null;
       requiredBudget?: number | string | null;
+      contractVendor?: string;
+      contractManager?: string;
+      contractPhone?: string;
+      contractAmount?: number | string | null;
       dueDate?: string | null;
       location?: string;
       lat?: number | string | null;
@@ -2445,6 +2511,22 @@ export async function PATCH(request: Request) {
         "requiredBudget" in payload
           ? normalizeBudget(payload.requiredBudget)
           : existing.required_budget;
+      const contractVendor =
+        "contractVendor" in payload
+          ? normalizeText(payload.contractVendor, 120)
+          : existing.contract_vendor ?? "";
+      const contractManager =
+        "contractManager" in payload
+          ? normalizeText(payload.contractManager, 80)
+          : existing.contract_manager ?? "";
+      const contractPhone =
+        "contractPhone" in payload
+          ? normalizeText(payload.contractPhone, 80)
+          : existing.contract_phone ?? "";
+      const contractAmount =
+        "contractAmount" in payload
+          ? normalizeBudget(payload.contractAmount)
+          : existing.contract_amount;
       const dueDate =
         typeof payload.dueDate === "string" || payload.dueDate === null
           ? normalizeDate(payload.dueDate)
@@ -2473,6 +2555,10 @@ export async function PATCH(request: Request) {
             memo = ?,
             allocated_budget = ?,
             required_budget = ?,
+            contract_vendor = ?,
+            contract_manager = ?,
+            contract_phone = ?,
+            contract_amount = ?,
             due_date = ?,
             location = ?,
             lat = ?,
@@ -2488,6 +2574,10 @@ export async function PATCH(request: Request) {
           memo,
           allocatedBudget,
           requiredBudget,
+          contractVendor,
+          contractManager,
+          contractPhone,
+          contractAmount,
           dueDate,
           location,
           lat,

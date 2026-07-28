@@ -435,6 +435,9 @@ export default function TaskBoard() {
           item.category,
           item.assignee,
           item.memo,
+          item.contractVendor,
+          item.contractManager,
+          item.contractPhone,
           ...item.subtasks.map((subtask) => subtask.title),
           ...item.subtasks.map((subtask) => subtask.blockers),
         ]
@@ -1081,6 +1084,10 @@ export default function TaskBoard() {
         | "memo"
         | "allocatedBudget"
         | "requiredBudget"
+        | "contractVendor"
+        | "contractManager"
+        | "contractPhone"
+        | "contractAmount"
         | "dueDate"
         | "location"
         | "lat"
@@ -1121,6 +1128,10 @@ export default function TaskBoard() {
         | "memo"
         | "allocatedBudget"
         | "requiredBudget"
+        | "contractVendor"
+        | "contractManager"
+        | "contractPhone"
+        | "contractAmount"
         | "dueDate"
         | "location"
         | "lat"
@@ -3693,7 +3704,136 @@ export default function TaskBoard() {
                                   className="tb-field"
                                 />
                               </label>
-                              <label className="block md:col-span-3">
+                              <label className="block">
+                                <span className="tb-label">편성예산</span>
+                                <input
+                                  type="number"
+                                  min="0"
+                                  step="1000"
+                                  value={item.allocatedBudget ?? ""}
+                                  onChange={(event) =>
+                                    updateLocalItem(item.id, {
+                                      allocatedBudget: event.target.value
+                                        ? Number(event.target.value)
+                                        : null,
+                                    })
+                                  }
+                                  onBlur={(event) =>
+                                    updateItem(item.id, {
+                                      allocatedBudget: event.target.value
+                                        ? Number(event.target.value)
+                                        : null,
+                                    })
+                                  }
+                                  className="tb-field"
+                                  placeholder="원"
+                                />
+                              </label>
+                              <label className="block">
+                                <span className="tb-label">소요예산</span>
+                                <input
+                                  type="number"
+                                  min="0"
+                                  step="1000"
+                                  value={item.requiredBudget ?? ""}
+                                  onChange={(event) =>
+                                    updateLocalItem(item.id, {
+                                      requiredBudget: event.target.value
+                                        ? Number(event.target.value)
+                                        : null,
+                                    })
+                                  }
+                                  onBlur={(event) =>
+                                    updateItem(item.id, {
+                                      requiredBudget: event.target.value
+                                        ? Number(event.target.value)
+                                        : null,
+                                    })
+                                  }
+                                  className="tb-field"
+                                  placeholder="원"
+                                />
+                              </label>
+                              <label className="block">
+                                <span className="tb-label">계약금액</span>
+                                <input
+                                  type="number"
+                                  min="0"
+                                  step="1000"
+                                  value={item.contractAmount ?? ""}
+                                  onChange={(event) =>
+                                    updateLocalItem(item.id, {
+                                      contractAmount: event.target.value
+                                        ? Number(event.target.value)
+                                        : null,
+                                    })
+                                  }
+                                  onBlur={(event) =>
+                                    updateItem(item.id, {
+                                      contractAmount: event.target.value
+                                        ? Number(event.target.value)
+                                        : null,
+                                    })
+                                  }
+                                  className="tb-field"
+                                  placeholder="원"
+                                />
+                              </label>
+                              <label className="block">
+                                <span className="tb-label">계약업체</span>
+                                <input
+                                  value={item.contractVendor}
+                                  onChange={(event) =>
+                                    updateLocalItem(item.id, {
+                                      contractVendor: event.target.value,
+                                    })
+                                  }
+                                  onBlur={(event) =>
+                                    updateItem(item.id, {
+                                      contractVendor: event.target.value,
+                                    })
+                                  }
+                                  className="tb-field"
+                                  placeholder="업체명"
+                                />
+                              </label>
+                              <label className="block">
+                                <span className="tb-label">업체 담당자</span>
+                                <input
+                                  value={item.contractManager}
+                                  onChange={(event) =>
+                                    updateLocalItem(item.id, {
+                                      contractManager: event.target.value,
+                                    })
+                                  }
+                                  onBlur={(event) =>
+                                    updateItem(item.id, {
+                                      contractManager: event.target.value,
+                                    })
+                                  }
+                                  className="tb-field"
+                                  placeholder="담당자명"
+                                />
+                              </label>
+                              <label className="block">
+                                <span className="tb-label">업체 연락처</span>
+                                <input
+                                  value={item.contractPhone}
+                                  onChange={(event) =>
+                                    updateLocalItem(item.id, {
+                                      contractPhone: event.target.value,
+                                    })
+                                  }
+                                  onBlur={(event) =>
+                                    updateItem(item.id, {
+                                      contractPhone: event.target.value,
+                                    })
+                                  }
+                                  className="tb-field"
+                                  placeholder="전화번호 또는 이메일"
+                                />
+                              </label>
+                              <label className="block tb-list-full">
                                 <span className="tb-label">메모</span>
                                 <textarea
                                   value={item.memo}
