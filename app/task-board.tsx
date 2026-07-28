@@ -3750,7 +3750,7 @@ export default function TaskBoard() {
                                       key={step.id}
                                       className="tb-step-row tb-list-step-row tb-list-stage-card overflow-hidden"
                                     >
-                                      <div className="flex items-center gap-2.5 px-2.5 py-2">
+                                      <div className="tb-list-stage-main">
                                         <button
                                           type="button"
                                           disabled={disabled}
@@ -3766,9 +3766,9 @@ export default function TaskBoard() {
                                         >
                                           {saving ? "…" : checked ? "✓" : index + 1}
                                         </button>
-                                        <div className="min-w-0 flex-1">
+                                        <div className="tb-list-stage-copy min-w-0 flex-1">
                                           <div
-                                            className={`truncate text-sm ${
+                                            className={`text-sm ${
                                               checked
                                                 ? "text-[var(--text-faint)] line-through"
                                                 : "font-medium"
@@ -3782,66 +3782,62 @@ export default function TaskBoard() {
                                             </div>
                                           ) : null}
                                         </div>
-                                        <button
-                                          type="button"
-                                          onClick={() =>
-                                            toggleStepExpanded(step.id)
-                                          }
-                                          data-active={stepPanelOpen}
-                                          className={`tb-badge shrink-0 cursor-pointer ${
-                                            stepSubs.length &&
-                                            stepSubsDone === stepSubs.length
-                                              ? "tb-badge-success"
-                                              : "tb-badge-muted"
-                                          }`}
-                                          title="이 단계의 세부 체크리스트"
-                                        >
-                                          ☑{" "}
-                                          {stepSubs.length
-                                            ? `${stepSubsDone}/${stepSubs.length}`
-                                            : "세부"}
-                                        </button>
-                                        {step.dueDate && !checked ? (
-                                          <span
-                                            className={`tb-badge ${
-                                              state === "overdue" ||
-                                              state === "danger"
-                                                ? "tb-badge-danger"
-                                                : state === "warning"
-                                                  ? "tb-badge-warning"
-                                                  : "tb-badge-muted"
-                                            }`}
-                                          >
-                                            {shortDueLabel(step.dueDate)}
-                                          </span>
-                                        ) : null}
-                                        <label
-                                          className="tb-stage-due relative !w-auto px-2"
-                                          title="목표일 설정"
-                                        >
-                                          {step.dueDate
-                                            ? formatDay(step.dueDate)
-                                            : "+ 기한"}
-                                          <input
-                                            type="date"
-                                            value={step.dueDate ?? ""}
-                                            onChange={(event) =>
-                                              updateStepDueDate(
-                                                step,
-                                                event.target.value
-                                              )
+                                        <div className="tb-list-stage-controls">
+                                          <label className="tb-list-stage-date">
+                                            <span>목표일</span>
+                                            <input
+                                              type="date"
+                                              value={step.dueDate ?? ""}
+                                              onChange={(event) =>
+                                                updateStepDueDate(
+                                                  step,
+                                                  event.target.value
+                                                )
+                                              }
+                                            />
+                                          </label>
+                                          {step.dueDate && !checked ? (
+                                            <span
+                                              className={`tb-badge ${
+                                                state === "overdue" ||
+                                                state === "danger"
+                                                  ? "tb-badge-danger"
+                                                  : state === "warning"
+                                                    ? "tb-badge-warning"
+                                                    : "tb-badge-muted"
+                                              }`}
+                                            >
+                                              {shortDueLabel(step.dueDate)}
+                                            </span>
+                                          ) : null}
+                                          <button
+                                            type="button"
+                                            onClick={() =>
+                                              toggleStepExpanded(step.id)
                                             }
-                                            className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
-                                          />
-                                        </label>
+                                            data-active={stepPanelOpen}
+                                            className={`tb-btn tb-list-subtask-toggle shrink-0 !py-1.5 text-xs ${
+                                              stepSubs.length &&
+                                              stepSubsDone === stepSubs.length
+                                                ? "tb-btn-soft-success"
+                                                : ""
+                                            }`}
+                                            title="이 단계의 세부 체크리스트"
+                                          >
+                                            세부 체크리스트{" "}
+                                            {stepSubs.length
+                                              ? `${stepSubsDone}/${stepSubs.length}`
+                                              : "추가"}
+                                          </button>
+                                        </div>
                                       </div>
 
                                       {stepPanelOpen ? (
-                                        <div className="space-y-1.5 border-t border-[var(--border)] bg-transparent px-2.5 py-2 pl-9">
+                                        <div className="tb-list-subtask-panel">
                                           {stepSubs.map((subtask) => (
                                             <div
                                               key={subtask.id}
-                                              className="flex items-center gap-2"
+                                              className="tb-list-subtask-row"
                                             >
                                               <input
                                                 type="checkbox"
@@ -3887,12 +3883,10 @@ export default function TaskBoard() {
                                                   subtask.status === "done"
                                                     ? "text-[var(--text-faint)] line-through"
                                                     : ""
-                                                }`}
+                                                  }`}
                                               />
-                                              <label className="tb-stage-due relative !w-auto px-2">
-                                                {subtask.dueDate
-                                                  ? formatDay(subtask.dueDate)
-                                                  : "+ 기한"}
+                                              <label className="tb-list-subtask-date">
+                                                <span>기한</span>
                                                 <input
                                                   type="date"
                                                   value={subtask.dueDate ?? ""}
@@ -3912,7 +3906,6 @@ export default function TaskBoard() {
                                                       }
                                                     );
                                                   }}
-                                                  className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
                                                 />
                                               </label>
                                               <button
@@ -3950,7 +3943,7 @@ export default function TaskBoard() {
                                             />
                                             <button
                                               type="submit"
-                                              className="tb-btn shrink-0 !px-2.5 !py-1.5 text-xs"
+                                              className="tb-btn tb-btn-primary shrink-0 !px-3 !py-1.5 text-xs"
                                             >
                                               추가
                                             </button>

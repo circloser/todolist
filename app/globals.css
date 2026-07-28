@@ -367,9 +367,9 @@ select {
   }
 
   .tb-list-stage-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-    gap: 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
   }
 
   .tb-list-stage-card {
@@ -377,21 +377,100 @@ select {
     border-radius: var(--radius-sm);
     background: rgba(255, 254, 250, 0.58);
   }
-  .tb-list-stage-card > .flex {
-    gap: 8px;
-    padding: 8px 10px;
+
+  .tb-list-stage-main {
+    display: grid;
+    grid-template-columns: 30px minmax(0, 1fr) auto;
+    gap: 11px;
+    align-items: center;
+    padding: 10px 12px;
   }
+
   .tb-list-stage-card .tb-stage {
-    height: 22px !important;
-    width: 22px !important;
+    height: 24px !important;
+    width: 24px !important;
     font-size: 11px;
   }
-  .tb-list-stage-card .tb-badge,
-  .tb-list-stage-card .tb-stage-due {
+
+  .tb-list-stage-copy {
+    min-width: 0;
+  }
+
+  .tb-list-stage-copy > div:first-child {
+    white-space: normal;
+    overflow-wrap: anywhere;
+    line-height: 1.35;
+  }
+
+  .tb-list-stage-controls {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 7px;
+  }
+
+  .tb-list-stage-date,
+  .tb-list-subtask-date {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
     font-size: 11px;
-    line-height: 1;
-    padding-bottom: 5px;
-    padding-top: 5px;
+    font-weight: 600;
+    color: var(--text-muted);
+  }
+
+  .tb-list-stage-date input,
+  .tb-list-subtask-date input {
+    min-height: 30px;
+    border: 1px solid rgba(203, 215, 205, 0.72);
+    border-radius: var(--radius-sm);
+    background: rgba(255, 254, 250, 0.74);
+    color: var(--text);
+    padding: 4px 7px;
+    font-size: 12px;
+  }
+
+  .tb-list-subtask-toggle[data-active="true"],
+  .tb-btn-soft-success {
+    background: var(--success-soft);
+    color: var(--success);
+  }
+
+  .tb-list-subtask-panel {
+    display: grid;
+    gap: 7px;
+    border-top: 1px solid var(--border);
+    background: rgba(242, 246, 241, 0.38);
+    padding: 10px 12px 12px 46px;
+  }
+
+  .tb-list-subtask-row {
+    display: grid;
+    grid-template-columns: 18px minmax(180px, 1fr) auto 30px;
+    gap: 8px;
+    align-items: center;
+  }
+
+  @media (max-width: 900px) {
+    .tb-list-stage-main {
+      grid-template-columns: 30px minmax(0, 1fr);
+    }
+    .tb-list-stage-controls {
+      grid-column: 2;
+      justify-content: flex-start;
+      flex-wrap: wrap;
+    }
+    .tb-list-subtask-panel {
+      padding-left: 12px;
+    }
+    .tb-list-subtask-row {
+      grid-template-columns: 18px minmax(0, 1fr);
+    }
+    .tb-list-subtask-date,
+    .tb-list-subtask-row .tb-iconbtn {
+      grid-column: 2;
+      justify-self: start;
+    }
   }
 
   .tb-list-common-checklist {
