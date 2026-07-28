@@ -275,5 +275,19 @@ describe("date-based helpers", () => {
       steps: [makeStep({ status: "done", dueDate: "2026-06-20" })],
     });
     expect(itemHasOverdueDate(doneOnly)).toBe(false);
+
+    // A fully completed item must not stay urgent or overdue because of its
+    // final due date.
+    const completedWithPastDue = makeItem({
+      dueDate: "2026-06-20",
+      steps: steps("done", "done"),
+    });
+    expect(itemHasOverdueDate(completedWithPastDue)).toBe(false);
+
+    const completedWithNearDue = makeItem({
+      dueDate: "2026-07-01",
+      steps: steps("done"),
+    });
+    expect(itemHasUrgentDate(completedWithNearDue)).toBe(false);
   });
 });

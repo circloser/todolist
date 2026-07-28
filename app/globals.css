@@ -26,6 +26,10 @@
   --success-soft: #e6f4ea;
   --success-border: #b9dcc3;
 
+  --complete: #2563eb;
+  --complete-soft: #eaf1ff;
+  --complete-border: #bfd1ff;
+
   --warning: #b66d12;
   --warning-soft: #fff4df;
   --warning-border: #ecd19b;
@@ -742,6 +746,11 @@ select {
     background: var(--success-soft);
     color: var(--success);
     border-color: var(--success-border);
+  }
+  .tb-badge-complete {
+    background: var(--complete-soft);
+    color: var(--complete);
+    border-color: var(--complete-border);
   }
   .tb-badge-warning {
     background: var(--warning-soft);

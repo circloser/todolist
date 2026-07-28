@@ -288,6 +288,10 @@ export function moveItem<T>(list: T[], from: number, to: number) {
 }
 
 export function itemHasUrgentDate(item: WorkflowItem) {
+  if (isItemDone(item)) {
+    return false;
+  }
+
   const dueDates = [
     item.dueDate,
     ...item.steps
@@ -320,6 +324,10 @@ export function itemHasDueInRange(
 }
 
 export function itemHasOverdueDate(item: WorkflowItem) {
+  if (isItemDone(item)) {
+    return false;
+  }
+
   const dueDates = [
     item.dueDate,
     ...item.steps

@@ -71,6 +71,8 @@ import {
   type WorkflowSubtask,
 } from "./lib/workflow";
 
+const COMPLETE_COLOR = "#2563eb";
+
 const CATEGORY_COLORS = [
   "#18786f",
   "#8b6f16",
@@ -674,7 +676,7 @@ export default function TaskBoard() {
     const safeTotal = total || 1;
 
     const statusSegments = [
-      { key: "done", label: "완료", value: done, color: "var(--success)" },
+      { key: "done", label: "완료", value: done, color: "var(--complete)" },
       { key: "inProgress", label: "진행", value: inProgress, color: "var(--accent)" },
       { key: "urgent", label: "임박", value: urgent, color: "var(--warning)" },
       { key: "overdue", label: "지연", value: overdue, color: "var(--danger)" },
@@ -932,7 +934,7 @@ export default function TaskBoard() {
       overdueNow: itemRows.filter((row) => row.status === "지연").length,
       statusCounts: (
         [
-          ["완료", "#16a34a"],
+          ["완료", COMPLETE_COLOR],
           ["진행", "#18786f"],
           ["임박", "#d97706"],
           ["지연", "#dc2626"],
@@ -2390,7 +2392,7 @@ export default function TaskBoard() {
       const anyUrgent = group.items.some((item) => itemHasUrgentDate(item));
       const allDone = group.items.every((item) => isItemDone(item));
       const color = allDone
-        ? "#16a34a"
+        ? COMPLETE_COLOR
         : anyOverdue
           ? "#dc2626"
           : anyUrgent
@@ -2477,6 +2479,10 @@ export default function TaskBoard() {
   }
 
   function progressColor(item: WorkflowItem) {
+    if (isItemDone(item)) {
+      return COMPLETE_COLOR;
+    }
+
     if (itemHasOverdueDate(item)) {
       return "#c44232";
     }
@@ -3544,7 +3550,7 @@ export default function TaskBoard() {
                             {assigneeName(item.assignee)}
                           </span>
                           {done ? (
-                            <span className="tb-badge tb-badge-success">완료</span>
+                            <span className="tb-badge tb-badge-complete">완료</span>
                           ) : (
                             <span className="tb-badge tb-badge-muted">
                               {completed}/{item.steps.length} · {next?.title ?? "—"}
@@ -3553,14 +3559,17 @@ export default function TaskBoard() {
                           {item.dueDate ? (
                             <span
                               className={`tb-badge ${
-                                itemDue === "overdue" || itemDue === "danger"
+                                done
+                                  ? "tb-badge-complete"
+                                  : itemDue === "overdue" || itemDue === "danger"
                                   ? "tb-badge-danger"
                                   : itemDue === "warning"
                                     ? "tb-badge-warning"
                                     : "tb-badge-muted"
                               }`}
                             >
-                              마감 {formatDay(item.dueDate)} · {shortDueLabel(item.dueDate)}
+                              마감 {formatDay(item.dueDate)} ·{" "}
+                              {done ? "완료" : shortDueLabel(item.dueDate)}
                             </span>
                           ) : null}
                           {item.location ? (
@@ -4742,7 +4751,7 @@ export default function TaskBoard() {
                     { color: "#18786f", label: "진행 중" },
                     { color: "#d97706", label: "마감 임박 (D-3 이내)" },
                     { color: "#dc2626", label: "지연" },
-                    { color: "#16a34a", label: "완료" },
+                    { color: COMPLETE_COLOR, label: "완료" },
                   ].map((entry) => (
                     <div key={entry.label} className="flex items-center gap-2">
                       <span
@@ -5006,7 +5015,7 @@ export default function TaskBoard() {
                               />
                               <div className="mt-1 flex flex-wrap items-center gap-1 px-2 text-[10px] text-[var(--text-muted)] xl:text-[11px]">
                                 {done ? (
-                                  <span className="tb-badge tb-badge-success">완료</span>
+                                  <span className="tb-badge tb-badge-complete">완료</span>
                                 ) : (
                                   <span className="tb-badge tb-badge-muted">
                                     {nextStepTitle(item)}
@@ -5621,7 +5630,7 @@ export default function TaskBoard() {
                               key={marker.id}
                               className={`absolute top-1/2 h-2.5 w-2.5 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 ${
                                 marker.done
-                                  ? "border-[var(--success)] bg-[var(--success)]"
+                                  ? "border-[var(--complete)] bg-[var(--complete)]"
                                   : "border-[var(--accent)] bg-white"
                               }`}
                               style={{ left: `${marker.pct}%` }}
@@ -6961,7 +6970,7 @@ export default function TaskBoard() {
                         <span
                           className={`tb-badge ${
                             row.status === "완료"
-                              ? "tb-badge-success"
+                              ? "tb-badge-complete"
                               : row.status === "지연"
                                 ? "tb-badge-danger"
                                 : row.status === "임박"
