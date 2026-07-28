@@ -3160,7 +3160,7 @@ export default function TaskBoard() {
             ) : null}
           </div>
         ) : viewMode === "list" ? (
-          <div className="space-y-2.5">
+          <div className="tb-list-view">
             {loading ? (
               <div className="tb-card px-4 py-16 text-center text-sm text-[var(--text-muted)]">
                 불러오는 중…
@@ -3193,7 +3193,7 @@ export default function TaskBoard() {
                 ).length;
 
                 return (
-                  <div key={`group-${group.name}`} className="space-y-2.5">
+                  <div key={`group-${group.name}`} className="tb-list-group space-y-1.5">
                     <div
                       onDragOver={(event) => {
                         if (draggedGroup) {
@@ -3202,7 +3202,7 @@ export default function TaskBoard() {
                         }
                       }}
                       onDrop={() => handleGroupDrop(group.name)}
-                      className={`tb-hierarchy-header flex items-center gap-2.5 ${
+                      className={`tb-hierarchy-header tb-list-group-header flex items-center gap-2.5 ${
                         draggedGroup === group.name
                           ? "ring-2 ring-[var(--accent-ring)]"
                           : ""
@@ -3308,7 +3308,9 @@ export default function TaskBoard() {
                     id={`item-${item.id}`}
                     onDragOver={handleDragOver}
                     onDrop={() => handleDrop(item.id)}
-                    className={`tb-card tb-work-item overflow-hidden transition-shadow ${
+                    className={`tb-card tb-work-item tb-list-item overflow-hidden transition-shadow ${
+                      expanded ? "is-expanded " : ""
+                    }${
                       draggedId === item.id || focusItemId === item.id
                         ? "ring-2 ring-[var(--accent-ring)]"
                         : ""
@@ -3316,7 +3318,7 @@ export default function TaskBoard() {
                     style={{ marginLeft: `${itemIndent}px` }}
                   >
                     <div
-                      className="flex items-center gap-3 p-3"
+                      className="tb-list-row-main grid gap-3 p-3 md:grid-cols-[28px_minmax(0,1fr)_180px_auto] md:items-center"
                       style={{ boxShadow: `inset 3px 0 0 ${rowColor}` }}
                     >
                       <button
@@ -3336,17 +3338,17 @@ export default function TaskBoard() {
                       <button
                         type="button"
                         onClick={() => toggleExpanded(item.id)}
-                        className="min-w-0 flex-1 text-left"
+                        className="tb-list-content text-left"
                       >
                         <div className="flex flex-wrap items-center gap-2">
                           <span className="truncate text-sm font-semibold">
                             {item.title || "제목 없음"}
                           </span>
-                          <span className="tb-chip tb-chip-accent">
+                          <span className="tb-chip tb-chip-accent tb-list-type">
                             {itemTypeName(item)}
                           </span>
                         </div>
-                        <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-[var(--text-muted)]">
+                        <div className="tb-list-meta mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-[var(--text-muted)]">
                           <span className="inline-flex items-center gap-1.5">
                             <span
                               className="h-2.5 w-2.5 rounded-full"
@@ -3386,6 +3388,36 @@ export default function TaskBoard() {
                             <span className="text-[var(--accent)]">저장 중…</span>
                           ) : null}
                         </div>
+                        <div
+                          className="tb-list-step-strip"
+                          role="list"
+                          aria-label="단계 진행 요약"
+                        >
+                          {item.steps.map((step, index) => {
+                            const checked = step.status === "done";
+                            const state = urgency(step.dueDate);
+                            const current = !done && index === completed;
+
+                            return (
+                              <span
+                                key={step.id}
+                                role="listitem"
+                                className={`tb-list-step-dot ${
+                                  checked
+                                    ? "is-done"
+                                    : current
+                                      ? "is-current"
+                                      : state === "overdue" || state === "danger"
+                                        ? "is-danger"
+                                        : state === "warning"
+                                          ? "is-warning"
+                                          : ""
+                                }`}
+                                title={step.title}
+                              />
+                            );
+                          })}
+                        </div>
                       </button>
 
                       <div className="hidden w-44 shrink-0 md:block">
@@ -3404,7 +3436,7 @@ export default function TaskBoard() {
                         </div>
                       </div>
 
-                      <div className="flex shrink-0 items-center gap-1">
+                      <div className="tb-list-actions flex shrink-0 items-center justify-end gap-1 md:justify-start">
                         <button
                           type="button"
                           onClick={() => toggleExpanded(item.id)}
@@ -3435,8 +3467,8 @@ export default function TaskBoard() {
                     </div>
 
                     {expanded ? (
-                      <div className="tb-item-detail p-4">
-                        <div className="grid gap-4 lg:grid-cols-[1fr_300px]">
+                      <div className="tb-item-detail tb-list-detail p-4">
+                        <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_300px]">
                           <div className="space-y-4">
                             <div>
                               <div className="mb-2 flex items-center justify-between">
@@ -3474,7 +3506,7 @@ export default function TaskBoard() {
                                   return (
                                     <div
                                       key={step.id}
-                                      className="tb-step-row overflow-hidden"
+                                      className="tb-step-row tb-list-step-row overflow-hidden"
                                     >
                                       <div className="flex items-center gap-2.5 px-2.5 py-2">
                                         <button
@@ -3703,7 +3735,7 @@ export default function TaskBoard() {
                                   .map((subtask) => (
                                   <div
                                     key={subtask.id}
-                                    className="tb-inline-panel flex items-center gap-2.5 rounded-[var(--radius)] border border-[var(--border)] bg-[var(--surface)] px-2.5 py-2"
+                                    className="tb-inline-panel tb-list-step-row flex items-center gap-2.5 rounded-[var(--radius)] border border-[var(--border)] bg-[var(--surface)] px-2.5 py-2"
                                   >
                                     <input
                                       type="checkbox"
@@ -3808,7 +3840,7 @@ export default function TaskBoard() {
                           </div>
 
                           <div className="space-y-3">
-                            <div className="tb-side-panel space-y-3 p-3.5">
+                            <div className="tb-side-panel tb-list-side-panel space-y-3 p-3.5">
                               <div className="text-sm font-semibold">업무 정보</div>
                               <label className="block">
                                 <span className="tb-label">담당자</span>
@@ -4128,7 +4160,7 @@ export default function TaskBoard() {
                               </div>
                             </div>
 
-                            <div className="tb-side-panel p-3.5">
+                            <div className="tb-side-panel tb-list-side-panel p-3.5">
                               <div className="text-sm font-semibold">최근 이력</div>
                               <div className="mt-2.5 max-h-40 space-y-2.5 overflow-auto">
                                 {history

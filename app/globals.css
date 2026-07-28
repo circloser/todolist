@@ -247,6 +247,138 @@ select {
     background: transparent;
   }
 
+  .tb-list-view {
+    display: grid;
+    gap: 22px;
+  }
+
+  .tb-list-group {
+    border-top: 1px solid var(--border);
+    padding-top: 10px;
+  }
+  .tb-list-group:first-child {
+    border-top: 0;
+    padding-top: 0;
+  }
+
+  .tb-list-group-header {
+    border-left: 0;
+    border-bottom: 1px solid rgba(203, 215, 205, 0.66);
+    border-radius: 0;
+    padding-bottom: 9px;
+    padding-top: 5px;
+  }
+  .tb-list-group-header:hover {
+    background: transparent;
+    border-left-color: transparent;
+    border-bottom-color: var(--accent-soft-2);
+  }
+
+  .tb-list-item {
+    position: relative;
+    border: 0;
+    border-bottom: 1px solid rgba(203, 215, 205, 0.66);
+    border-radius: 0;
+    background: transparent;
+  }
+  .tb-list-item:hover,
+  .tb-list-item:focus-within {
+    background: rgba(255, 254, 250, 0.72);
+  }
+  .tb-list-item.is-expanded {
+    background: rgba(255, 254, 250, 0.86);
+  }
+
+  .tb-list-row-main {
+    grid-template-columns: 28px minmax(0, 1fr);
+    min-height: 72px;
+  }
+
+  .tb-list-content {
+    min-width: 0;
+  }
+
+  .tb-list-type {
+    background: rgba(228, 242, 239, 0.72);
+    color: var(--accent);
+  }
+
+  .tb-list-meta .tb-chip,
+  .tb-list-meta .tb-badge {
+    border-color: transparent;
+    background: transparent;
+    padding-left: 0;
+    padding-right: 0;
+  }
+
+  .tb-list-step-strip {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(10px, 1fr));
+    gap: 4px;
+    margin-top: 9px;
+    max-width: 520px;
+  }
+
+  .tb-list-step-dot {
+    height: 5px;
+    min-width: 10px;
+    border-radius: var(--radius-pill);
+    background: rgba(203, 215, 205, 0.76);
+  }
+  .tb-list-step-dot.is-done {
+    background: var(--success);
+  }
+  .tb-list-step-dot.is-current {
+    background: var(--accent);
+  }
+  .tb-list-step-dot.is-warning {
+    background: var(--warning);
+  }
+  .tb-list-step-dot.is-danger {
+    background: var(--danger);
+  }
+
+  .tb-list-actions {
+    grid-column: 2;
+    justify-self: end;
+    opacity: 0.46;
+    transition: opacity 0.12s ease;
+  }
+  .tb-list-item:hover .tb-list-actions,
+  .tb-list-item:focus-within .tb-list-actions {
+    opacity: 1;
+  }
+
+  .tb-list-detail {
+    border-top: 1px solid var(--border);
+    background:
+      linear-gradient(180deg, rgba(242, 246, 241, 0.92), rgba(242, 246, 241, 0.58));
+  }
+
+  .tb-list-step-row {
+    border-top-color: rgba(203, 215, 205, 0.72);
+  }
+
+  .tb-list-side-panel {
+    background: rgba(255, 254, 250, 0.44);
+  }
+
+  @media (max-width: 767px) {
+    .tb-list-actions {
+      opacity: 1;
+    }
+    .tb-list-row-main {
+      min-height: 0;
+    }
+  }
+
+  @media (min-width: 768px) {
+    .tb-list-actions {
+      grid-column: auto;
+      justify-self: start;
+    }
+  }
+
   .tb-title-field {
     width: min(560px, calc(100vw - 32px)) !important;
     min-width: min(320px, calc(100vw - 32px));
@@ -275,6 +407,18 @@ select {
   .tb-hierarchy-header:hover {
     background: var(--surface-2);
     border-left-color: var(--accent);
+  }
+
+  .tb-hierarchy-header.tb-list-group-header {
+    border-left: 0;
+    border-bottom: 1px solid rgba(203, 215, 205, 0.66);
+    border-radius: 0;
+    background: transparent;
+  }
+  .tb-hierarchy-header.tb-list-group-header:hover {
+    background: transparent;
+    border-left-color: transparent;
+    border-bottom-color: var(--accent-soft-2);
   }
 
   /* Inline-edit ghost field (used inside table cells) */
