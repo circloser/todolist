@@ -831,7 +831,7 @@ export default function TaskBoard() {
       statusCounts: (
         [
           ["완료", "#16a34a"],
-          ["진행", "#5b5bd6"],
+          ["진행", "#18786f"],
           ["임박", "#d97706"],
           ["지연", "#dc2626"],
         ] as const
@@ -2209,7 +2209,7 @@ export default function TaskBoard() {
           ? "#dc2626"
           : anyUrgent
             ? "#d97706"
-            : "#5b5bd6";
+            : "#18786f";
       const count = group.items.length;
       const marker = L.circleMarker([group.lat, group.lng], {
         radius: Math.min(9 + (count - 1) * 2, 16),
@@ -2235,7 +2235,7 @@ export default function TaskBoard() {
               <div style="font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${title}</div>
               <div style="color:#61667a;font-size:12px">${assignee} · ${itemProgress(item)}%</div>
             </div>
-            <button type="button" data-open-item="${item.id}" style="flex-shrink:0;padding:3px 9px;border-radius:8px;border:1px solid #5b5bd6;background:#eef0fd;color:#5b5bd6;font-weight:600;cursor:pointer">열기</button>
+            <button type="button" data-open-item="${item.id}" style="flex-shrink:0;padding:3px 9px;border-radius:8px;border:1px solid #18786f;background:#e4f2ef;color:#18786f;font-weight:600;cursor:pointer">열기</button>
           </div>`;
         })
         .join("");
@@ -2292,40 +2292,38 @@ export default function TaskBoard() {
 
   function progressColor(item: WorkflowItem) {
     if (itemHasOverdueDate(item)) {
-      return "#d9452f";
+      return "#c44232";
     }
 
     if (itemHasUrgentDate(item)) {
-      return "#e5aa25";
+      return "#b66d12";
     }
 
-    return "#248f84";
+    return "#18786f";
   }
 
   return (
-    <main className="min-h-dvh">
+    <main className="tb-app min-h-dvh">
       {/* On phones the full header would cover most of the viewport, so it
           only sticks from lg upward. */}
-      <header className="z-30 border-b border-[var(--border)] bg-[var(--surface)]/90 shadow-[var(--shadow-xs)] backdrop-blur lg:sticky lg:top-0">
+      <header className="tb-topbar z-30 lg:sticky lg:top-0">
         <div className="mx-auto flex max-w-[1600px] flex-col gap-4 px-4 py-4 sm:px-6 lg:px-8">
           <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
             <div className="min-w-0">
-              <div className="mb-1.5 flex flex-wrap items-center gap-2">
-                <span className="tb-chip tb-chip-accent">{organizationName}</span>
-                <span className="tb-chip">{currentActor}</span>
-                {savingSettings ? (
+              {savingSettings ? (
+                <div className="mb-1.5 flex flex-wrap items-center gap-2">
                   <span className="text-xs font-medium text-[var(--accent)]">
                     저장 중…
                   </span>
-                ) : null}
-              </div>
+                </div>
+              ) : null}
               <input
                 value={boardTitle}
                 onChange={(event) => setBoardTitle(event.target.value)}
                 onBlur={(event) =>
                   void saveBoardSettings({ boardTitle: event.target.value })
                 }
-                className="tb-ghost max-w-[560px] -ml-2 text-2xl font-bold tracking-tight sm:text-[28px]"
+                className="tb-title-field tb-ghost text-2xl font-bold tracking-tight sm:text-[28px]"
               />
             </div>
 
@@ -2575,7 +2573,7 @@ export default function TaskBoard() {
             </div>
 
             {showFilters ? (
-              <div className="hidden flex-wrap items-center gap-2 rounded-[var(--radius)] border border-[var(--border)] bg-[var(--surface-2)] p-2.5 md:flex">
+              <div className="tb-filter-strip hidden flex-wrap items-center gap-2 md:flex">
                 <select
                   value={templateFilter}
                   onChange={(event) => {
@@ -2768,7 +2766,7 @@ export default function TaskBoard() {
 
             {widgetPrefs.kpi !== false ? (
             <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
-              <div className="tb-card p-4">
+              <div className="tb-card tb-metric p-4">
                 <div className="tb-stat-label">전체 진행률</div>
                 <div className="tb-stat-value text-[var(--accent)]">
                   {overallProgress}%
@@ -2782,23 +2780,23 @@ export default function TaskBoard() {
                   />
                 </div>
               </div>
-              <div className="tb-card p-4">
+              <div className="tb-card tb-metric p-4">
                 <div className="tb-stat-label">전체 업무</div>
                 <div className="tb-stat-value">{dashboard.total}</div>
               </div>
-              <div className="tb-card p-4">
+              <div className="tb-card tb-metric p-4">
                 <div className="tb-stat-label">진행 중</div>
                 <div className="tb-stat-value">
                   {dashboard.inProgress + dashboard.urgent}
                 </div>
               </div>
-              <div className="tb-card p-4">
+              <div className="tb-card tb-metric p-4">
                 <div className="tb-stat-label">완료</div>
                 <div className="tb-stat-value text-[var(--success)]">
                   {dashboard.done}
                 </div>
               </div>
-              <div className="tb-card p-4">
+              <div className="tb-card tb-metric p-4">
                 <div className="tb-stat-label">지연</div>
                 <div className="tb-stat-value text-[var(--danger)]">
                   {dashboard.overdue}
@@ -2809,7 +2807,7 @@ export default function TaskBoard() {
 
             <div className="grid gap-4 lg:grid-cols-3">
               {widgetPrefs.status !== false ? (
-              <div className="tb-card p-5">
+              <div className="tb-card tb-section p-5">
                 <h2 className="text-sm font-semibold">상태 분포</h2>
                 <div className="mt-4 flex items-center gap-5">
                   <div
@@ -2846,7 +2844,7 @@ export default function TaskBoard() {
               ) : null}
 
               {widgetPrefs.workload !== false ? (
-              <div className="tb-card p-5">
+              <div className="tb-card tb-section p-5">
                 <h2 className="text-sm font-semibold">담당자 워크로드</h2>
                 <div className="mt-3 space-y-2.5">
                   {assigneeStats.length ? (
@@ -2903,7 +2901,7 @@ export default function TaskBoard() {
               ) : null}
 
               {widgetPrefs.types !== false ? (
-              <div className="tb-card p-5">
+              <div className="tb-card tb-section p-5">
                 <h2 className="text-sm font-semibold">유형별 업무</h2>
                 <div className="mt-3 space-y-2.5">
                   {dashboard.types.length ? (
@@ -2952,7 +2950,7 @@ export default function TaskBoard() {
 
             <div className="grid gap-4 lg:grid-cols-[1.2fr_1fr]">
               {widgetPrefs.deadlines !== false ? (
-              <div className="tb-card p-5">
+              <div className="tb-card tb-section p-5">
                 <h2 className="text-sm font-semibold">다가오는 마감</h2>
                 <div className="mt-3 space-y-1.5">
                   {dashboard.deadlines.length ? (
@@ -2963,7 +2961,7 @@ export default function TaskBoard() {
                           key={deadline.id}
                           type="button"
                           onClick={() => openItem(deadline.itemId)}
-                          className="flex w-full items-center gap-2.5 rounded-[var(--radius)] border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-left transition hover:border-[var(--accent)] hover:bg-[var(--surface-3)]"
+                          className="tb-line-button flex w-full items-center gap-2.5 rounded-[var(--radius)] border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-left transition hover:border-[var(--accent)] hover:bg-[var(--surface-3)]"
                         >
                           <span
                             className={`tb-badge ${
@@ -2998,7 +2996,7 @@ export default function TaskBoard() {
 
               <div className="space-y-4">
                 {widgetPrefs.budget !== false ? (
-                <div className="tb-card p-5">
+                <div className="tb-card tb-section p-5">
                   <h2 className="text-sm font-semibold">예산 요약</h2>
                   <div className="mt-3 space-y-3">
                     <div>
@@ -3055,7 +3053,7 @@ export default function TaskBoard() {
                 ) : null}
 
                 {widgetPrefs.bottlenecks !== false ? (
-                <div className="tb-card p-5">
+                <div className="tb-card tb-section p-5">
                   <h2 className="text-sm font-semibold">병목 단계</h2>
                   <div className="mt-3 flex flex-wrap gap-2">
                     {bottlenecks.length ? (
@@ -3088,7 +3086,7 @@ export default function TaskBoard() {
                 ) : null}
 
                 {widgetPrefs.regions !== false ? (
-                <div className="tb-card p-5">
+                <div className="tb-card tb-section p-5">
                   <h2 className="text-sm font-semibold">지역 현황</h2>
                   <div className="mt-3 space-y-1">
                     {dashboard.regions.length ? (
@@ -3138,7 +3136,7 @@ export default function TaskBoard() {
             </div>
 
             {widgetPrefs.activity !== false ? (
-            <div className="tb-card p-5">
+            <div className="tb-card tb-section p-5">
               <h2 className="text-sm font-semibold">최근 활동</h2>
               <div className="mt-3 grid gap-2.5 sm:grid-cols-2">
                 {history.slice(0, 10).map((entry) => (
@@ -3310,7 +3308,7 @@ export default function TaskBoard() {
                     id={`item-${item.id}`}
                     onDragOver={handleDragOver}
                     onDrop={() => handleDrop(item.id)}
-                    className={`tb-card overflow-hidden transition-shadow ${
+                    className={`tb-card tb-work-item overflow-hidden transition-shadow ${
                       draggedId === item.id || focusItemId === item.id
                         ? "ring-2 ring-[var(--accent-ring)]"
                         : ""
@@ -3437,7 +3435,7 @@ export default function TaskBoard() {
                     </div>
 
                     {expanded ? (
-                      <div className="border-t border-[var(--border)] bg-[var(--surface-2)] p-4">
+                      <div className="tb-item-detail p-4">
                         <div className="grid gap-4 lg:grid-cols-[1fr_300px]">
                           <div className="space-y-4">
                             <div>
@@ -3476,7 +3474,7 @@ export default function TaskBoard() {
                                   return (
                                     <div
                                       key={step.id}
-                                      className="overflow-hidden rounded-[var(--radius)] border border-[var(--border)] bg-[var(--surface)]"
+                                      className="tb-step-row overflow-hidden"
                                     >
                                       <div className="flex items-center gap-2.5 px-2.5 py-2">
                                         <button
@@ -3565,7 +3563,7 @@ export default function TaskBoard() {
                                       </div>
 
                                       {stepPanelOpen ? (
-                                        <div className="space-y-1.5 border-t border-[var(--border)] bg-[var(--surface-2)] px-2.5 py-2 pl-9">
+                                        <div className="space-y-1.5 border-t border-[var(--border)] bg-transparent px-2.5 py-2 pl-9">
                                           {stepSubs.map((subtask) => (
                                             <div
                                               key={subtask.id}
@@ -3705,7 +3703,7 @@ export default function TaskBoard() {
                                   .map((subtask) => (
                                   <div
                                     key={subtask.id}
-                                    className="flex items-center gap-2.5 rounded-[var(--radius)] border border-[var(--border)] bg-[var(--surface)] px-2.5 py-2"
+                                    className="tb-inline-panel flex items-center gap-2.5 rounded-[var(--radius)] border border-[var(--border)] bg-[var(--surface)] px-2.5 py-2"
                                   >
                                     <input
                                       type="checkbox"
@@ -3810,7 +3808,7 @@ export default function TaskBoard() {
                           </div>
 
                           <div className="space-y-3">
-                            <div className="space-y-3 rounded-[var(--radius)] border border-[var(--border)] bg-[var(--surface)] p-3.5">
+                            <div className="tb-side-panel space-y-3 p-3.5">
                               <div className="text-sm font-semibold">업무 정보</div>
                               <label className="block">
                                 <span className="tb-label">담당자</span>
@@ -4130,7 +4128,7 @@ export default function TaskBoard() {
                               </div>
                             </div>
 
-                            <div className="rounded-[var(--radius)] border border-[var(--border)] bg-[var(--surface)] p-3.5">
+                            <div className="tb-side-panel p-3.5">
                               <div className="text-sm font-semibold">최근 이력</div>
                               <div className="mt-2.5 max-h-40 space-y-2.5 overflow-auto">
                                 {history
@@ -4165,7 +4163,7 @@ export default function TaskBoard() {
                 );
               })}
 
-            <div className="tb-card p-3.5">
+            <div className="tb-card tb-add-strip p-3.5">
               <div className="mb-2.5 flex items-center gap-2 text-sm font-semibold text-[var(--text-muted)]">
                 <span className="flex h-5 w-5 items-center justify-center rounded-full bg-[var(--accent-soft)] text-[var(--accent)]">
                   +
@@ -4304,7 +4302,7 @@ export default function TaskBoard() {
                 <h2 className="text-sm font-semibold">범례</h2>
                 <div className="mt-2.5 space-y-1.5 text-sm">
                   {[
-                    { color: "#5b5bd6", label: "진행 중" },
+                    { color: "#18786f", label: "진행 중" },
                     { color: "#d97706", label: "마감 임박 (D-3 이내)" },
                     { color: "#dc2626", label: "지연" },
                     { color: "#16a34a", label: "완료" },
@@ -4434,9 +4432,9 @@ export default function TaskBoard() {
 
             {!loading &&
               gridGroups.map((group) => (
-                <div key={group.templateKey} className="tb-card overflow-hidden">
+                <div key={group.templateKey} className="tb-card tb-grid-sheet overflow-hidden">
                   {gridGroups.length > 1 ? (
-                    <div className="flex items-center gap-2 border-b border-[var(--border)] bg-[var(--surface-2)] px-4 py-2.5 text-sm font-semibold text-[var(--text)]">
+                    <div className="tb-grid-heading flex items-center gap-2 border-b border-[var(--border)] px-4 py-2.5 text-sm font-semibold text-[var(--text)]">
                       {group.templateName}
                       <span className="tb-badge tb-badge-muted">
                         {group.items.length}건
@@ -4787,7 +4785,7 @@ export default function TaskBoard() {
                           </tr>
 
                           {expanded ? (
-                            <tr className="bg-[var(--surface-2)]">
+                            <tr className="tb-grid-expanded">
                               <td colSpan={2} />
                               <td colSpan={group.stages.length + 4} className="px-4 py-4">
                                 <div className="grid gap-4 lg:grid-cols-[1fr_320px]">
@@ -4806,7 +4804,7 @@ export default function TaskBoard() {
                                       {item.subtasks.map((subtask) => (
                                         <div
                                           key={subtask.id}
-                                          className="grid gap-2 rounded-[var(--radius)] border border-[var(--border)] bg-[var(--surface)] p-2 md:grid-cols-[34px_minmax(180px,1.2fr)_130px_minmax(180px,1fr)_44px] md:items-center"
+                                          className="tb-subtask-row grid gap-2 p-2 md:grid-cols-[34px_minmax(180px,1.2fr)_130px_minmax(180px,1fr)_44px] md:items-center"
                                         >
                                           <input
                                             type="checkbox"
@@ -4944,7 +4942,7 @@ export default function TaskBoard() {
                                     </form>
                                   </div>
 
-                                  <div className="rounded-[var(--radius)] border border-[var(--border)] bg-[var(--surface)] p-3.5">
+                                  <div className="tb-side-panel p-3.5">
                                     <div className="text-sm font-semibold">최근 이력</div>
                                     <div className="mt-2.5 max-h-44 space-y-2.5 overflow-auto">
                                       {history
@@ -4983,7 +4981,7 @@ export default function TaskBoard() {
                 </div>
               ))}
 
-            <div className="tb-card p-3.5">
+            <div className="tb-card tb-add-strip p-3.5">
               <div className="mb-2.5 flex items-center gap-2 text-sm font-semibold text-[var(--text-muted)]">
                 <span className="flex h-5 w-5 items-center justify-center rounded-full bg-[var(--accent-soft)] text-[var(--accent)]">
                   +
@@ -5250,7 +5248,7 @@ export default function TaskBoard() {
         )}
 
         <div className="mt-5 grid gap-4 lg:grid-cols-[1fr_360px]">
-          <section className="tb-card p-5">
+          <section className="tb-card tb-section p-5">
             <h2 className="text-base font-semibold">변경 이력</h2>
             <div className="mt-3 max-h-64 space-y-3 overflow-auto">
               {history.slice(0, 20).map((entry) => (
@@ -5272,7 +5270,7 @@ export default function TaskBoard() {
             </div>
           </section>
 
-          <section className="tb-card p-5">
+          <section className="tb-card tb-section p-5">
             <h2 className="text-base font-semibold">보드 설정</h2>
             <div className="mt-3 grid gap-3.5">
               <label>
@@ -6457,7 +6455,7 @@ export default function TaskBoard() {
                               width={(row.count / maxCount) * 170}
                               height="12"
                               rx="6"
-                              fill="#5b5bd6"
+                              fill="#18786f"
                             />
                             <text
                               x={80 + (row.count / maxCount) * 170}
