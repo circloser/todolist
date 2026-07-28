@@ -399,6 +399,22 @@ select {
     padding-top: 12px;
   }
 
+  .tb-list-inline-add {
+    border-left: 3px solid var(--category-color);
+    background:
+      linear-gradient(90deg, var(--category-softer), transparent 240px),
+      rgba(255, 254, 250, 0.7);
+  }
+
+  .tb-list-empty-group {
+    border-left: 3px solid var(--category-color);
+    padding: 10px 12px;
+  }
+
+  .tb-category-add {
+    background: rgba(255, 254, 250, 0.62);
+  }
+
   .tb-list-side-panel {
     display: none;
   }

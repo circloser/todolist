@@ -208,11 +208,14 @@ export default function TaskBoard() {
   >({});
   const [stepDrafts, setStepDrafts] = useState<Record<number, string>>({});
   const [newGroup, setNewGroup] = useState("");
+  const [newCategoryName, setNewCategoryName] = useState("");
+  const [activeAddGroup, setActiveAddGroup] = useState<string | null>(null);
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
   const [groupOrder, setGroupOrder] = useState<string[]>([]);
   const [draggedGroup, setDraggedGroup] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [adding, setAdding] = useState(false);
+  const [savingGroup, setSavingGroup] = useState(false);
   const [savingSettings, setSavingSettings] = useState(false);
   const [draggedId, setDraggedId] = useState<number | null>(null);
   const [savingOrder, setSavingOrder] = useState(false);
@@ -334,13 +337,36 @@ export default function TaskBoard() {
     return categoryKey(item.category);
   }
 
-  const categories = useMemo(
-    () =>
-      [...new Set(items.map((item) => groupName(item)))].sort((first, second) =>
-        first.localeCompare(second, "ko-KR")
-      ),
-    [items]
-  );
+  const categories = useMemo(() => {
+    const names = new Set<string>();
+
+    groupOrder.forEach((name) => names.add(categoryKey(name)));
+    items.forEach((item) => names.add(groupName(item)));
+
+    return [...names].sort((first, second) =>
+      first.localeCompare(second, "ko-KR")
+    );
+  }, [groupOrder, items]);
+
+  const orderedCategoryNames = useMemo(() => {
+    const names: string[] = [];
+    const seen = new Set<string>();
+    const pushName = (value: string) => {
+      const name = categoryKey(value);
+      if (!seen.has(name)) {
+        seen.add(name);
+        names.push(name);
+      }
+    };
+
+    groupOrder.forEach(pushName);
+    [...items]
+      .sort((first, second) => first.position - second.position)
+      .forEach((item) => pushName(groupName(item)));
+    categories.forEach(pushName);
+
+    return names;
+  }, [categories, groupOrder, items]);
 
   const templatesByKey = useMemo(
     () => new Map(templates.map((template) => [template.key, template])),
@@ -470,23 +496,46 @@ export default function TaskBoard() {
   const listGroups = useMemo(() => {
     const groups: Array<{ name: string; items: WorkflowItem[] }> = [];
     const indexByName = new Map<string, number>();
+    const includeEmptyGroups =
+      categoryFilter === "all" &&
+      templateFilter === "all" &&
+      assigneeFilter === "all" &&
+      stageFilter === "all" &&
+      dueFilter === "all" &&
+      filter === "all" &&
+      !keyword.trim();
+    const seedGroups =
+      categoryFilter === "all"
+        ? includeEmptyGroups
+          ? orderedCategoryNames
+          : []
+        : [categoryFilter];
 
-    for (const item of visibleItems) {
-      const name = groupName(item);
-      let index = indexByName.get(name);
+    const ensureGroup = (name: string) => {
+      const key = categoryKey(name);
+      let index = indexByName.get(key);
 
       if (index === undefined) {
         index = groups.length;
-        indexByName.set(name, index);
-        groups.push({ name, items: [] });
+        indexByName.set(key, index);
+        groups.push({ name: key, items: [] });
       }
+
+      return index;
+    };
+
+    seedGroups.forEach(ensureGroup);
+
+    for (const item of visibleItems) {
+      const name = groupName(item);
+      const index = ensureGroup(name);
 
       groups[index].items.push(item);
     }
 
     // Apply the saved group order; unknown groups keep their appearance order
     // at the end (Array.sort is stable, both map to Infinity).
-    const orderIndex = new Map(groupOrder.map((name, i) => [name, i]));
+    const orderIndex = new Map(orderedCategoryNames.map((name, i) => [name, i]));
     groups.sort(
       (first, second) =>
         (orderIndex.get(first.name) ?? Infinity) -
@@ -494,7 +543,17 @@ export default function TaskBoard() {
     );
 
     return groups;
-  }, [visibleItems, groupOrder]);
+  }, [
+    assigneeFilter,
+    categoryFilter,
+    dueFilter,
+    filter,
+    keyword,
+    orderedCategoryNames,
+    stageFilter,
+    templateFilter,
+    visibleItems,
+  ]);
 
   const stages =
     selectedTemplate?.stages.map((stage) => ({
@@ -1419,9 +1478,13 @@ export default function TaskBoard() {
     });
   }
 
-  async function addItem(event: FormEvent<HTMLFormElement>) {
+  async function addItem(
+    event: FormEvent<HTMLFormElement>,
+    categoryOverride?: string
+  ) {
     event.preventDefault();
     const title = newTitle.trim();
+    const category = categoryOverride ?? newGroup;
 
     if (!title) {
       return;
@@ -1437,7 +1500,7 @@ export default function TaskBoard() {
         body: JSON.stringify({
           title,
           actor: currentActor,
-          category: newGroup,
+          category,
           assignee: newAssignee,
           memo: newMemo,
           allocatedBudget: newAllocatedBudget,
@@ -1461,6 +1524,20 @@ export default function TaskBoard() {
       setNewDueDate("");
       setSortMode("manual");
       setHistory(data.history ?? history);
+      if (categoryOverride !== undefined && data.item) {
+        const nextGroup = groupName(data.item);
+        setActiveAddGroup(nextGroup);
+        setNewGroup(nextGroup === categoryKey("") ? "" : nextGroup);
+        setCollapsedGroups((current) => {
+          const nextSet = new Set(current);
+          nextSet.delete(nextGroup);
+          return nextSet;
+        });
+        window.setTimeout(() => {
+          const titleInput = document.getElementById("new-task-title");
+          titleInput?.focus();
+        }, 0);
+      }
     } catch (addError) {
       setError(
         addError instanceof Error ? addError.message : "업무를 추가하지 못했습니다."
@@ -2024,6 +2101,7 @@ export default function TaskBoard() {
       }
 
       setGroupOrder(data.groupOrder);
+      return true;
     } catch (saveError) {
       setGroupOrder(previous);
       setError(
@@ -2031,6 +2109,63 @@ export default function TaskBoard() {
           ? saveError.message
           : "그룹 순서를 저장하지 못했습니다."
       );
+      return false;
+    }
+  }
+
+  function openGroupTaskForm(groupNameForTask: string) {
+    const name = categoryKey(groupNameForTask);
+    setActiveAddGroup(name);
+    setNewGroup(name === categoryKey("") ? "" : name);
+    setSortMode("manual");
+    setCollapsedGroups((current) => {
+      const nextSet = new Set(current);
+      nextSet.delete(name);
+      return nextSet;
+    });
+
+    window.setTimeout(() => {
+      const titleInput = document.getElementById("new-task-title");
+      titleInput?.scrollIntoView({ behavior: "smooth", block: "center" });
+      titleInput?.focus();
+    }, 0);
+  }
+
+  async function addGroup(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const name = categoryKey(newCategoryName);
+
+    if (!newCategoryName.trim() || name === categoryKey("")) {
+      return;
+    }
+
+    if (orderedCategoryNames.includes(name)) {
+      setNewCategoryName("");
+      setFilter("all");
+      setTemplateFilter("all");
+      setAssigneeFilter("all");
+      setCategoryFilter("all");
+      setStageFilter("all");
+      setDueFilter("all");
+      setKeyword("");
+      openGroupTaskForm(name);
+      return;
+    }
+
+    setSavingGroup(true);
+    const saved = await persistGroupOrder([...orderedCategoryNames, name]);
+    setSavingGroup(false);
+
+    if (saved) {
+      setNewCategoryName("");
+      setFilter("all");
+      setTemplateFilter("all");
+      setAssigneeFilter("all");
+      setCategoryFilter("all");
+      setStageFilter("all");
+      setDueFilter("all");
+      setKeyword("");
+      openGroupTaskForm(name);
     }
   }
 
@@ -3205,7 +3340,7 @@ export default function TaskBoard() {
               </div>
             ) : null}
 
-            {!loading && !visibleItems.length ? (
+            {!loading && !listGroups.length ? (
               <div className="tb-card px-4 py-16 text-center text-sm text-[var(--text-muted)]">
                 표시할 업무가 없습니다.
               </div>
@@ -3319,16 +3454,7 @@ export default function TaskBoard() {
                       </div>
                       <button
                         type="button"
-                        onClick={() => {
-                          setNewGroup(group.name === "미분류" ? "" : group.name);
-                          const titleInput =
-                            document.getElementById("new-task-title");
-                          titleInput?.scrollIntoView({
-                            behavior: "smooth",
-                            block: "center",
-                          });
-                          (titleInput as HTMLInputElement | null)?.focus();
-                        }}
+                        onClick={() => openGroupTaskForm(group.name)}
                         className="tb-btn ml-auto shrink-0 !px-2.5 !py-1 text-xs"
                         title="이 그룹으로 새 업무 추가"
                       >
@@ -4301,93 +4427,129 @@ export default function TaskBoard() {
                   </div>
                 );
               })}
+                    {!groupCollapsed && activeAddGroup === group.name ? (
+                      <div
+                        className="tb-card tb-add-strip tb-list-inline-add p-3"
+                        style={{ marginLeft: `${itemIndent}px` }}
+                      >
+                        <div className="mb-2 flex items-center justify-between gap-3">
+                          <div className="min-w-0 text-sm font-semibold">
+                            <span className="text-[var(--accent)]">
+                              {categoryLeaf(group.name)}
+                            </span>
+                            에 업무 추가
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => setActiveAddGroup(null)}
+                            className="tb-iconbtn h-7 w-7 shrink-0"
+                            title="닫기"
+                          >
+                            ×
+                          </button>
+                        </div>
+                        <form
+                          onSubmit={(event) =>
+                            void addItem(
+                              event,
+                              group.name === categoryKey("") ? "" : group.name
+                            )
+                          }
+                          className="grid gap-2 md:grid-cols-2 xl:grid-cols-[170px_minmax(220px,1fr)_140px_140px_90px]"
+                        >
+                          <select
+                            value={newTemplateKey}
+                            onChange={(event) => {
+                              if (event.target.value === "__new__") {
+                                openTemplateEditor(null);
+                                return;
+                              }
+                              setNewTemplateKey(event.target.value);
+                              setStageFilter("all");
+                            }}
+                            className="tb-field"
+                            title="유형"
+                          >
+                            {templates.map((template) => (
+                              <option key={template.key} value={template.key}>
+                                {template.name} ({template.stages.length}단계)
+                              </option>
+                            ))}
+                            <option value="__new__">＋ 새 유형 만들기</option>
+                          </select>
+                          <input
+                            id="new-task-title"
+                            value={newTitle}
+                            onChange={(event) => setNewTitle(event.target.value)}
+                            className="tb-field"
+                            placeholder="새 업무명"
+                          />
+                          <input
+                            value={newAssignee}
+                            onChange={(event) => setNewAssignee(event.target.value)}
+                            className="tb-field"
+                            placeholder="담당자"
+                          />
+                          <input
+                            type="date"
+                            value={newDueDate}
+                            onChange={(event) => setNewDueDate(event.target.value)}
+                            className="tb-field"
+                            title="최종 마감일"
+                          />
+                          <button
+                            type="submit"
+                            disabled={!newTitle.trim() || adding}
+                            className="tb-btn tb-btn-primary"
+                          >
+                            {adding ? "추가 중" : "+ 추가"}
+                          </button>
+                        </form>
+                      </div>
+                    ) : null}
+
+                    {!groupCollapsed &&
+                    !group.items.length &&
+                    activeAddGroup !== group.name ? (
+                      <div
+                        className="tb-list-empty-group text-sm text-[var(--text-faint)]"
+                        style={{ marginLeft: `${itemIndent}px` }}
+                      >
+                        아직 업무가 없습니다. 오른쪽의 + 업무 버튼으로 첫 업무를
+                        추가하세요.
+                      </div>
+                    ) : null}
                   </div>
                 );
               })}
 
-            <div className="tb-card tb-add-strip p-3.5">
+            <div className="tb-card tb-add-strip tb-category-add p-3.5">
               <div className="mb-2.5 flex items-center gap-2 text-sm font-semibold text-[var(--text-muted)]">
                 <span className="flex h-5 w-5 items-center justify-center rounded-full bg-[var(--accent-soft)] text-[var(--accent)]">
                   +
                 </span>
-                새 업무 추가
+                대분류 추가
               </div>
               <form
-                onSubmit={addItem}
-                className="grid gap-2 md:grid-cols-2 xl:grid-cols-[150px_170px_minmax(160px,1fr)_120px_130px_96px]"
+                onSubmit={addGroup}
+                className="grid gap-2 md:grid-cols-[minmax(220px,1fr)_120px]"
               >
                 <input
                   list="group-list"
-                  value={newGroup}
-                  onChange={(event) => setNewGroup(event.target.value)}
+                  value={newCategoryName}
+                  onChange={(event) => setNewCategoryName(event.target.value)}
                   className="tb-field"
-                  placeholder="업무 위계 예: 복원사업 > 현장조사 > 식생"
-                  title="업무 위계 — > 또는 / 로 중분류·소분류를 나눌 수 있습니다"
-                />
-                <select
-                  value={newTemplateKey}
-                  onChange={(event) => {
-                    if (event.target.value === "__new__") {
-                      openTemplateEditor(null);
-                      return;
-                    }
-                    setNewTemplateKey(event.target.value);
-                    setStageFilter("all");
-                  }}
-                  className="tb-field"
-                  title="유형 (단계 세트)"
-                >
-                  {templates.map((template) => (
-                    <option key={template.key} value={template.key}>
-                      {template.name} ({template.stages.length}단계)
-                    </option>
-                  ))}
-                  <option value="__new__">＋ 새 유형 만들기…</option>
-                </select>
-                <input
-                  id="new-task-title"
-                  value={newTitle}
-                  onChange={(event) => setNewTitle(event.target.value)}
-                  className="tb-field"
-                  placeholder="새 업무명"
-                />
-                <input
-                  value={newAssignee}
-                  onChange={(event) => setNewAssignee(event.target.value)}
-                  className="tb-field"
-                  placeholder="담당자"
-                />
-                <input
-                  type="date"
-                  value={newDueDate}
-                  onChange={(event) => setNewDueDate(event.target.value)}
-                  className="tb-field"
-                  title="최종 마감일"
+                  placeholder="새 대분류명 예: 2026년도 영산강청"
+                  title="대분류명"
                 />
                 <button
                   type="submit"
-                  disabled={!newTitle.trim() || adding}
+                  disabled={!newCategoryName.trim() || savingGroup}
                   className="tb-btn tb-btn-primary"
                 >
-                  {adding ? "추가 중…" : "+ 추가"}
+                  {savingGroup ? "추가 중…" : "+ 대분류"}
                 </button>
               </form>
-
-              {(() => {
-                const preview = templatesByKey.get(newTemplateKey);
-                return preview?.stages.length ? (
-                  <div className="mt-2.5 flex flex-wrap items-center gap-1 text-[11px] text-[var(--text-muted)]">
-                    <span className="mr-1 font-semibold">
-                      불러올 진행 단계 {preview.stages.length}개:
-                    </span>
-                    {preview.stages.map((stage, index) => (
-                      <span key={stage.key} className="tb-badge tb-badge-muted">
-                        {index + 1}. {stage.title}
-                      </span>
-                    ))}
-                  </div>
-                ) : null;
-              })()}
             </div>
           </div>
         ) : viewMode === "map" ? (
