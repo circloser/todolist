@@ -1,6 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   DASHBOARD_WIDGETS,
+  categoryDepth,
+  categoryKey,
+  categoryLeaf,
+  categoryLevelLabel,
+  categoryPath,
+  categoryTrail,
   defaultWidgetPrefs,
   escapeHtml,
   isoDate,
@@ -23,6 +29,25 @@ describe("board config helpers", () => {
 
   it("formats local dates as ISO calendar days", () => {
     expect(isoDate(new Date(2026, 6, 28))).toBe("2026-07-28");
+  });
+
+  it("normalizes category hierarchy text", () => {
+    expect(categoryPath("복원사업 > 현장조사 / 식생")).toEqual([
+      "복원사업",
+      "현장조사",
+      "식생",
+    ]);
+    expect(categoryKey("복원사업/현장조사/식생")).toBe(
+      "복원사업 > 현장조사 > 식생"
+    );
+    expect(categoryDepth("복원사업 > 현장조사 > 식생")).toBe(2);
+    expect(categoryLeaf("복원사업 > 현장조사 > 식생")).toBe("식생");
+    expect(categoryTrail("복원사업 > 현장조사 > 식생")).toBe(
+      "복원사업 > 현장조사"
+    );
+    expect(categoryLevelLabel(0)).toBe("대분류");
+    expect(categoryLevelLabel(2)).toBe("소분류");
+    expect(categoryLevelLabel(4)).toBe("5단계");
   });
 });
 

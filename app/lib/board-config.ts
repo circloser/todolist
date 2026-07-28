@@ -57,6 +57,38 @@ export const defaultWidgetPrefs: Record<string, boolean> = Object.fromEntries(
   DASHBOARD_WIDGETS.map((widget) => [widget.key, true])
 );
 
+const CATEGORY_SEPARATOR = /\s*(?:>|\/|\\|\||›|→|·)\s*/u;
+const HIERARCHY_LABELS = ["대분류", "중분류", "소분류"];
+
+export function categoryPath(value: string) {
+  const parts = value
+    .split(CATEGORY_SEPARATOR)
+    .map((part) => part.trim())
+    .filter(Boolean);
+
+  return parts.length ? parts : ["미분류"];
+}
+
+export function categoryKey(value: string) {
+  return categoryPath(value).join(" > ");
+}
+
+export function categoryDepth(value: string) {
+  return categoryPath(value).length - 1;
+}
+
+export function categoryLeaf(value: string) {
+  return categoryPath(value).at(-1) ?? "미분류";
+}
+
+export function categoryTrail(value: string) {
+  return categoryPath(value).slice(0, -1).join(" > ");
+}
+
+export function categoryLevelLabel(depth: number) {
+  return HIERARCHY_LABELS[depth] ?? `${depth + 1}단계`;
+}
+
 // User text is interpolated into Leaflet popup HTML strings.
 export function escapeHtml(value: string) {
   return value

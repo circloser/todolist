@@ -4,13 +4,13 @@
    Design tokens — modern SaaS, indigo accent
    ============================================================ */
 :root {
-  --bg: #f6f7fb;
+  --bg: #f8f9fb;
   --surface: #ffffff;
-  --surface-2: #fafbfd;
-  --surface-3: #f3f4f9;
+  --surface-2: #f8f9fc;
+  --surface-3: #f0f2f7;
 
-  --border: #e9eaf1;
-  --border-strong: #dcdef0;
+  --border: #eef0f5;
+  --border-strong: #dfe4ed;
 
   --text: #1a1a2e;
   --text-muted: #61667a;
@@ -34,15 +34,15 @@
   --danger-soft: #fdecec;
   --danger-border: #f4c2c2;
 
-  --radius-sm: 7px;
-  --radius: 10px;
-  --radius-lg: 14px;
+  --radius-sm: 5px;
+  --radius: 7px;
+  --radius-lg: 8px;
   --radius-pill: 999px;
 
-  --shadow-xs: 0 1px 2px rgba(16, 18, 40, 0.05);
-  --shadow-sm: 0 1px 2px rgba(16, 18, 40, 0.04), 0 2px 6px rgba(16, 18, 40, 0.06);
-  --shadow-md: 0 6px 18px rgba(16, 18, 40, 0.09);
-  --shadow-lg: 0 16px 40px rgba(16, 18, 40, 0.14);
+  --shadow-xs: 0 1px 1px rgba(16, 18, 40, 0.03);
+  --shadow-sm: none;
+  --shadow-md: 0 4px 14px rgba(16, 18, 40, 0.07);
+  --shadow-lg: 0 12px 30px rgba(16, 18, 40, 0.12);
 }
 
 @theme inline {
@@ -143,9 +143,23 @@ select {
   /* Cards / surfaces */
   .tb-card {
     background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-lg);
+    border: 1px solid rgba(223, 228, 237, 0.72);
+    border-radius: var(--radius);
     box-shadow: var(--shadow-sm);
+  }
+
+  .tb-hierarchy-header {
+    border-left: 2px solid var(--accent-soft-2);
+    border-radius: var(--radius-sm);
+    background: transparent;
+    padding-bottom: 7px;
+    padding-right: 12px;
+    padding-top: 7px;
+    transition: background 0.12s ease, border-color 0.12s ease;
+  }
+  .tb-hierarchy-header:hover {
+    background: var(--surface-2);
+    border-left-color: var(--accent);
   }
 
   /* Inline-edit ghost field (used inside table cells) */
@@ -173,7 +187,7 @@ select {
   .tb-field {
     width: 100%;
     background: var(--surface);
-    border: 1px solid var(--border-strong);
+    border: 1px solid var(--border);
     border-radius: var(--radius);
     padding: 8px 11px;
     color: var(--text);
@@ -208,7 +222,7 @@ select {
     border-radius: var(--radius);
     padding: 8px 14px;
     font-weight: 600;
-    border: 1px solid var(--border-strong);
+    border: 1px solid var(--border);
     background: var(--surface);
     color: var(--text);
     transition: background 0.12s ease, border-color 0.12s ease,
@@ -363,7 +377,7 @@ select {
     min-width: 104px;
     padding: 11px 14px;
     border-radius: var(--radius);
-    border: 1px solid var(--border);
+    border: 1px solid transparent;
     background: var(--surface-2);
   }
   .tb-stat-label {

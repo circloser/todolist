@@ -15,6 +15,11 @@ import "leaflet/dist/leaflet.css";
 
 import {
   DASHBOARD_WIDGETS,
+  categoryDepth,
+  categoryKey,
+  categoryLeaf,
+  categoryLevelLabel,
+  categoryTrail,
   defaultSettings,
   defaultTemplates,
   defaultWidgetPrefs,
@@ -284,9 +289,9 @@ export default function TaskBoard() {
     [items]
   );
 
-  // 대분류(그룹): a free-text grouping stored in item.category. Empty → "미분류".
+  // 대분류/중분류/소분류 경로. 예: "복원사업 > 현장조사 > 식생".
   function groupName(item: WorkflowItem) {
-    return item.category.trim() || "미분류";
+    return categoryKey(item.category);
   }
 
   const categories = useMemo(
@@ -427,7 +432,7 @@ export default function TaskBoard() {
     const indexByName = new Map<string, number>();
 
     for (const item of visibleItems) {
-      const name = item.category.trim() || "미분류";
+      const name = groupName(item);
       let index = indexByName.get(name);
 
       if (index === undefined) {
@@ -1415,7 +1420,6 @@ export default function TaskBoard() {
       setNewRequiredBudget("");
       setNewDueDate("");
       setSortMode("manual");
-      setTemplateFilter(newTemplateKey);
       setHistory(data.history ?? history);
     } catch (addError) {
       setError(
@@ -2597,9 +2601,9 @@ export default function TaskBoard() {
                   value={categoryFilter}
                   onChange={(event) => setCategoryFilter(event.target.value)}
                   className="tb-field w-auto"
-                  title="대분류"
+                  title="업무 위계"
                 >
-                  <option value="all">모든 대분류</option>
+                  <option value="all">모든 위계</option>
                   {categories.map((category) => (
                     <option key={category} value={category}>
                       {category}
@@ -3174,6 +3178,10 @@ export default function TaskBoard() {
             {!loading &&
               listGroups.map((group) => {
                 const groupCollapsed = collapsedGroups.has(group.name);
+                const depth = categoryDepth(group.name);
+                const trail = categoryTrail(group.name);
+                const indent = Math.min(depth, 4) * 18;
+                const itemIndent = Math.min(depth + 1, 5) * 14;
                 const groupProgress = group.items.length
                   ? Math.round(
                       group.items.reduce(
@@ -3196,11 +3204,12 @@ export default function TaskBoard() {
                         }
                       }}
                       onDrop={() => handleGroupDrop(group.name)}
-                      className={`flex items-center gap-2.5 rounded-[var(--radius)] border bg-[var(--surface-2)] px-3 py-2 ${
+                      className={`tb-hierarchy-header flex items-center gap-2.5 ${
                         draggedGroup === group.name
-                          ? "border-[var(--accent)] ring-2 ring-[var(--accent-ring)]"
-                          : "border-[var(--border)]"
+                          ? "ring-2 ring-[var(--accent-ring)]"
+                          : ""
                       }`}
+                      style={{ paddingLeft: `${12 + indent}px` }}
                     >
                       <button
                         type="button"
@@ -3211,7 +3220,7 @@ export default function TaskBoard() {
                         }}
                         onDragEnd={() => setDraggedGroup(null)}
                         className="tb-iconbtn h-6 w-6 shrink-0 cursor-grab active:cursor-grabbing"
-                        title="드래그해 대분류 순서 변경"
+                        title="드래그해 업무 위계 순서 변경"
                       >
                         ⋮⋮
                       </button>
@@ -3233,9 +3242,19 @@ export default function TaskBoard() {
                       >
                         {groupCollapsed ? "▸" : "▾"}
                       </button>
-                      <span className="truncate text-sm font-semibold">
-                        📁 {group.name}
+                      <span className="tb-badge tb-badge-muted shrink-0">
+                        {categoryLevelLabel(depth)}
                       </span>
+                      <div className="min-w-0">
+                        <div className="truncate text-sm font-semibold">
+                          {categoryLeaf(group.name)}
+                        </div>
+                        {trail ? (
+                          <div className="truncate text-[11px] text-[var(--text-faint)]">
+                            {trail}
+                          </div>
+                        ) : null}
+                      </div>
                       <span className="tb-badge tb-badge-muted shrink-0">
                         {groupDone}/{group.items.length}
                       </span>
@@ -3296,6 +3315,7 @@ export default function TaskBoard() {
                         ? "ring-2 ring-[var(--accent-ring)]"
                         : ""
                     }`}
+                    style={{ marginLeft: `${itemIndent}px` }}
                   >
                     <div
                       className="flex items-center gap-3 p-3"
@@ -3827,7 +3847,7 @@ export default function TaskBoard() {
                                 </div>
                               </label>
                               <label className="block">
-                                <span className="tb-label">대분류 (그룹)</span>
+                                <span className="tb-label">업무 위계</span>
                                 <input
                                   list="group-list"
                                   value={item.category}
@@ -3842,7 +3862,7 @@ export default function TaskBoard() {
                                     })
                                   }
                                   className="tb-field"
-                                  placeholder="비우면 미분류"
+                                  placeholder="예: 복원사업 > 현장조사 > 식생"
                                 />
                               </label>
                               <label className="block">
@@ -4161,8 +4181,8 @@ export default function TaskBoard() {
                   value={newGroup}
                   onChange={(event) => setNewGroup(event.target.value)}
                   className="tb-field"
-                  placeholder="대분류 (그룹)"
-                  title="대분류 (그룹) — 비우면 미분류"
+                  placeholder="업무 위계 예: 복원사업 > 현장조사 > 식생"
+                  title="업무 위계 — > 또는 / 로 중분류·소분류를 나눌 수 있습니다"
                 />
                 <select
                   value={newTemplateKey}
@@ -4438,7 +4458,7 @@ export default function TaskBoard() {
                       </colgroup>
                 <thead>
                   <tr className="text-left">
-                    <th className="px-3 py-3">대분류</th>
+                    <th className="px-3 py-3">업무 위계</th>
                     <th className="px-1 py-3" />
                     <th className="px-3 py-3">업무</th>
                     <th className="px-3 py-3">담당</th>
@@ -4497,7 +4517,7 @@ export default function TaskBoard() {
                                   })
                                 }
                                 className="tb-ghost text-xs font-semibold text-[var(--accent)]"
-                                placeholder="대분류"
+                                placeholder="업무 위계"
                               />
                             </td>
                             <td className="px-1 py-2.5 align-top">
@@ -4979,7 +4999,7 @@ export default function TaskBoard() {
                   value={newGroup}
                   onChange={(event) => setNewGroup(event.target.value)}
                   className="tb-field"
-                  placeholder="대분류 (그룹)"
+                  placeholder="업무 위계"
                 />
                 <select
                   value={newTemplateKey}
@@ -4989,7 +5009,6 @@ export default function TaskBoard() {
                       return;
                     }
                     setNewTemplateKey(event.target.value);
-                    setTemplateFilter(event.target.value);
                     setStageFilter("all");
                   }}
                   className="tb-field"
@@ -5834,13 +5853,13 @@ export default function TaskBoard() {
               </label>
               <div className="grid grid-cols-2 gap-2">
                 <label className="block">
-                  <span className="tb-label">대분류 (그룹)</span>
+                  <span className="tb-label">업무 위계</span>
                   <input
                     list="group-list"
                     value={newGroup}
                     onChange={(event) => setNewGroup(event.target.value)}
                     className="tb-field"
-                    placeholder="비우면 미분류"
+                    placeholder="예: 복원사업 > 현장조사"
                   />
                 </label>
                 <label className="block">
@@ -5977,13 +5996,13 @@ export default function TaskBoard() {
                 </select>
               </label>
               <label className="block">
-                <span className="tb-label">대분류</span>
+                <span className="tb-label">업무 위계</span>
                 <select
                   value={categoryFilter}
                   onChange={(event) => setCategoryFilter(event.target.value)}
                   className="tb-field"
                 >
-                  <option value="all">모든 대분류</option>
+                  <option value="all">모든 위계</option>
                   {categories.map((category) => (
                     <option key={category} value={category}>
                       {category}
