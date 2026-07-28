@@ -124,7 +124,7 @@ export default function TaskBoard() {
   const [filter, setFilter] = useState<TaskFilter>("all");
   const [dueFilter, setDueFilter] = useState<DueFilter>("all");
   const [sortMode, setSortMode] = useState<SortMode>("manual");
-  const [viewMode, setViewMode] = useState<ViewMode>("dashboard");
+  const [viewMode, setViewMode] = useState<ViewMode>("list");
   const [showFilters, setShowFilters] = useState(false);
   const [templateEditorOpen, setTemplateEditorOpen] = useState(false);
   const [templateDraft, setTemplateDraft] = useState<{
@@ -2588,7 +2588,7 @@ export default function TaskBoard() {
               </button>
 
               <div className="tb-seg ml-auto">
-                {(["dashboard", "list", "map", "grid", "gantt"] as const).map(
+                {(["list", "dashboard", "map", "gantt"] as const).map(
                   (mode) => (
                     <button
                       key={mode}
@@ -2597,15 +2597,13 @@ export default function TaskBoard() {
                       data-active={viewMode === mode}
                       className="tb-seg-btn"
                     >
-                      {mode === "dashboard"
-                        ? "대시보드"
-                        : mode === "list"
-                          ? "목록"
+                      {mode === "list"
+                        ? "목록"
+                        : mode === "dashboard"
+                          ? "대시보드"
                           : mode === "map"
                             ? "지도"
-                            : mode === "grid"
-                              ? "표"
-                              : "간트"}
+                            : "간트"}
                     </button>
                   )
                 )}
