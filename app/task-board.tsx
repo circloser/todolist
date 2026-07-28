@@ -3445,10 +3445,9 @@ export default function TaskBoard() {
                           role="list"
                           aria-label="단계 진행 요약"
                         >
-                          {item.steps.map((step, index) => {
+                          {item.steps.map((step) => {
                             const checked = step.status === "done";
                             const state = urgency(step.dueDate);
-                            const current = !done && index === completed;
 
                             return (
                               <span
@@ -3457,9 +3456,7 @@ export default function TaskBoard() {
                                 className={`tb-list-step-dot ${
                                   checked
                                     ? "is-done"
-                                    : current
-                                      ? "is-current"
-                                      : state === "overdue" || state === "danger"
+                                    : state === "overdue" || state === "danger"
                                         ? "is-danger"
                                         : state === "warning"
                                           ? "is-warning"

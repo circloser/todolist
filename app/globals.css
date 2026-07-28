@@ -335,9 +335,6 @@ select {
   .tb-list-step-dot.is-done {
     background: var(--success);
   }
-  .tb-list-step-dot.is-current {
-    background: var(--accent);
-  }
   .tb-list-step-dot.is-warning {
     background: var(--warning);
   }
