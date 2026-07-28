@@ -255,6 +255,9 @@ select {
   .tb-list-group {
     border-top: 1px solid var(--border);
     padding-top: 10px;
+    --category-color: var(--accent);
+    --category-soft: var(--accent-soft);
+    --category-softer: transparent;
   }
   .tb-list-group:first-child {
     border-top: 0;
@@ -265,6 +268,8 @@ select {
     border-left: 0;
     border-bottom: 1px solid rgba(203, 215, 205, 0.66);
     border-radius: 0;
+    background:
+      linear-gradient(90deg, var(--category-soft), transparent 320px);
     padding-bottom: 9px;
     padding-top: 5px;
   }
@@ -278,8 +283,10 @@ select {
     position: relative;
     border: 0;
     border-bottom: 1px solid rgba(203, 215, 205, 0.66);
+    border-left: 3px solid var(--category-color) !important;
     border-radius: 0;
-    background: transparent;
+    background:
+      linear-gradient(90deg, var(--category-softer), transparent 240px);
   }
   .tb-list-item:hover,
   .tb-list-item:focus-within {
@@ -354,13 +361,69 @@ select {
     background:
       linear-gradient(180deg, rgba(242, 246, 241, 0.92), rgba(242, 246, 241, 0.58));
   }
+  .tb-list-detail > .grid {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
 
   .tb-list-step-row {
     border-top-color: rgba(203, 215, 205, 0.72);
   }
 
+  .tb-list-stage-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 8px;
+  }
+
+  .tb-list-stage-card {
+    border: 1px solid rgba(203, 215, 205, 0.62);
+    border-radius: var(--radius-sm);
+    background: rgba(255, 254, 250, 0.58);
+  }
+  .tb-list-stage-card > .flex {
+    gap: 8px;
+    padding: 8px 10px;
+  }
+  .tb-list-stage-card .tb-stage {
+    height: 22px !important;
+    width: 22px !important;
+    font-size: 11px;
+  }
+  .tb-list-stage-card .tb-badge,
+  .tb-list-stage-card .tb-stage-due {
+    font-size: 11px;
+    line-height: 1;
+    padding-bottom: 5px;
+    padding-top: 5px;
+  }
+
+  .tb-list-common-checklist {
+    border-top: 1px solid rgba(203, 215, 205, 0.72);
+    padding-top: 12px;
+  }
+
   .tb-list-side-panel {
-    background: rgba(255, 254, 250, 0.44);
+    display: none;
+  }
+
+  .tb-list-quick-edit {
+    display: grid;
+    gap: 10px;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    border-bottom: 1px solid rgba(203, 215, 205, 0.72);
+    padding-bottom: 12px;
+  }
+  .tb-list-quick-edit .tb-field {
+    background: rgba(255, 254, 250, 0.54);
+  }
+  .tb-list-quick-edit textarea {
+    min-height: 42px;
+  }
+
+  @media (max-width: 900px) {
+    .tb-list-quick-edit {
+      grid-template-columns: 1fr;
+    }
   }
 
   @media (max-width: 767px) {
@@ -413,10 +476,12 @@ select {
     border-left: 0;
     border-bottom: 1px solid rgba(203, 215, 205, 0.66);
     border-radius: 0;
-    background: transparent;
+    background:
+      linear-gradient(90deg, var(--category-soft), transparent 320px);
   }
   .tb-hierarchy-header.tb-list-group-header:hover {
-    background: transparent;
+    background:
+      linear-gradient(90deg, var(--category-soft), transparent 320px);
     border-left-color: transparent;
     border-bottom-color: var(--accent-soft-2);
   }

@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  type CSSProperties,
   DragEvent,
   FormEvent,
   Fragment,
@@ -18,6 +19,7 @@ import {
   categoryDepth,
   categoryKey,
   categoryLeaf,
+  categoryPath,
   categoryLevelLabel,
   categoryTrail,
   defaultSettings,
@@ -68,6 +70,44 @@ import {
   type WorkflowStep,
   type WorkflowSubtask,
 } from "./lib/workflow";
+
+const CATEGORY_COLORS = [
+  "#18786f",
+  "#8b6f16",
+  "#4f7f52",
+  "#b25642",
+  "#356b9a",
+  "#8a5b8f",
+  "#6f7b2d",
+  "#9a6a3a",
+];
+
+function colorHash(value: string) {
+  return Array.from(value).reduce(
+    (hash, char) => (hash * 31 + char.charCodeAt(0)) >>> 0,
+    7
+  );
+}
+
+function hexToRgba(hex: string, alpha: number) {
+  const value = hex.replace("#", "");
+  const red = parseInt(value.slice(0, 2), 16);
+  const green = parseInt(value.slice(2, 4), 16);
+  const blue = parseInt(value.slice(4, 6), 16);
+
+  return `rgba(${red}, ${green}, ${blue}, ${alpha})`;
+}
+
+function categoryVisual(value: string) {
+  const root = categoryPath(value)[0] ?? "미분류";
+  const color = CATEGORY_COLORS[colorHash(root) % CATEGORY_COLORS.length];
+
+  return {
+    color,
+    soft: hexToRgba(color, 0.09),
+    softer: hexToRgba(color, 0.045),
+  };
+}
 
 export default function TaskBoard() {
   const [items, setItems] = useState<WorkflowItem[]>([]);
@@ -3191,9 +3231,19 @@ export default function TaskBoard() {
                 const groupDone = group.items.filter((current) =>
                   isItemDone(current)
                 ).length;
+                const categoryTone = categoryVisual(group.name);
+                const categoryStyle = {
+                  "--category-color": categoryTone.color,
+                  "--category-soft": categoryTone.soft,
+                  "--category-softer": categoryTone.softer,
+                } as CSSProperties;
 
                 return (
-                  <div key={`group-${group.name}`} className="tb-list-group space-y-1.5">
+                  <div
+                    key={`group-${group.name}`}
+                    className="tb-list-group space-y-1.5"
+                    style={categoryStyle}
+                  >
                     <div
                       onDragOver={(event) => {
                         if (draggedGroup) {
@@ -3301,6 +3351,9 @@ export default function TaskBoard() {
                 const subProgress = subtaskProgress(item);
                 const completed = completionCount(item);
                 const itemDue = urgency(item.dueDate);
+                const generalSubtasks = item.subtasks.filter(
+                  (subtask) => subtask.stepId === null
+                );
 
                 return (
                   <div
@@ -3319,7 +3372,6 @@ export default function TaskBoard() {
                   >
                     <div
                       className="tb-list-row-main grid gap-3 p-3 md:grid-cols-[28px_minmax(0,1fr)_180px_auto] md:items-center"
-                      style={{ boxShadow: `inset 3px 0 0 ${rowColor}` }}
                     >
                       <button
                         type="button"
@@ -3470,6 +3522,75 @@ export default function TaskBoard() {
                       <div className="tb-item-detail tb-list-detail p-4">
                         <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_300px]">
                           <div className="space-y-4">
+                            <div className="tb-list-quick-edit">
+                              <label className="block">
+                                <span className="tb-label">담당자</span>
+                                <input
+                                  value={item.assignee}
+                                  onChange={(event) =>
+                                    updateLocalItem(item.id, {
+                                      assignee: event.target.value,
+                                    })
+                                  }
+                                  onBlur={(event) =>
+                                    updateItem(item.id, {
+                                      assignee: event.target.value,
+                                    })
+                                  }
+                                  className="tb-field"
+                                />
+                              </label>
+                              <label className="block">
+                                <span className="tb-label">업무 위계</span>
+                                <input
+                                  list="group-list"
+                                  value={item.category}
+                                  onChange={(event) =>
+                                    updateLocalItem(item.id, {
+                                      category: event.target.value,
+                                    })
+                                  }
+                                  onBlur={(event) =>
+                                    updateItem(item.id, {
+                                      category: event.target.value,
+                                    })
+                                  }
+                                  className="tb-field"
+                                  placeholder="예: 복원사업 > 현장조사 > 식생"
+                                />
+                              </label>
+                              <label className="block">
+                                <span className="tb-label">최종 마감일</span>
+                                <input
+                                  type="date"
+                                  value={item.dueDate ?? ""}
+                                  onChange={(event) =>
+                                    updateItem(item.id, {
+                                      dueDate: event.target.value,
+                                    })
+                                  }
+                                  className="tb-field"
+                                />
+                              </label>
+                              <label className="block md:col-span-3">
+                                <span className="tb-label">메모</span>
+                                <textarea
+                                  value={item.memo}
+                                  onChange={(event) =>
+                                    updateLocalItem(item.id, {
+                                      memo: event.target.value,
+                                    })
+                                  }
+                                  onBlur={(event) =>
+                                    updateItem(item.id, {
+                                      memo: event.target.value,
+                                    })
+                                  }
+                                  className="tb-field resize-y"
+                                  placeholder="핵심 메모만 간단히 남기세요"
+                                />
+                              </label>
+                            </div>
                             <div>
                               <div className="mb-2 flex items-center justify-between">
                                 <span className="text-sm font-semibold">진행 단계</span>
@@ -3477,7 +3598,7 @@ export default function TaskBoard() {
                                   {completed}/{item.steps.length} 완료
                                 </span>
                               </div>
-                              <div className="grid gap-1.5">
+                              <div className="tb-list-stage-grid">
                                 {item.steps.map((step, index) => {
                                   const checked = step.status === "done";
                                   const saving = savingStepIds.has(step.id);
@@ -3506,7 +3627,7 @@ export default function TaskBoard() {
                                   return (
                                     <div
                                       key={step.id}
-                                      className="tb-step-row tb-list-step-row overflow-hidden"
+                                      className="tb-step-row tb-list-step-row tb-list-stage-card overflow-hidden"
                                     >
                                       <div className="flex items-center gap-2.5 px-2.5 py-2">
                                         <button
@@ -3721,18 +3842,12 @@ export default function TaskBoard() {
                               </div>
                             </div>
 
-                            <div>
+                            <div className="tb-list-common-checklist">
                               <div className="mb-2 text-sm font-semibold">
-                                공통 세부 체크리스트{" "}
-                                <span className="text-xs font-normal text-[var(--text-faint)]">
-                                  (단계와 무관한 항목 · 각 단계별 항목은 위
-                                  단계의 ☑ 배지에서)
-                                </span>
+                                공통 체크리스트
                               </div>
                               <div className="space-y-1.5">
-                                {item.subtasks
-                                  .filter((subtask) => subtask.stepId === null)
-                                  .map((subtask) => (
+                                {generalSubtasks.map((subtask) => (
                                   <div
                                     key={subtask.id}
                                     className="tb-inline-panel tb-list-step-row flex items-center gap-2.5 rounded-[var(--radius)] border border-[var(--border)] bg-[var(--surface)] px-2.5 py-2"
