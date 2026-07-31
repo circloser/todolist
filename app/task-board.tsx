@@ -146,6 +146,7 @@ export default function TaskBoard() {
   const leafletMapRef = useRef<LeafletNS.Map | null>(null);
   const markerLayerRef = useRef<LeafletNS.LayerGroup | null>(null);
   const openItemRef = useRef<(id: number) => void>(() => {});
+  const clearMapPinRef = useRef<(id: number) => void>(() => {});
   const [placingItemId, setPlacingItemId] = useState<number | null>(null);
   const placingItemIdRef = useRef<number | null>(null);
   const placeItemAtRef = useRef<(id: number, lat: number, lng: number) => void>(
@@ -215,6 +216,7 @@ export default function TaskBoard() {
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
   const [groupOrder, setGroupOrder] = useState<string[]>([]);
   const [draggedGroup, setDraggedGroup] = useState<string | null>(null);
+  const [deletingGroups, setDeletingGroups] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
   const [adding, setAdding] = useState(false);
   const [savingGroup, setSavingGroup] = useState(false);
@@ -337,6 +339,10 @@ export default function TaskBoard() {
   // 대분류/중분류/소분류 경로. 예: "복원사업 > 현장조사 > 식생".
   function groupName(item: WorkflowItem) {
     return categoryKey(item.category);
+  }
+
+  function groupContainsCategory(groupKey: string, candidate: string) {
+    return candidate === groupKey || candidate.startsWith(`${groupKey} > `);
   }
 
   const categories = useMemo(() => {
@@ -1175,6 +1181,24 @@ export default function TaskBoard() {
         return next;
       });
     }
+  }
+
+  async function clearMapPin(item: WorkflowItem) {
+    if (item.lat === null && item.lng === null) {
+      return;
+    }
+
+    if (
+      !window.confirm(
+        `'${item.title || "제목 없음"}' 업무의 지도 핀을 삭제할까요? 업무 자체는 삭제되지 않습니다.`
+      )
+    ) {
+      return;
+    }
+
+    setPlacingItemId((current) => (current === item.id ? null : current));
+    updateLocalItem(item.id, { lat: null, lng: null });
+    await updateItem(item.id, { lat: null, lng: null });
   }
 
   async function deleteItem(item: WorkflowItem) {
@@ -2182,6 +2206,98 @@ export default function TaskBoard() {
     }
   }
 
+  async function deleteGroup(name: string) {
+    const groupKey = categoryKey(name);
+    const unclassifiedKey = categoryKey("");
+    const affectedCount = items.filter((item) =>
+      groupContainsCategory(groupKey, groupName(item))
+    ).length;
+
+    if (groupKey === unclassifiedKey && affectedCount > 0) {
+      setError(
+        "미분류 그룹은 업무가 남아 있으면 삭제할 수 없습니다. 먼저 업무 위계를 지정하거나 업무를 삭제해 주세요."
+      );
+      return;
+    }
+
+    const message = affectedCount
+      ? `'${groupKey}' 그룹과 하위 위계를 삭제하고 ${affectedCount}개 업무를 미분류로 이동할까요? 업무 자체는 삭제되지 않습니다.`
+      : `'${groupKey}' 빈 그룹을 삭제할까요?`;
+
+    if (!window.confirm(message)) {
+      return;
+    }
+
+    const previousItems = items;
+    const previousGroupOrder = groupOrder;
+    const previousCategoryFilter = categoryFilter;
+    const previousActiveAddGroup = activeAddGroup;
+    const previousCollapsedGroups = collapsedGroups;
+    setError("");
+    setDeletingGroups((current) => new Set(current).add(groupKey));
+    setItems((current) =>
+      current.map((item) =>
+        groupContainsCategory(groupKey, groupName(item))
+          ? { ...item, category: "" }
+          : item
+      )
+    );
+    setGroupOrder((current) =>
+      current.filter(
+        (currentName) => !groupContainsCategory(groupKey, categoryKey(currentName))
+      )
+    );
+    setCollapsedGroups((current) => {
+      const next = new Set(current);
+      next.delete(groupKey);
+      return next;
+    });
+    if (categoryFilter === groupKey) {
+      setCategoryFilter("all");
+    }
+    if (activeAddGroup === groupKey) {
+      setActiveAddGroup(null);
+    }
+
+    try {
+      const response = await fetch("/api/tasks", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "delete-group",
+          actor: currentActor,
+          groupName: groupKey,
+        }),
+      });
+      const data = (await response.json()) as TaskResponse;
+
+      if (!response.ok || !data.items || !data.groupOrder) {
+        throw new Error(data.error ?? "대분류를 삭제하지 못했습니다.");
+      }
+
+      setItems(data.items);
+      setGroupOrder(data.groupOrder);
+      setHistory(data.history ?? history);
+    } catch (deleteError) {
+      setItems(previousItems);
+      setGroupOrder(previousGroupOrder);
+      setCategoryFilter(previousCategoryFilter);
+      setActiveAddGroup(previousActiveAddGroup);
+      setCollapsedGroups(previousCollapsedGroups);
+      setError(
+        deleteError instanceof Error
+          ? deleteError.message
+          : "대분류를 삭제하지 못했습니다."
+      );
+    } finally {
+      setDeletingGroups((current) => {
+        const next = new Set(current);
+        next.delete(groupKey);
+        return next;
+      });
+    }
+  }
+
   function handleGroupDrop(targetName: string) {
     if (!draggedGroup || draggedGroup === targetName) {
       setDraggedGroup(null);
@@ -2260,6 +2376,12 @@ export default function TaskBoard() {
   // without re-creating the map on every render.
   useEffect(() => {
     openItemRef.current = openItem;
+    clearMapPinRef.current = (id: number) => {
+      const item = items.find((candidate) => candidate.id === id);
+      if (item) {
+        void clearMapPin(item);
+      }
+    };
     placingItemIdRef.current = placingItemId;
     creatingOnMapRef.current = creatingOnMap;
     placeItemAtRef.current = (id: number, lat: number, lng: number) => {
@@ -2289,6 +2411,16 @@ export default function TaskBoard() {
     const container = mapContainerRef.current;
 
     const handlePopupClick = (event: Event) => {
+      const clearTarget = (event.target as HTMLElement).closest(
+        "[data-clear-pin]"
+      );
+      if (clearTarget) {
+        clearMapPinRef.current(
+          Number(clearTarget.getAttribute("data-clear-pin"))
+        );
+        return;
+      }
+
       const target = (event.target as HTMLElement).closest("[data-open-item]");
       if (target) {
         openItemRef.current(Number(target.getAttribute("data-open-item")));
@@ -2423,7 +2555,8 @@ export default function TaskBoard() {
               <div style="font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${title}</div>
               <div style="color:#61667a;font-size:12px">${assignee} · ${itemProgress(item)}%</div>
             </div>
-            <button type="button" data-open-item="${item.id}" style="flex-shrink:0;padding:3px 9px;border-radius:8px;border:1px solid #18786f;background:#e4f2ef;color:#18786f;font-weight:600;cursor:pointer">열기</button>
+            <button type="button" data-open-item="${item.id}" style="flex-shrink:0;white-space:nowrap;padding:3px 9px;border-radius:8px;border:1px solid #18786f;background:#e4f2ef;color:#18786f;font-weight:600;cursor:pointer">열기</button>
+            <button type="button" data-clear-pin="${item.id}" style="flex-shrink:0;white-space:nowrap;padding:3px 8px;border-radius:8px;border:1px solid #edbeb8;background:#fbecea;color:#c44232;font-weight:600;cursor:pointer">핀 삭제</button>
           </div>`;
         })
         .join("");
@@ -3476,6 +3609,15 @@ export default function TaskBoard() {
                         title="이 그룹으로 새 업무 추가"
                       >
                         ＋ 업무
+                      </button>
+                      <button
+                        type="button"
+                        disabled={deletingGroups.has(group.name)}
+                        onClick={() => void deleteGroup(group.name)}
+                        className="tb-iconbtn tb-iconbtn-danger h-7 w-7 shrink-0 disabled:cursor-not-allowed disabled:opacity-40"
+                        title="대분류 삭제"
+                      >
+                        ×
                       </button>
                     </div>
 
@@ -4807,6 +4949,15 @@ export default function TaskBoard() {
                           title="지도를 클릭해 위치 다시 지정"
                         >
                           📍
+                        </button>
+                        <button
+                          type="button"
+                          disabled={savingItemIds.has(item.id)}
+                          onClick={() => void clearMapPin(item)}
+                          className="tb-iconbtn tb-iconbtn-danger h-7 w-7 shrink-0 text-xs disabled:cursor-not-allowed disabled:opacity-40"
+                          title="지도 핀 삭제"
+                        >
+                          ×
                         </button>
                       </div>
                     ))}

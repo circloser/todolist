@@ -86,6 +86,21 @@ type LegacyWorkflowTaskRow = {
   completed_at: string | null;
 };
 
+const CATEGORY_SEPARATOR = /\s*(?:>|\/|\\|\||›|→|·)\s*/u;
+
+function categoryKey(value: string) {
+  const parts = value
+    .split(CATEGORY_SEPARATOR)
+    .map((part) => part.trim())
+    .filter(Boolean);
+
+  return parts.length ? parts.join(" > ") : "미분류";
+}
+
+function groupContainsCategory(groupName: string, candidate: string) {
+  return candidate === groupName || candidate.startsWith(`${groupName} > `);
+}
+
 const defaultStages = [
   {
     key: "plan-draft",
@@ -1848,6 +1863,7 @@ export async function PATCH(request: Request) {
       description?: string;
       url?: string;
       enabled?: boolean;
+      groupName?: string;
       stages?: Array<{
         stageKey?: string;
         title?: string;
@@ -1877,6 +1893,72 @@ export async function PATCH(request: Request) {
         .run();
 
       return Response.json({ groupOrder: await getGroupOrder() });
+    }
+
+    if (payload.action === "delete-group") {
+      const groupName =
+        typeof payload.groupName === "string" ? categoryKey(payload.groupName) : "";
+
+      if (!groupName) {
+        return Response.json(
+          { error: "삭제할 대분류를 선택해 주세요." },
+          { status: 400 }
+        );
+      }
+
+      const rows = await d1
+        .prepare("SELECT id, title, category FROM workflow_items")
+        .all<{ id: number; title: string; category: string }>();
+      const affectedItems = (rows.results ?? []).filter(
+        (item) => groupContainsCategory(groupName, categoryKey(item.category ?? ""))
+      );
+      const unclassifiedGroup = categoryKey("");
+
+      if (groupName === unclassifiedGroup && affectedItems.length > 0) {
+        return Response.json(
+          {
+            error:
+              "미분류 그룹은 업무가 남아 있으면 삭제할 수 없습니다. 먼저 업무 위계를 지정하거나 업무를 삭제해 주세요.",
+          },
+          { status: 400 }
+        );
+      }
+
+      const nextOrder = (await getGroupOrder()).filter(
+        (name) => !groupContainsCategory(groupName, categoryKey(name))
+      );
+      const statements: D1PreparedStatement[] = [
+        ...affectedItems.map((item) =>
+          d1
+            .prepare(
+              "UPDATE workflow_items SET category = '', updated_by = ?, updated_at = ? WHERE id = ?"
+            )
+            .bind(actor, now, item.id)
+        ),
+        d1
+          .prepare(`INSERT INTO app_settings (key, value, updated_at)
+            VALUES ('groupOrder', ?, ?)
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`)
+          .bind(JSON.stringify(nextOrder), now),
+      ];
+
+      await d1.batch(statements);
+      await logHistory({
+        itemId: null,
+        entityType: "group",
+        entityId: null,
+        action: "delete",
+        summary: affectedItems.length
+          ? `${actor}님이 '${groupName}' 대분류와 하위 위계를 삭제하고 ${affectedItems.length}개 업무를 미분류로 이동함`
+          : `${actor}님이 '${groupName}' 빈 대분류를 삭제함`,
+        actor,
+      });
+
+      return Response.json({
+        items: await getItems(),
+        groupOrder: await getGroupOrder(),
+        history: await getHistory(),
+      });
     }
 
     if (payload.action === "save-template") {
