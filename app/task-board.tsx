@@ -886,12 +886,12 @@ export default function TaskBoard() {
 
       return {
         item,
+        categoryName: categoryPath(item.category)[0] ?? "미분류",
         progress: itemProgress(item),
         done,
         completedSteps: item.steps.filter((step) =>
           inMonth(step.completedAt?.slice(0, 10))
         ).length,
-        typeName: templatesByKey.get(item.templateKey)?.name ?? item.category,
         status: done
           ? "완료"
           : itemHasOverdueDate(item)
@@ -953,7 +953,7 @@ export default function TaskBoard() {
       assigneeRows,
       itemRows,
     };
-  }, [items, reportMonth, templatesByKey]);
+  }, [items, reportMonth]);
 
   function downloadReportCsv() {
     const rows: string[][] = [
@@ -968,15 +968,14 @@ export default function TaskBoard() {
       ["이번 달 신규 업무", String(report.createdInMonth)],
       ["현재 지연 업무", String(report.overdueNow)],
       [],
-      ["업무명", "유형", "담당", "진행률(%)", "마감일", "상태", "이달 완료 단계"],
+      ["대분류", "업무명", "담당", "진행률(%)", "마감일", "상태"],
       ...report.itemRows.map((row) => [
+        row.categoryName,
         row.item.title,
-        row.typeName,
         assigneeName(row.item.assignee),
         String(row.progress),
         row.item.dueDate ?? "",
         row.status,
-        String(row.completedSteps),
       ]),
     ];
     const escapeCell = (value: string) =>
@@ -7099,8 +7098,8 @@ export default function TaskBoard() {
               <table className="tb-table text-xs">
                 <thead>
                   <tr className="text-left">
+                    <th className="px-3 py-2">대분류</th>
                     <th className="px-3 py-2">업무명</th>
-                    <th className="px-3 py-2">유형</th>
                     <th className="px-3 py-2">담당</th>
                     <th className="px-3 py-2 text-right">진행률</th>
                     <th className="px-3 py-2">마감일</th>
@@ -7110,8 +7109,8 @@ export default function TaskBoard() {
                 <tbody>
                   {report.itemRows.map((row) => (
                     <tr key={row.item.id}>
+                      <td className="px-3 py-2">{row.categoryName}</td>
                       <td className="px-3 py-2">{row.item.title}</td>
-                      <td className="px-3 py-2">{row.typeName}</td>
                       <td className="px-3 py-2">
                         {assigneeName(row.item.assignee)}
                       </td>
