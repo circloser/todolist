@@ -73,6 +73,22 @@ import {
 
 const COMPLETE_COLOR = "#2563eb";
 
+type ReportSortKey =
+  | "category"
+  | "title"
+  | "assignee"
+  | "progress"
+  | "dueDate"
+  | "status";
+type SortDirection = "asc" | "desc";
+
+const REPORT_STATUS_ORDER: Record<string, number> = {
+  지연: 0,
+  임박: 1,
+  진행: 2,
+  완료: 3,
+};
+
 const CATEGORY_COLORS = [
   "#18786f",
   "#8b6f16",
@@ -183,6 +199,10 @@ export default function TaskBoard() {
   const [reportMonth, setReportMonth] = useState(() =>
     isoDate(new Date()).slice(0, 7)
   );
+  const [reportSort, setReportSort] = useState<{
+    key: ReportSortKey;
+    direction: SortDirection;
+  }>({ key: "category", direction: "asc" });
   const [webhookUrl, setWebhookUrl] = useState("");
   const [webhookEnabled, setWebhookEnabled] = useState(false);
   const [savingWebhook, setSavingWebhook] = useState(false);
@@ -902,6 +922,53 @@ export default function TaskBoard() {
       };
     });
 
+    const compareText = (first: string, second: string) =>
+      first.localeCompare(second, "ko-KR", {
+        numeric: true,
+        sensitivity: "base",
+      });
+    const direction = reportSort.direction === "asc" ? 1 : -1;
+    const sortedItemRows = [...itemRows].sort((first, second) => {
+      let result = 0;
+
+      if (reportSort.key === "category") {
+        result = compareText(first.categoryName, second.categoryName);
+      } else if (reportSort.key === "title") {
+        result = compareText(first.item.title, second.item.title);
+      } else if (reportSort.key === "assignee") {
+        result = compareText(
+          assigneeName(first.item.assignee),
+          assigneeName(second.item.assignee)
+        );
+      } else if (reportSort.key === "progress") {
+        result = first.progress - second.progress;
+      } else if (reportSort.key === "dueDate") {
+        const firstDue = first.item.dueDate;
+        const secondDue = second.item.dueDate;
+
+        if (!firstDue && secondDue) {
+          return 1;
+        }
+        if (firstDue && !secondDue) {
+          return -1;
+        }
+        result = (firstDue ?? "").localeCompare(secondDue ?? "");
+      } else if (reportSort.key === "status") {
+        result =
+          (REPORT_STATUS_ORDER[first.status] ?? 99) -
+          (REPORT_STATUS_ORDER[second.status] ?? 99);
+      }
+
+      if (result === 0) {
+        return (
+          first.item.position - second.item.position ||
+          first.item.id - second.item.id
+        );
+      }
+
+      return result * direction;
+    });
+
     const dueRows = itemRows.filter((row) => inMonth(row.item.dueDate));
     const assignees = [
       ...new Set(itemRows.map((row) => assigneeName(row.item.assignee))),
@@ -951,9 +1018,45 @@ export default function TaskBoard() {
         value: itemRows.filter((row) => row.status === label).length,
       })),
       assigneeRows,
-      itemRows,
+      itemRows: sortedItemRows,
     };
-  }, [items, reportMonth]);
+  }, [items, reportMonth, reportSort.direction, reportSort.key]);
+
+  function toggleReportSort(key: ReportSortKey) {
+    setReportSort((current) =>
+      current.key === key
+        ? {
+            key,
+            direction: current.direction === "asc" ? "desc" : "asc",
+          }
+        : { key, direction: "asc" }
+    );
+  }
+
+  function reportSortButton(key: ReportSortKey, label: string, align = "left") {
+    const active = reportSort.key === key;
+    const symbol = active ? (reportSort.direction === "asc" ? "↑" : "↓") : "↕";
+
+    return (
+      <button
+        type="button"
+        onClick={() => toggleReportSort(key)}
+        className={`inline-flex items-center gap-1 font-semibold ${
+          align === "right" ? "ml-auto" : ""
+        }`}
+        title={`${label} 기준 정렬`}
+      >
+        <span>{label}</span>
+        <span
+          className={
+            active ? "text-[var(--accent)]" : "text-[var(--text-faint)]"
+          }
+        >
+          {symbol}
+        </span>
+      </button>
+    );
+  }
 
   function downloadReportCsv() {
     const rows: string[][] = [
@@ -7098,12 +7201,24 @@ export default function TaskBoard() {
               <table className="tb-table text-xs">
                 <thead>
                   <tr className="text-left">
-                    <th className="px-3 py-2">대분류</th>
-                    <th className="px-3 py-2">업무명</th>
-                    <th className="px-3 py-2">담당</th>
-                    <th className="px-3 py-2 text-right">진행률</th>
-                    <th className="px-3 py-2">마감일</th>
-                    <th className="px-3 py-2">상태</th>
+                    <th className="px-3 py-2">
+                      {reportSortButton("category", "대분류")}
+                    </th>
+                    <th className="px-3 py-2">
+                      {reportSortButton("title", "업무명")}
+                    </th>
+                    <th className="px-3 py-2">
+                      {reportSortButton("assignee", "담당")}
+                    </th>
+                    <th className="px-3 py-2 text-right">
+                      {reportSortButton("progress", "진행률", "right")}
+                    </th>
+                    <th className="px-3 py-2">
+                      {reportSortButton("dueDate", "마감일")}
+                    </th>
+                    <th className="px-3 py-2">
+                      {reportSortButton("status", "상태")}
+                    </th>
                   </tr>
                 </thead>
                 <tbody>
