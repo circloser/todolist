@@ -6954,14 +6954,14 @@ export default function TaskBoard() {
 
       {reportOpen ? (
         <div
-          className="fixed inset-0 z-50 flex items-start justify-center overflow-auto bg-black/40 p-4 backdrop-blur-sm"
+          className="tb-print-shell fixed inset-0 z-50 flex items-start justify-center overflow-auto bg-black/40 p-4 backdrop-blur-sm"
           onClick={() => setReportOpen(false)}
         >
           <div
-            className="tb-card my-6 w-full max-w-[820px] shadow-[var(--shadow-lg)]"
+            className="tb-print-card tb-card my-6 w-full max-w-[820px] shadow-[var(--shadow-lg)]"
             onClick={(event) => event.stopPropagation()}
           >
-            <div className="flex flex-wrap items-center gap-2 border-b border-[var(--border)] px-5 py-3.5">
+            <div className="tb-print-toolbar flex flex-wrap items-center gap-2 border-b border-[var(--border)] px-5 py-3.5">
               <h2 className="text-base font-semibold">월간 보고서</h2>
               <input
                 type="month"
@@ -6995,210 +6995,213 @@ export default function TaskBoard() {
             </div>
 
             <div id="report-print" className="max-h-[74vh] overflow-auto p-6">
-              <div className="mb-1 text-lg font-bold">
-                {organizationName} 업무 보고서 — {report.month}
-              </div>
-              <div className="mb-5 text-xs text-[var(--text-faint)]">
-                {boardTitle} · 생성 {formatDate(new Date().toISOString())} ·{" "}
-                {currentActor}
-              </div>
+              <div className="tb-report-dashboard">
+                <div className="mb-1 text-lg font-bold">
+                  {organizationName} 업무 보고서 — {report.month}
+                </div>
+                <div className="mb-5 text-xs text-[var(--text-faint)]">
+                  {boardTitle} · 생성 {formatDate(new Date().toISOString())} ·{" "}
+                  {currentActor}
+                </div>
 
-              <div className="mb-6 grid grid-cols-2 gap-3 sm:grid-cols-4">
-                <div className="tb-stat">
-                  <div className="tb-stat-label">이달 완료 단계</div>
-                  <div className="tb-stat-value text-[var(--success)]">
-                    {report.stepsCompletedInMonth}
+                <div className="mb-6 grid grid-cols-2 gap-3 sm:grid-cols-4">
+                  <div className="tb-stat">
+                    <div className="tb-stat-label">이달 완료 단계</div>
+                    <div className="tb-stat-value text-[var(--success)]">
+                      {report.stepsCompletedInMonth}
+                    </div>
                   </div>
-                </div>
-                <div className="tb-stat">
-                  <div className="tb-stat-label">이달 마감 업무</div>
-                  <div className="tb-stat-value">
-                    {report.dueInMonthDone}/{report.dueInMonth}
+                  <div className="tb-stat">
+                    <div className="tb-stat-label">이달 마감 업무</div>
+                    <div className="tb-stat-value">
+                      {report.dueInMonthDone}/{report.dueInMonth}
+                    </div>
                   </div>
-                </div>
-                <div className="tb-stat">
-                  <div className="tb-stat-label">이달 신규 업무</div>
-                  <div className="tb-stat-value">{report.createdInMonth}</div>
-                </div>
-                <div className="tb-stat">
-                  <div className="tb-stat-label">현재 지연</div>
-                  <div className="tb-stat-value text-[var(--danger)]">
-                    {report.overdueNow}
+                  <div className="tb-stat">
+                    <div className="tb-stat-label">이달 신규 업무</div>
+                    <div className="tb-stat-value">{report.createdInMonth}</div>
                   </div>
-                </div>
-              </div>
-
-              <div className="mb-6 grid gap-4 sm:grid-cols-2">
-                <div className="rounded-[var(--radius)] border border-[var(--border)] p-4">
-                  <div className="mb-2 text-sm font-semibold">상태 분포</div>
-                  <div className="flex items-center gap-4">
-                    {(() => {
-                      const total =
-                        report.statusCounts.reduce(
-                          (sum, entry) => sum + entry.value,
-                          0
-                        ) || 1;
-                      const R = 34;
-                      const C = 2 * Math.PI * R;
-                      let offset = 0;
-
-                      return (
-                        <svg
-                          width="96"
-                          height="96"
-                          viewBox="0 0 96 96"
-                          role="img"
-                          aria-label="상태 분포 도넛 차트"
-                        >
-                          <circle
-                            cx="48"
-                            cy="48"
-                            r={R}
-                            fill="none"
-                            stroke="#eef0f5"
-                            strokeWidth="14"
-                          />
-                          {report.statusCounts
-                            .filter((entry) => entry.value > 0)
-                            .map((entry) => {
-                              const length = (entry.value / total) * C;
-                              const segment = (
-                                <circle
-                                  key={entry.label}
-                                  cx="48"
-                                  cy="48"
-                                  r={R}
-                                  fill="none"
-                                  stroke={entry.color}
-                                  strokeWidth="14"
-                                  strokeDasharray={`${length} ${C - length}`}
-                                  strokeDashoffset={-offset}
-                                  transform="rotate(-90 48 48)"
-                                />
-                              );
-                              offset += length;
-                              return segment;
-                            })}
-                          <text
-                            x="48"
-                            y="52"
-                            textAnchor="middle"
-                            fontSize="16"
-                            fontWeight="700"
-                            fill="#1a1a2e"
-                          >
-                            {total}
-                          </text>
-                        </svg>
-                      );
-                    })()}
-                    <div className="flex-1 space-y-1">
-                      {report.statusCounts.map((entry) => (
-                        <div
-                          key={entry.label}
-                          className="flex items-center gap-2 text-xs"
-                        >
-                          <span
-                            className="h-2.5 w-2.5 rounded-full"
-                            style={{ background: entry.color }}
-                          />
-                          <span className="flex-1 text-[var(--text-muted)]">
-                            {entry.label}
-                          </span>
-                          <span className="font-semibold">{entry.value}</span>
-                        </div>
-                      ))}
+                  <div className="tb-stat">
+                    <div className="tb-stat-label">현재 지연</div>
+                    <div className="tb-stat-value text-[var(--danger)]">
+                      {report.overdueNow}
                     </div>
                   </div>
                 </div>
 
-                <div className="rounded-[var(--radius)] border border-[var(--border)] p-4">
-                  <div className="mb-2 text-sm font-semibold">
-                    담당자별 업무 수
-                  </div>
-                  {(() => {
-                    const rows = report.assigneeRows.slice(0, 6);
-                    const maxCount = Math.max(
-                      ...rows.map((row) => row.count),
-                      1
-                    );
-                    const rowH = 24;
+                <div className="mb-6 grid gap-4 sm:grid-cols-2">
+                  <div className="rounded-[var(--radius)] border border-[var(--border)] p-4">
+                    <div className="mb-2 text-sm font-semibold">상태 분포</div>
+                    <div className="flex items-center gap-4">
+                      {(() => {
+                        const total =
+                          report.statusCounts.reduce(
+                            (sum, entry) => sum + entry.value,
+                            0
+                          ) || 1;
+                        const R = 34;
+                        const C = 2 * Math.PI * R;
+                        let offset = 0;
 
-                    return (
-                      <svg
-                        width="100%"
-                        height={rows.length * rowH || rowH}
-                        viewBox={`0 0 280 ${rows.length * rowH || rowH}`}
-                        preserveAspectRatio="xMinYMin meet"
-                        role="img"
-                        aria-label="담당자별 업무 수 막대 차트"
-                      >
-                        {rows.map((row, index) => (
-                          <g
-                            key={row.assignee}
-                            transform={`translate(0 ${index * rowH})`}
+                        return (
+                          <svg
+                            width="96"
+                            height="96"
+                            viewBox="0 0 96 96"
+                            role="img"
+                            aria-label="상태 분포 도넛 차트"
                           >
-                            <text
-                              x="0"
-                              y="15"
-                              fontSize="11"
-                              fill="#61667a"
-                            >
-                              {row.assignee.length > 6
-                                ? `${row.assignee.slice(0, 6)}…`
-                                : row.assignee}
-                            </text>
-                            <rect
-                              x="76"
-                              y="5"
-                              width={(row.count / maxCount) * 170}
-                              height="12"
-                              rx="6"
-                              fill="#18786f"
+                            <circle
+                              cx="48"
+                              cy="48"
+                              r={R}
+                              fill="none"
+                              stroke="#eef0f5"
+                              strokeWidth="14"
                             />
+                            {report.statusCounts
+                              .filter((entry) => entry.value > 0)
+                              .map((entry) => {
+                                const length = (entry.value / total) * C;
+                                const segment = (
+                                  <circle
+                                    key={entry.label}
+                                    cx="48"
+                                    cy="48"
+                                    r={R}
+                                    fill="none"
+                                    stroke={entry.color}
+                                    strokeWidth="14"
+                                    strokeDasharray={`${length} ${C - length}`}
+                                    strokeDashoffset={-offset}
+                                    transform="rotate(-90 48 48)"
+                                  />
+                                );
+                                offset += length;
+                                return segment;
+                              })}
                             <text
-                              x={80 + (row.count / maxCount) * 170}
-                              y="15"
-                              fontSize="11"
+                              x="48"
+                              y="52"
+                              textAnchor="middle"
+                              fontSize="16"
                               fontWeight="700"
                               fill="#1a1a2e"
                             >
-                              {row.count}
+                              {total}
                             </text>
-                          </g>
+                          </svg>
+                        );
+                      })()}
+                      <div className="flex-1 space-y-1">
+                        {report.statusCounts.map((entry) => (
+                          <div
+                            key={entry.label}
+                            className="flex items-center gap-2 text-xs"
+                          >
+                            <span
+                              className="h-2.5 w-2.5 rounded-full"
+                              style={{ background: entry.color }}
+                            />
+                            <span className="flex-1 text-[var(--text-muted)]">
+                              {entry.label}
+                            </span>
+                            <span className="font-semibold">{entry.value}</span>
+                          </div>
                         ))}
-                      </svg>
-                    );
-                  })()}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="rounded-[var(--radius)] border border-[var(--border)] p-4">
+                    <div className="mb-2 text-sm font-semibold">
+                      담당자별 업무 수
+                    </div>
+                    {(() => {
+                      const rows = report.assigneeRows.slice(0, 6);
+                      const maxCount = Math.max(
+                        ...rows.map((row) => row.count),
+                        1
+                      );
+                      const rowH = 24;
+
+                      return (
+                        <svg
+                          width="100%"
+                          height={rows.length * rowH || rowH}
+                          viewBox={`0 0 280 ${rows.length * rowH || rowH}`}
+                          preserveAspectRatio="xMinYMin meet"
+                          role="img"
+                          aria-label="담당자별 업무 수 막대 차트"
+                        >
+                          {rows.map((row, index) => (
+                            <g
+                              key={row.assignee}
+                              transform={`translate(0 ${index * rowH})`}
+                            >
+                              <text
+                                x="0"
+                                y="15"
+                                fontSize="11"
+                                fill="#61667a"
+                              >
+                                {row.assignee.length > 6
+                                  ? `${row.assignee.slice(0, 6)}…`
+                                  : row.assignee}
+                              </text>
+                              <rect
+                                x="76"
+                                y="5"
+                                width={(row.count / maxCount) * 170}
+                                height="12"
+                                rx="6"
+                                fill="#18786f"
+                              />
+                              <text
+                                x={80 + (row.count / maxCount) * 170}
+                                y="15"
+                                fontSize="11"
+                                fontWeight="700"
+                                fill="#1a1a2e"
+                              >
+                                {row.count}
+                              </text>
+                            </g>
+                          ))}
+                        </svg>
+                      );
+                    })()}
+                  </div>
                 </div>
+
+                <div className="mb-2 text-sm font-semibold">담당자별 현황</div>
+                <table className="tb-table mb-6 text-xs">
+                  <thead>
+                    <tr className="text-left">
+                      <th className="px-3 py-2">담당자</th>
+                      <th className="px-3 py-2 text-right">업무 수</th>
+                      <th className="px-3 py-2 text-right">평균 진행률</th>
+                      <th className="px-3 py-2 text-right">이달 완료 단계</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {report.assigneeRows.map((row) => (
+                      <tr key={row.assignee}>
+                        <td className="px-3 py-2">{row.assignee}</td>
+                        <td className="px-3 py-2 text-right">{row.count}</td>
+                        <td className="px-3 py-2 text-right">{row.avgProgress}%</td>
+                        <td className="px-3 py-2 text-right">
+                          {row.completedSteps}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
               </div>
 
-              <div className="mb-2 text-sm font-semibold">담당자별 현황</div>
-              <table className="tb-table mb-6 text-xs">
-                <thead>
-                  <tr className="text-left">
-                    <th className="px-3 py-2">담당자</th>
-                    <th className="px-3 py-2 text-right">업무 수</th>
-                    <th className="px-3 py-2 text-right">평균 진행률</th>
-                    <th className="px-3 py-2 text-right">이달 완료 단계</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {report.assigneeRows.map((row) => (
-                    <tr key={row.assignee}>
-                      <td className="px-3 py-2">{row.assignee}</td>
-                      <td className="px-3 py-2 text-right">{row.count}</td>
-                      <td className="px-3 py-2 text-right">{row.avgProgress}%</td>
-                      <td className="px-3 py-2 text-right">
-                        {row.completedSteps}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-
-              <div className="mb-2 text-sm font-semibold">업무 목록</div>
-              <table className="tb-table text-xs">
+              <div className="tb-report-list-section">
+                <div className="mb-2 text-sm font-semibold">업무 목록</div>
+                <table className="tb-table text-xs">
                 <thead>
                   <tr className="text-left">
                     <th className="px-3 py-2">
@@ -7249,7 +7252,8 @@ export default function TaskBoard() {
                     </tr>
                   ))}
                 </tbody>
-              </table>
+                </table>
+              </div>
             </div>
           </div>
         </div>
