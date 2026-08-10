@@ -76,6 +76,7 @@ const COMPLETE_COLOR = "#2563eb";
 type ReportSortKey =
   | "category"
   | "title"
+  | "budget"
   | "assignee"
   | "progress"
   | "dueDate"
@@ -903,10 +904,17 @@ export default function TaskBoard() {
 
     const itemRows = items.map((item) => {
       const done = isItemDone(item);
+      const budgetParts = [
+        item.allocatedBudget
+          ? `편성 ${formatBudget(item.allocatedBudget)}`
+          : "",
+        item.requiredBudget ? `소요 ${formatBudget(item.requiredBudget)}` : "",
+      ].filter(Boolean);
 
       return {
         item,
         categoryName: categoryPath(item.category)[0] ?? "미분류",
+        budgetLabel: budgetParts.join(" / "),
         progress: itemProgress(item),
         done,
         completedSteps: item.steps.filter((step) =>
@@ -935,6 +943,22 @@ export default function TaskBoard() {
         result = compareText(first.categoryName, second.categoryName);
       } else if (reportSort.key === "title") {
         result = compareText(first.item.title, second.item.title);
+      } else if (reportSort.key === "budget") {
+        const firstBudget =
+          first.item.allocatedBudget ?? first.item.requiredBudget;
+        const secondBudget =
+          second.item.allocatedBudget ?? second.item.requiredBudget;
+
+        if (firstBudget == null && secondBudget != null) {
+          return 1;
+        }
+        if (firstBudget != null && secondBudget == null) {
+          return -1;
+        }
+        result =
+          (firstBudget ?? 0) - (secondBudget ?? 0) ||
+          (first.item.requiredBudget ?? 0) -
+            (second.item.requiredBudget ?? 0);
       } else if (reportSort.key === "assignee") {
         result = compareText(
           assigneeName(first.item.assignee),
@@ -1071,10 +1095,11 @@ export default function TaskBoard() {
       ["이번 달 신규 업무", String(report.createdInMonth)],
       ["현재 지연 업무", String(report.overdueNow)],
       [],
-      ["대분류", "업무명", "담당", "진행률(%)", "마감일", "상태"],
+      ["대분류", "업무명", "예산", "담당", "진행률(%)", "마감일", "상태"],
       ...report.itemRows.map((row) => [
         row.categoryName,
         row.item.title,
+        row.budgetLabel,
         assigneeName(row.item.assignee),
         String(row.progress),
         row.item.dueDate ?? "",
@@ -7210,6 +7235,9 @@ export default function TaskBoard() {
                     <th className="px-3 py-2">
                       {reportSortButton("title", "업무명")}
                     </th>
+                    <th className="px-3 py-2 text-right">
+                      {reportSortButton("budget", "예산", "right")}
+                    </th>
                     <th className="px-3 py-2">
                       {reportSortButton("assignee", "담당")}
                     </th>
@@ -7229,6 +7257,9 @@ export default function TaskBoard() {
                     <tr key={row.item.id}>
                       <td className="px-3 py-2">{row.categoryName}</td>
                       <td className="px-3 py-2">{row.item.title}</td>
+                      <td className="px-3 py-2 text-right">
+                        {row.budgetLabel || "—"}
+                      </td>
                       <td className="px-3 py-2">
                         {assigneeName(row.item.assignee)}
                       </td>
