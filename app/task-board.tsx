@@ -47,7 +47,6 @@ import {
   itemHasOverdueDate,
   itemHasUrgentDate,
   itemProgress,
-  moveItem,
   nextStep,
   nextStepTitle,
   rowAccentColor,
@@ -89,6 +88,20 @@ type MapSearchResult = {
   lng: number;
   source: string;
 };
+type DropEdge = "before" | "after";
+type DropIndicator =
+  | {
+      kind: "item";
+      targetId: number;
+      category: string;
+      edge: DropEdge;
+    }
+  | {
+      kind: "group";
+      targetName: string;
+      edge: DropEdge;
+      mode: "append" | "merge";
+    };
 
 const REPORT_STATUS_ORDER: Record<string, number> = {
   지연: 0,
@@ -393,6 +406,7 @@ export default function TaskBoard() {
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
   const [groupOrder, setGroupOrder] = useState<string[]>([]);
   const [draggedGroup, setDraggedGroup] = useState<string | null>(null);
+  const [dropIndicator, setDropIndicator] = useState<DropIndicator | null>(null);
   const [editingGroup, setEditingGroup] = useState<string | null>(null);
   const [groupNameDraft, setGroupNameDraft] = useState("");
   const [deletingGroups, setDeletingGroups] = useState<Set<string>>(new Set());
@@ -2533,9 +2547,47 @@ export default function TaskBoard() {
     }
   }
 
-  function moveDraggedItemTo(targetCategory: string, targetId: number | null) {
+  function dropEdgeFromEvent(event: DragEvent<HTMLElement>): DropEdge {
+    const rect = event.currentTarget.getBoundingClientRect();
+    return event.clientY < rect.top + rect.height / 2 ? "before" : "after";
+  }
+
+  function updateDropIndicator(next: DropIndicator | null) {
+    setDropIndicator((current) => {
+      if (!current || !next) {
+        return next;
+      }
+
+      if (current.kind !== next.kind || current.edge !== next.edge) {
+        return next;
+      }
+
+      if (current.kind === "item" && next.kind === "item") {
+        return current.targetId === next.targetId &&
+          current.category === next.category
+          ? current
+          : next;
+      }
+
+      if (current.kind === "group" && next.kind === "group") {
+        return current.targetName === next.targetName &&
+          current.mode === next.mode
+          ? current
+          : next;
+      }
+
+      return next;
+    });
+  }
+
+  function moveDraggedItemTo(
+    targetCategory: string,
+    targetId: number | null,
+    edge: DropEdge = "before"
+  ) {
     if (!draggedId || draggedId === targetId) {
       setDraggedId(null);
+      setDropIndicator(null);
       return;
     }
 
@@ -2552,19 +2604,19 @@ export default function TaskBoard() {
     if (targetId !== null) {
       const targetIndex = orderWithoutSource.indexOf(targetId);
       if (targetIndex >= 0) {
-        insertIndex = targetIndex;
+        insertIndex = targetIndex + (edge === "after" ? 1 : 0);
       }
     } else {
-      const lastInGroup = [...items]
+      const firstInGroup = [...items]
         .filter(
           (item) =>
             item.id !== draggedId && categoryKey(item.category) === targetCategory
         )
         .sort((first, second) => first.position - second.position)
-        .at(-1);
+        .at(0);
 
-      if (lastInGroup) {
-        insertIndex = orderWithoutSource.indexOf(lastInGroup.id) + 1;
+      if (firstInGroup) {
+        insertIndex = orderWithoutSource.indexOf(firstInGroup.id);
       }
     }
 
@@ -2575,14 +2627,46 @@ export default function TaskBoard() {
     ];
 
     setDraggedId(null);
+    setDropIndicator(null);
     void persistItemMove(sourceItem.id, category, fullOrder);
   }
 
-  function handleDrop(targetId: number, targetCategory?: string) {
+  function handleItemDragOver(
+    event: DragEvent<HTMLElement>,
+    targetId: number,
+    targetCategory: string
+  ) {
+    if (!draggedId || draggedId === targetId) {
+      return;
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+    event.dataTransfer.dropEffect = "move";
+    updateDropIndicator({
+      kind: "item",
+      targetId,
+      category: targetCategory,
+      edge: dropEdgeFromEvent(event),
+    });
+  }
+
+  function handleDrop(
+    event: DragEvent<HTMLElement>,
+    targetId: number,
+    targetCategory?: string
+  ) {
+    event.preventDefault();
+    event.stopPropagation();
     const targetItem = items.find((item) => item.id === targetId);
+    const indicator =
+      dropIndicator?.kind === "item" && dropIndicator.targetId === targetId
+        ? dropIndicator
+        : null;
     moveDraggedItemTo(
       targetCategory ?? categoryKey(targetItem?.category ?? ""),
-      targetId
+      targetId,
+      indicator?.edge ?? dropEdgeFromEvent(event)
     );
   }
 
@@ -2899,8 +2983,38 @@ export default function TaskBoard() {
     }
   }
 
+  function handleGroupDragOver(
+    event: DragEvent<HTMLElement>,
+    targetName: string
+  ) {
+    if (!draggedGroup && !draggedId) {
+      return;
+    }
+
+    if (draggedGroup === targetName) {
+      updateDropIndicator(null);
+      return;
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+    event.dataTransfer.dropEffect = "move";
+    updateDropIndicator({
+      kind: "group",
+      targetName,
+      edge: draggedId ? "after" : dropEdgeFromEvent(event),
+      mode: draggedId ? "append" : "merge",
+    });
+  }
+
   function handleGroupDrop(event: DragEvent<HTMLElement>, targetName: string) {
     event.preventDefault();
+    event.stopPropagation();
+    const indicator =
+      dropIndicator?.kind === "group" && dropIndicator.targetName === targetName
+        ? dropIndicator
+        : null;
+    setDropIndicator(null);
 
     if (draggedId) {
       moveDraggedItemTo(targetName, null);
@@ -2916,6 +3030,7 @@ export default function TaskBoard() {
     const from = names.indexOf(draggedGroup);
     const to = names.indexOf(targetName);
     const sourceGroup = draggedGroup;
+    const edge = indicator?.edge ?? dropEdgeFromEvent(event);
     setDraggedGroup(null);
 
     if (from < 0 || to < 0) {
@@ -2931,7 +3046,17 @@ export default function TaskBoard() {
       return;
     }
 
-    void persistGroupOrder(moveItem(names, from, to));
+    const withoutSource = names.filter((name) => name !== sourceGroup);
+    const targetIndex = withoutSource.indexOf(targetName);
+    const insertIndex =
+      targetIndex < 0
+        ? withoutSource.length
+        : targetIndex + (edge === "after" ? 1 : 0);
+    void persistGroupOrder([
+      ...withoutSource.slice(0, insertIndex),
+      sourceGroup,
+      ...withoutSource.slice(insertIndex),
+    ]);
   }
 
   function toggleExpanded(id: number) {
@@ -4148,6 +4273,11 @@ export default function TaskBoard() {
                   "--category-soft": categoryTone.soft,
                   "--category-softer": categoryTone.softer,
                 } as CSSProperties;
+                const groupDropIndicator =
+                  dropIndicator?.kind === "group" &&
+                  dropIndicator.targetName === group.name
+                    ? dropIndicator
+                    : null;
 
                 return (
                   <div
@@ -4156,16 +4286,29 @@ export default function TaskBoard() {
                     style={categoryStyle}
                   >
                     <div
-                      onDragOver={(event) => {
-                        if (draggedGroup || draggedId) {
-                          event.preventDefault();
-                          event.dataTransfer.dropEffect = "move";
-                        }
-                      }}
+                      onDragOver={(event) =>
+                        handleGroupDragOver(event, group.name)
+                      }
                       onDrop={(event) => handleGroupDrop(event, group.name)}
                       className={`tb-hierarchy-header tb-list-group-header flex items-center gap-2.5 ${
                         draggedGroup === group.name
-                          ? "ring-2 ring-[var(--accent-ring)]"
+                          ? "is-dragging ring-2 ring-[var(--accent-ring)]"
+                          : ""
+                      } ${
+                        groupDropIndicator?.edge === "before"
+                          ? "is-drop-before"
+                          : ""
+                      } ${
+                        groupDropIndicator?.edge === "after"
+                          ? "is-drop-after"
+                          : ""
+                      } ${
+                        groupDropIndicator?.mode === "append"
+                          ? "is-drop-append"
+                          : ""
+                      } ${
+                        groupDropIndicator?.mode === "merge"
+                          ? "is-drop-merge"
                           : ""
                       }`}
                       style={{ paddingLeft: `${12 + indent}px` }}
@@ -4177,7 +4320,10 @@ export default function TaskBoard() {
                           setDraggedGroup(group.name);
                           event.dataTransfer.effectAllowed = "move";
                         }}
-                        onDragEnd={() => setDraggedGroup(null)}
+                        onDragEnd={() => {
+                          setDraggedGroup(null);
+                          setDropIndicator(null);
+                        }}
                         className="tb-iconbtn h-6 w-6 shrink-0 cursor-grab active:cursor-grabbing"
                         title="드래그해 업무 위계 순서 변경"
                       >
@@ -4315,19 +4461,34 @@ export default function TaskBoard() {
                 const generalSubtasks = item.subtasks.filter(
                   (subtask) => subtask.stepId === null
                 );
+                const itemDropIndicator =
+                  dropIndicator?.kind === "item" &&
+                  dropIndicator.targetId === item.id
+                    ? dropIndicator
+                    : null;
 
                 return (
                   <div
                     key={item.id}
                     id={`item-${item.id}`}
-                    onDragOver={handleDragOver}
-                    onDrop={() => handleDrop(item.id, group.name)}
+                    onDragOver={(event) =>
+                      handleItemDragOver(event, item.id, group.name)
+                    }
+                    onDrop={(event) => handleDrop(event, item.id, group.name)}
                     className={`tb-card tb-work-item tb-list-item overflow-hidden transition-shadow ${
                       expanded ? "is-expanded " : ""
                     }${
                       draggedId === item.id || focusItemId === item.id
                         ? "ring-2 ring-[var(--accent-ring)]"
                         : ""
+                    } ${
+                      draggedId === item.id ? "is-dragging" : ""
+                    } ${
+                      itemDropIndicator?.edge === "before"
+                        ? "is-drop-before"
+                        : ""
+                    } ${
+                      itemDropIndicator?.edge === "after" ? "is-drop-after" : ""
                     }`}
                     style={{ marginLeft: `${itemIndent}px` }}
                   >
@@ -4341,7 +4502,10 @@ export default function TaskBoard() {
                           setDraggedId(item.id);
                           event.dataTransfer.effectAllowed = "move";
                         }}
-                        onDragEnd={() => setDraggedId(null)}
+                        onDragEnd={() => {
+                          setDraggedId(null);
+                          setDropIndicator(null);
+                        }}
                         className="tb-iconbtn h-8 w-6 shrink-0 cursor-grab active:cursor-grabbing"
                         title="드래그로 순서 변경"
                       >
@@ -5904,7 +6068,7 @@ export default function TaskBoard() {
                         <Fragment key={item.id}>
                           <tr
                             onDragOver={handleDragOver}
-                            onDrop={() => handleDrop(item.id)}
+                            onDrop={(event) => handleDrop(event, item.id)}
                             className={`tb-row ${
                               draggedId === item.id ? "bg-[var(--accent-soft)]" : ""
                             }`}
@@ -5938,7 +6102,10 @@ export default function TaskBoard() {
                                     setDraggedId(item.id);
                                     event.dataTransfer.effectAllowed = "move";
                                   }}
-                                  onDragEnd={() => setDraggedId(null)}
+                                  onDragEnd={() => {
+                                    setDraggedId(null);
+                                    setDropIndicator(null);
+                                  }}
                                   className="tb-iconbtn h-6 w-6 cursor-grab active:cursor-grabbing"
                                   title="드래그로 순서 변경"
                                 >

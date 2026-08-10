@@ -332,6 +332,7 @@ select {
   }
 
   .tb-list-group-header {
+    position: relative;
     border-left: 0;
     border-bottom: 1px solid rgba(203, 215, 205, 0.66);
     border-radius: 0;
@@ -362,8 +363,72 @@ select {
   .tb-list-item.is-expanded {
     background: rgba(255, 254, 250, 0.86);
   }
+  .tb-list-item.is-dragging,
+  .tb-list-group-header.is-dragging {
+    opacity: 0.48;
+  }
+  .tb-list-item.is-drop-before,
+  .tb-list-item.is-drop-after,
+  .tb-list-group-header.is-drop-before,
+  .tb-list-group-header.is-drop-after {
+    overflow: visible !important;
+  }
+  .tb-list-item.is-drop-before::before,
+  .tb-list-item.is-drop-after::after,
+  .tb-list-group-header.is-drop-before::before,
+  .tb-list-group-header.is-drop-after::after {
+    content: "";
+    position: absolute;
+    left: 14px;
+    right: 14px;
+    z-index: 4;
+    height: 3px;
+    border-radius: 999px;
+    background: var(--accent);
+    box-shadow:
+      0 0 0 3px rgba(24, 120, 111, 0.14),
+      0 8px 18px rgba(24, 120, 111, 0.2);
+  }
+  .tb-list-item.is-drop-before::before,
+  .tb-list-group-header.is-drop-before::before {
+    top: -6px;
+  }
+  .tb-list-item.is-drop-after::after,
+  .tb-list-group-header.is-drop-after::after {
+    bottom: -6px;
+  }
+  .tb-list-item.is-drop-before .tb-list-row-main::before,
+  .tb-list-item.is-drop-after .tb-list-row-main::after,
+  .tb-list-group-header.is-drop-before > button:first-child::before,
+  .tb-list-group-header.is-drop-after > button:first-child::after {
+    content: "";
+    position: absolute;
+    left: 8px;
+    z-index: 5;
+    width: 11px;
+    height: 11px;
+    border: 3px solid var(--accent);
+    border-radius: 999px;
+    background: var(--surface);
+  }
+  .tb-list-item.is-drop-before .tb-list-row-main::before,
+  .tb-list-group-header.is-drop-before > button:first-child::before {
+    top: -10px;
+  }
+  .tb-list-item.is-drop-after .tb-list-row-main::after,
+  .tb-list-group-header.is-drop-after > button:first-child::after {
+    bottom: -10px;
+  }
+  .tb-list-group-header.is-drop-append {
+    background:
+      linear-gradient(90deg, rgba(24, 120, 111, 0.14), transparent 360px);
+  }
+  .tb-list-group-header.is-drop-merge {
+    box-shadow: inset 0 0 0 1px rgba(24, 120, 111, 0.28);
+  }
 
   .tb-list-row-main {
+    position: relative;
     grid-template-columns: 28px minmax(0, 1fr);
     min-height: 72px;
   }
