@@ -101,6 +101,22 @@ function groupContainsCategory(groupName: string, candidate: string) {
   return candidate === groupName || candidate.startsWith(`${groupName} > `);
 }
 
+function replaceGroupPrefix(value: string, source: string, target: string) {
+  const current = categoryKey(value);
+  const from = categoryKey(source);
+  const to = categoryKey(target);
+
+  if (current === from) {
+    return to === categoryKey("") ? "" : to;
+  }
+
+  if (current.startsWith(`${from} > `)) {
+    return `${to} > ${current.slice(from.length + 3)}`;
+  }
+
+  return value;
+}
+
 const defaultStages = [
   {
     key: "plan-draft",
@@ -1864,6 +1880,8 @@ export async function PATCH(request: Request) {
       url?: string;
       enabled?: boolean;
       groupName?: string;
+      newGroupName?: string;
+      targetGroupName?: string;
       stages?: Array<{
         stageKey?: string;
         title?: string;
@@ -1959,6 +1977,191 @@ export async function PATCH(request: Request) {
         groupOrder: await getGroupOrder(),
         history: await getHistory(),
       });
+    }
+
+    if (payload.action === "rename-group") {
+      const source =
+        typeof payload.groupName === "string" ? categoryKey(payload.groupName) : "";
+      const target =
+        typeof payload.newGroupName === "string"
+          ? categoryKey(payload.newGroupName)
+          : "";
+
+      if (!source || !target || target === categoryKey("")) {
+        return Response.json(
+          { error: "변경할 대분류 이름을 확인해 주세요." },
+          { status: 400 }
+        );
+      }
+
+      if (source === target) {
+        return Response.json({
+          items: await getItems(),
+          groupOrder: await getGroupOrder(),
+          history: await getHistory(),
+        });
+      }
+
+      const rows = await d1
+        .prepare("SELECT id, category FROM workflow_items")
+        .all<{ id: number; category: string }>();
+      const affectedItems = (rows.results ?? []).filter((item) =>
+        groupContainsCategory(source, categoryKey(item.category ?? ""))
+      );
+      const nextOrder = [
+        ...new Set(
+          (await getGroupOrder()).map((name) =>
+            replaceGroupPrefix(name, source, target)
+          )
+        ),
+      ];
+
+      await d1.batch([
+        ...affectedItems.map((item) =>
+          d1
+            .prepare(
+              "UPDATE workflow_items SET category = ?, updated_by = ?, updated_at = ? WHERE id = ?"
+            )
+            .bind(replaceGroupPrefix(item.category, source, target), actor, now, item.id)
+        ),
+        d1
+          .prepare(`INSERT INTO app_settings (key, value, updated_at)
+            VALUES ('groupOrder', ?, ?)
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`)
+          .bind(JSON.stringify(nextOrder), now),
+      ]);
+
+      await logHistory({
+        entityType: "group",
+        action: "rename",
+        summary: `${actor}님이 대분류 '${source}' 이름을 '${target}'(으)로 변경함`,
+        actor,
+      });
+
+      return Response.json({
+        items: await getItems(),
+        groupOrder: await getGroupOrder(),
+        history: await getHistory(),
+      });
+    }
+
+    if (payload.action === "merge-group") {
+      const source =
+        typeof payload.groupName === "string" ? categoryKey(payload.groupName) : "";
+      const target =
+        typeof payload.targetGroupName === "string"
+          ? categoryKey(payload.targetGroupName)
+          : "";
+
+      if (!source || !target || source === target) {
+        return Response.json(
+          { error: "합칠 대분류를 확인해 주세요." },
+          { status: 400 }
+        );
+      }
+
+      const rows = await d1
+        .prepare("SELECT id, category FROM workflow_items")
+        .all<{ id: number; category: string }>();
+      const affectedItems = (rows.results ?? []).filter((item) =>
+        groupContainsCategory(source, categoryKey(item.category ?? ""))
+      );
+      const orderWithoutSource = (await getGroupOrder())
+        .filter((name) => !groupContainsCategory(source, categoryKey(name)))
+        .map((name) => replaceGroupPrefix(name, source, target));
+      const nextOrder = [
+        ...new Set(
+          orderWithoutSource.includes(target)
+            ? orderWithoutSource
+            : [...orderWithoutSource, target]
+        ),
+      ];
+
+      await d1.batch([
+        ...affectedItems.map((item) =>
+          d1
+            .prepare(
+              "UPDATE workflow_items SET category = ?, updated_by = ?, updated_at = ? WHERE id = ?"
+            )
+            .bind(replaceGroupPrefix(item.category, source, target), actor, now, item.id)
+        ),
+        d1
+          .prepare(`INSERT INTO app_settings (key, value, updated_at)
+            VALUES ('groupOrder', ?, ?)
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`)
+          .bind(JSON.stringify(nextOrder), now),
+      ]);
+
+      await logHistory({
+        entityType: "group",
+        action: "merge",
+        summary: `${actor}님이 대분류 '${source}'를 '${target}'(으)로 합침`,
+        actor,
+      });
+
+      return Response.json({
+        items: await getItems(),
+        groupOrder: await getGroupOrder(),
+        history: await getHistory(),
+      });
+    }
+
+    if (payload.action === "move-item") {
+      const itemId = Number(payload.itemId);
+      const order = Array.isArray(payload.order) ? payload.order.map(Number) : [];
+      const uniqueOrder = new Set(order);
+      const category =
+        typeof payload.category === "string"
+          ? payload.category.trim().slice(0, 80)
+          : "";
+
+      if (!Number.isFinite(itemId) || !order.length) {
+        return Response.json(
+          { error: "이동할 업무와 순서가 필요합니다." },
+          { status: 400 }
+        );
+      }
+
+      if (uniqueOrder.size !== order.length || order.some((id) => !Number.isFinite(id))) {
+        return Response.json({ error: "업무 순서를 확인해 주세요." }, { status: 400 });
+      }
+
+      const existing = await d1
+        .prepare("SELECT id FROM workflow_items")
+        .all<{ id: number }>();
+      const existingIds = new Set((existing.results ?? []).map((item) => item.id));
+
+      if (!existingIds.has(itemId) || order.some((id) => !existingIds.has(id))) {
+        return Response.json({ error: "업무를 찾을 수 없습니다." }, { status: 404 });
+      }
+
+      await d1.batch([
+        d1
+          .prepare(
+            "UPDATE workflow_items SET category = ?, updated_by = ?, updated_at = ? WHERE id = ?"
+          )
+          .bind(category, actor, now, itemId),
+        ...order.map((id, index) =>
+          d1
+            .prepare(`UPDATE workflow_items
+              SET position = ?,
+                updated_by = ?,
+                updated_at = ?
+              WHERE id = ?`)
+            .bind(index + 1, actor, now, id)
+        ),
+      ]);
+
+      await logHistory({
+        itemId,
+        entityType: "item",
+        entityId: itemId,
+        action: "move",
+        summary: `${actor}님이 업무 위치와 대분류를 변경함`,
+        actor,
+      });
+
+      return Response.json({ items: await getItems(), history: await getHistory() });
     }
 
     if (payload.action === "save-template") {

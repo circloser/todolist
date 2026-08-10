@@ -36,7 +36,6 @@ import { WETLAND_PRESETS } from "./lib/wetlands";
 import ManualContent from "./manual-content";
 
 import {
-  applyManualPositions,
   assigneeName,
   canToggleStep,
   completionCount,
@@ -82,6 +81,14 @@ type ReportSortKey =
   | "dueDate"
   | "status";
 type SortDirection = "asc" | "desc";
+type MapProvider = "osm" | "google" | "vworld";
+type MapStyle = "road" | "satellite" | "hybrid";
+type MapSearchResult = {
+  label: string;
+  lat: number;
+  lng: number;
+  source: string;
+};
 
 const REPORT_STATUS_ORDER: Record<string, number> = {
   지연: 0,
@@ -100,6 +107,18 @@ const CATEGORY_COLORS = [
   "#6f7b2d",
   "#9a6a3a",
 ];
+
+const MAP_PROVIDER_LABELS: Record<MapProvider, string> = {
+  osm: "Leaflet / OSM",
+  google: "Google",
+  vworld: "VWorld",
+};
+
+const MAP_STYLE_LABELS: Record<MapStyle, string> = {
+  road: "일반",
+  satellite: "위성",
+  hybrid: "하이브리드",
+};
 
 function colorHash(value: string) {
   return Array.from(value).reduce(
@@ -126,6 +145,128 @@ function categoryVisual(value: string) {
     soft: hexToRgba(color, 0.09),
     softer: hexToRgba(color, 0.045),
   };
+}
+
+function replaceCategoryPrefix(value: string, source: string, target: string) {
+  const current = categoryKey(value);
+  const from = categoryKey(source);
+  const to = categoryKey(target);
+
+  if (!current || current === categoryKey("")) {
+    return value;
+  }
+
+  if (current === from) {
+    return to;
+  }
+
+  if (current.startsWith(`${from} > `)) {
+    return `${to} > ${current.slice(from.length + 3)}`;
+  }
+
+  return current;
+}
+
+function storedCategoryName(value: string) {
+  const key = categoryKey(value);
+  return key === categoryKey("") ? "" : key;
+}
+
+function mapTileConfig(
+  provider: MapProvider,
+  style: MapStyle,
+  keys: { google: string; vworld: string }
+) {
+  if (provider === "vworld" && keys.vworld.trim()) {
+    const layer =
+      style === "satellite" ? "Satellite" : style === "hybrid" ? "Hybrid" : "Base";
+
+    return {
+      url: `https://api.vworld.kr/req/wmts/1.0.0/${encodeURIComponent(
+        keys.vworld.trim()
+      )}/${layer}/{z}/{y}/{x}.png`,
+      attribution: "VWorld",
+      maxZoom: 19,
+      notice: "",
+    };
+  }
+
+  if (provider === "google") {
+    const layer = style === "satellite" ? "s" : style === "hybrid" ? "y" : "m";
+    const key = keys.google.trim()
+      ? `&key=${encodeURIComponent(keys.google.trim())}`
+      : "";
+
+    return {
+      url: `https://mt{s}.google.com/vt/lyrs=${layer}&x={x}&y={y}&z={z}${key}`,
+      attribution: "Google",
+      maxZoom: 20,
+      subdomains: ["0", "1", "2", "3"],
+      notice: keys.google.trim()
+        ? ""
+        : "Google 지도는 공식 사용을 위해 API 키 설정을 권장합니다.",
+    };
+  }
+
+  const notice =
+    provider === "vworld" && !keys.vworld.trim()
+      ? "VWorld 지도를 보려면 VWorld API 키를 입력해 주세요. 키가 없으면 기본 지도로 표시됩니다."
+      : "";
+
+  return {
+    url:
+      style === "satellite"
+        ? "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
+        : "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
+    attribution:
+      style === "satellite"
+        ? "Tiles &copy; Esri"
+        : '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+    maxZoom: style === "satellite" ? 19 : 19,
+    notice,
+  };
+}
+
+function readMapPrefs() {
+  const fallback = {
+    provider: "osm" as MapProvider,
+    style: "road" as MapStyle,
+    googleKey: "",
+    vworldKey: "",
+  };
+
+  if (typeof window === "undefined") {
+    return fallback;
+  }
+
+  try {
+    const raw = window.localStorage.getItem("team-progress-map");
+    if (!raw) {
+      return fallback;
+    }
+
+    const parsed = JSON.parse(raw) as {
+      provider?: MapProvider;
+      style?: MapStyle;
+      googleKey?: string;
+      vworldKey?: string;
+    };
+
+    return {
+      provider:
+        parsed.provider && parsed.provider in MAP_PROVIDER_LABELS
+          ? parsed.provider
+          : fallback.provider,
+      style:
+        parsed.style && parsed.style in MAP_STYLE_LABELS
+          ? parsed.style
+          : fallback.style,
+      googleKey: parsed.googleKey ?? "",
+      vworldKey: parsed.vworldKey ?? "",
+    };
+  } catch {
+    return fallback;
+  }
 }
 
 export default function TaskBoard() {
@@ -162,8 +303,12 @@ export default function TaskBoard() {
   const leafletLibRef = useRef<typeof LeafletNS | null>(null);
   const leafletMapRef = useRef<LeafletNS.Map | null>(null);
   const markerLayerRef = useRef<LeafletNS.LayerGroup | null>(null);
+  const tileLayerRef = useRef<LeafletNS.TileLayer | null>(null);
   const openItemRef = useRef<(id: number) => void>(() => {});
   const clearMapPinRef = useRef<(id: number) => void>(() => {});
+  const moveMapPinRef = useRef<(id: number, lat: number, lng: number) => void>(
+    () => {}
+  );
   const [placingItemId, setPlacingItemId] = useState<number | null>(null);
   const placingItemIdRef = useRef<number | null>(null);
   const placeItemAtRef = useRef<(id: number, lat: number, lng: number) => void>(
@@ -179,6 +324,17 @@ export default function TaskBoard() {
   const [mapNewTitle, setMapNewTitle] = useState("");
   const [mapNewAssignee, setMapNewAssignee] = useState("");
   const [mapNewLocation, setMapNewLocation] = useState("");
+  const [initialMapPrefs] = useState(readMapPrefs);
+  const [mapProvider, setMapProvider] = useState<MapProvider>(
+    initialMapPrefs.provider
+  );
+  const [mapStyle, setMapStyle] = useState<MapStyle>(initialMapPrefs.style);
+  const [googleMapKey, setGoogleMapKey] = useState(initialMapPrefs.googleKey);
+  const [vworldMapKey, setVworldMapKey] = useState(initialMapPrefs.vworldKey);
+  const [mapSearchQuery, setMapSearchQuery] = useState("");
+  const [mapSearchResults, setMapSearchResults] = useState<MapSearchResult[]>([]);
+  const [mapSearching, setMapSearching] = useState(false);
+  const [mapSearchError, setMapSearchError] = useState("");
   const [ganttDrag, setGanttDrag] = useState<{
     itemId: number;
     pct: number;
@@ -237,6 +393,8 @@ export default function TaskBoard() {
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
   const [groupOrder, setGroupOrder] = useState<string[]>([]);
   const [draggedGroup, setDraggedGroup] = useState<string | null>(null);
+  const [editingGroup, setEditingGroup] = useState<string | null>(null);
+  const [groupNameDraft, setGroupNameDraft] = useState("");
   const [deletingGroups, setDeletingGroups] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
   const [adding, setAdding] = useState(false);
@@ -1952,6 +2110,136 @@ export default function TaskBoard() {
     }
   }
 
+  async function searchMapPlaces(event?: FormEvent<HTMLFormElement>) {
+    event?.preventDefault();
+    const query = mapSearchQuery.trim();
+
+    if (!query) {
+      setMapSearchResults([]);
+      setMapSearchError("");
+      return;
+    }
+
+    setMapSearching(true);
+    setMapSearchError("");
+
+    try {
+      const localResults: MapSearchResult[] = WETLAND_PRESETS.filter((preset) =>
+        preset.name.toLocaleLowerCase("ko-KR").includes(
+          query.toLocaleLowerCase("ko-KR")
+        )
+      )
+        .slice(0, 5)
+        .map((preset) => ({
+          label: preset.name,
+          lat: preset.lat,
+          lng: preset.lng,
+          source: "기본 목록",
+        }));
+      let remoteResults: MapSearchResult[] = [];
+
+      if (vworldMapKey.trim()) {
+        type VWorldSearchItem = {
+          title?: string;
+          address?: { parcel?: string; road?: string };
+          point?: { x?: string; y?: string };
+        };
+        const params = new URLSearchParams({
+          service: "search",
+          request: "search",
+          version: "2.0",
+          crs: "EPSG:4326",
+          size: "5",
+          page: "1",
+          type: "PLACE",
+          format: "json",
+          key: vworldMapKey.trim(),
+          query,
+        });
+        const response = await fetch(
+          `https://api.vworld.kr/req/search?${params.toString()}`
+        );
+        const data = (await response.json()) as {
+          response?: { result?: { items?: VWorldSearchItem[] } };
+        };
+        remoteResults =
+          data.response?.result?.items
+            ?.map((item) => {
+              const lat = Number(item.point?.y);
+              const lng = Number(item.point?.x);
+
+              if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+                return null;
+              }
+
+              return {
+                label:
+                  item.title ??
+                  item.address?.road ??
+                  item.address?.parcel ??
+                  query,
+                lat,
+                lng,
+                source: "VWorld",
+              };
+            })
+            .filter((item): item is MapSearchResult => item !== null) ?? [];
+      } else {
+        type NominatimItem = {
+          display_name?: string;
+          lat?: string;
+          lon?: string;
+        };
+        const params = new URLSearchParams({
+          format: "jsonv2",
+          q: query,
+          limit: "5",
+          countrycodes: "kr",
+          "accept-language": "ko",
+        });
+        const response = await fetch(
+          `https://nominatim.openstreetmap.org/search?${params.toString()}`
+        );
+        const data = (await response.json()) as NominatimItem[];
+        remoteResults = data
+          .map((item) => {
+            const lat = Number(item.lat);
+            const lng = Number(item.lon);
+
+            if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+              return null;
+            }
+
+            return {
+              label: item.display_name ?? query,
+              lat,
+              lng,
+              source: "OSM",
+            };
+          })
+          .filter((item): item is MapSearchResult => item !== null);
+      }
+
+      const unique = new Map<string, MapSearchResult>();
+      [...localResults, ...remoteResults].forEach((result) => {
+        unique.set(`${result.lat.toFixed(5)},${result.lng.toFixed(5)}`, result);
+      });
+      const results = [...unique.values()].slice(0, 8);
+      setMapSearchResults(results);
+      if (!results.length) {
+        setMapSearchError("검색 결과가 없습니다.");
+      }
+    } catch (searchError) {
+      setMapSearchError(
+        searchError instanceof Error
+          ? searchError.message
+          : "지명을 검색하지 못했습니다."
+      );
+    } finally {
+      setMapSearching(false);
+    }
+  }
+
   async function createItemOnMap() {
     if (!mapDraft) {
       return;
@@ -2178,23 +2466,57 @@ export default function TaskBoard() {
     }
   }
 
-  async function persistOrder(order: number[]) {
+  function orderedItemIds() {
+    return [...items]
+      .sort((first, second) => first.position - second.position)
+      .map((item) => item.id);
+  }
+
+  function applyOptimisticOrder(
+    order: number[],
+    movedItemId?: number,
+    category?: string
+  ) {
+    const positionById = new Map(order.map((id, index) => [id, index + 1]));
+    setItems((current) =>
+      current.map((item) => ({
+        ...item,
+        category:
+          movedItemId === item.id && category !== undefined
+            ? category
+            : item.category,
+        position: positionById.get(item.id) ?? item.position,
+      }))
+    );
+  }
+
+  async function persistItemMove(
+    itemId: number,
+    category: string,
+    order: number[]
+  ) {
     const previousItems = items;
     setError("");
     setSavingOrder(true);
     setSortMode("manual");
-    setItems((current) => applyManualPositions(current, order));
+    applyOptimisticOrder(order, itemId, category);
 
     try {
       const response = await fetch("/api/tasks", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ actor: currentActor, order }),
+        body: JSON.stringify({
+          action: "move-item",
+          actor: currentActor,
+          itemId,
+          category,
+          order,
+        }),
       });
       const data = (await response.json()) as TaskResponse;
 
       if (!response.ok || !data.items) {
-        throw new Error(data.error ?? "업무 순서를 저장하지 못했습니다.");
+        throw new Error(data.error ?? "업무 위치를 저장하지 못했습니다.");
       }
 
       setItems(data.items);
@@ -2204,41 +2526,67 @@ export default function TaskBoard() {
       setError(
         saveError instanceof Error
           ? saveError.message
-          : "업무 순서를 저장하지 못했습니다."
+          : "업무 위치를 저장하지 못했습니다."
       );
     } finally {
       setSavingOrder(false);
     }
   }
 
-  function handleDrop(targetId: number) {
+  function moveDraggedItemTo(targetCategory: string, targetId: number | null) {
     if (!draggedId || draggedId === targetId) {
       setDraggedId(null);
       return;
     }
 
-    const sourceIndex = visibleItems.findIndex((item) => item.id === draggedId);
-    const targetIndex = visibleItems.findIndex((item) => item.id === targetId);
+    const sourceItem = items.find((item) => item.id === draggedId);
+    const category = storedCategoryName(targetCategory);
+    const orderWithoutSource = orderedItemIds().filter((id) => id !== draggedId);
 
-    if (sourceIndex < 0 || targetIndex < 0) {
+    if (!sourceItem) {
       setDraggedId(null);
       return;
     }
 
-    const reorderedVisible = moveItem(visibleItems, sourceIndex, targetIndex);
-    const visibleIds = new Set(visibleItems.map((item) => item.id));
-    let visibleIndex = 0;
-    const fullOrder = [...items]
-      .sort((first, second) => first.position - second.position)
-      .map((item) =>
-        visibleIds.has(item.id) ? reorderedVisible[visibleIndex++].id : item.id
-      );
+    let insertIndex = orderWithoutSource.length;
+    if (targetId !== null) {
+      const targetIndex = orderWithoutSource.indexOf(targetId);
+      if (targetIndex >= 0) {
+        insertIndex = targetIndex;
+      }
+    } else {
+      const lastInGroup = [...items]
+        .filter(
+          (item) =>
+            item.id !== draggedId && categoryKey(item.category) === targetCategory
+        )
+        .sort((first, second) => first.position - second.position)
+        .at(-1);
+
+      if (lastInGroup) {
+        insertIndex = orderWithoutSource.indexOf(lastInGroup.id) + 1;
+      }
+    }
+
+    const fullOrder = [
+      ...orderWithoutSource.slice(0, insertIndex),
+      draggedId,
+      ...orderWithoutSource.slice(insertIndex),
+    ];
 
     setDraggedId(null);
-    void persistOrder(fullOrder);
+    void persistItemMove(sourceItem.id, category, fullOrder);
   }
 
-  function handleDragOver(event: DragEvent<HTMLTableRowElement>) {
+  function handleDrop(targetId: number, targetCategory?: string) {
+    const targetItem = items.find((item) => item.id === targetId);
+    moveDraggedItemTo(
+      targetCategory ?? categoryKey(targetItem?.category ?? ""),
+      targetId
+    );
+  }
+
+  function handleDragOver(event: DragEvent<HTMLElement>) {
     event.preventDefault();
     event.dataTransfer.dropEffect = "move";
   }
@@ -2425,7 +2773,140 @@ export default function TaskBoard() {
     }
   }
 
-  function handleGroupDrop(targetName: string) {
+  async function renameGroup(sourceName: string, nextName: string) {
+    const source = categoryKey(sourceName);
+    const target = categoryKey(nextName);
+
+    if (!target || target === categoryKey("")) {
+      setError("새 대분류명을 입력해 주세요.");
+      return;
+    }
+
+    if (source === target) {
+      setEditingGroup(null);
+      return;
+    }
+
+    const previousItems = items;
+    const previousOrder = groupOrder;
+    setSavingGroup(true);
+    setError("");
+    setItems((current) =>
+      current.map((item) => ({
+        ...item,
+        category: replaceCategoryPrefix(item.category, source, target),
+      }))
+    );
+    setGroupOrder((current) =>
+      current.map((name) => replaceCategoryPrefix(name, source, target))
+    );
+
+    try {
+      const response = await fetch("/api/tasks", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "rename-group",
+          actor: currentActor,
+          groupName: source,
+          newGroupName: target,
+        }),
+      });
+      const data = (await response.json()) as TaskResponse;
+
+      if (!response.ok || !data.items || !data.groupOrder) {
+        throw new Error(data.error ?? "대분류 이름을 저장하지 못했습니다.");
+      }
+
+      setItems(data.items);
+      setGroupOrder(data.groupOrder);
+      setHistory(data.history ?? history);
+      setEditingGroup(null);
+      if (categoryFilter === source) {
+        setCategoryFilter(target);
+      }
+      if (activeAddGroup === source) {
+        setActiveAddGroup(target);
+      }
+    } catch (renameError) {
+      setItems(previousItems);
+      setGroupOrder(previousOrder);
+      setError(
+        renameError instanceof Error
+          ? renameError.message
+          : "대분류 이름을 저장하지 못했습니다."
+      );
+    } finally {
+      setSavingGroup(false);
+    }
+  }
+
+  async function mergeGroups(sourceName: string, targetName: string) {
+    const source = categoryKey(sourceName);
+    const target = categoryKey(targetName);
+
+    if (source === target) {
+      return;
+    }
+
+    const previousItems = items;
+    const previousOrder = groupOrder;
+    setSavingGroup(true);
+    setError("");
+    setItems((current) =>
+      current.map((item) => ({
+        ...item,
+        category: replaceCategoryPrefix(item.category, source, target),
+      }))
+    );
+    setGroupOrder((current) => {
+      const names = current
+        .filter((name) => !groupContainsCategory(source, categoryKey(name)))
+        .map((name) => replaceCategoryPrefix(name, source, target));
+      return names.includes(target) ? names : [...names, target];
+    });
+
+    try {
+      const response = await fetch("/api/tasks", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "merge-group",
+          actor: currentActor,
+          groupName: source,
+          targetGroupName: target,
+        }),
+      });
+      const data = (await response.json()) as TaskResponse;
+
+      if (!response.ok || !data.items || !data.groupOrder) {
+        throw new Error(data.error ?? "대분류를 합치지 못했습니다.");
+      }
+
+      setItems(data.items);
+      setGroupOrder(data.groupOrder);
+      setHistory(data.history ?? history);
+    } catch (mergeError) {
+      setItems(previousItems);
+      setGroupOrder(previousOrder);
+      setError(
+        mergeError instanceof Error
+          ? mergeError.message
+          : "대분류를 합치지 못했습니다."
+      );
+    } finally {
+      setSavingGroup(false);
+    }
+  }
+
+  function handleGroupDrop(event: DragEvent<HTMLElement>, targetName: string) {
+    event.preventDefault();
+
+    if (draggedId) {
+      moveDraggedItemTo(targetName, null);
+      return;
+    }
+
     if (!draggedGroup || draggedGroup === targetName) {
       setDraggedGroup(null);
       return;
@@ -2434,9 +2915,19 @@ export default function TaskBoard() {
     const names = listGroups.map((group) => group.name);
     const from = names.indexOf(draggedGroup);
     const to = names.indexOf(targetName);
+    const sourceGroup = draggedGroup;
     setDraggedGroup(null);
 
     if (from < 0 || to < 0) {
+      return;
+    }
+
+    if (
+      window.confirm(
+        `'${sourceGroup}' 대분류를 '${targetName}' 대분류로 합칠까요?\n확인: 합치기 / 취소: 순서만 이동`
+      )
+    ) {
+      void mergeGroups(sourceGroup, targetName);
       return;
     }
 
@@ -2488,6 +2979,22 @@ export default function TaskBoard() {
     }
   }, []);
 
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(
+        "team-progress-map",
+        JSON.stringify({
+          provider: mapProvider,
+          style: mapStyle,
+          googleKey: googleMapKey,
+          vworldKey: vworldMapKey,
+        })
+      );
+    } catch {
+      // ignore local storage failures
+    }
+  }, [googleMapKey, mapProvider, mapStyle, vworldMapKey]);
+
   function toggleWidget(key: string) {
     setWidgetPrefs((prev) => {
       const next = { ...prev, [key]: !prev[key] };
@@ -2508,6 +3015,12 @@ export default function TaskBoard() {
       if (item) {
         void clearMapPin(item);
       }
+    };
+    moveMapPinRef.current = (id: number, lat: number, lng: number) => {
+      const nextLat = Number(lat.toFixed(5));
+      const nextLng = Number(lng.toFixed(5));
+      updateLocalItem(id, { lat: nextLat, lng: nextLng });
+      void updateItem(id, { lat: nextLat, lng: nextLng });
     };
     placingItemIdRef.current = placingItemId;
     creatingOnMapRef.current = creatingOnMap;
@@ -2565,11 +3078,6 @@ export default function TaskBoard() {
 
       leafletLibRef.current = L;
       const map = L.map(mapContainerRef.current).setView([36.2, 127.9], 7);
-      L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
-        attribution:
-          '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
-        maxZoom: 19,
-      }).addTo(map);
       markerLayerRef.current = L.layerGroup().addTo(map);
       leafletMapRef.current = map;
 
@@ -2602,10 +3110,32 @@ export default function TaskBoard() {
       leafletMapRef.current?.remove();
       leafletMapRef.current = null;
       markerLayerRef.current = null;
+      tileLayerRef.current = null;
       setPlacingItemId(null);
       setCreatingOnMap(false);
     };
   }, [viewMode]);
+
+  useEffect(() => {
+    const L = leafletLibRef.current;
+    const map = leafletMapRef.current;
+
+    if (viewMode !== "map" || !L || !map) {
+      return;
+    }
+
+    tileLayerRef.current?.remove();
+    const config = mapTileConfig(mapProvider, mapStyle, {
+      google: googleMapKey,
+      vworld: vworldMapKey,
+    });
+    const layer = L.tileLayer(config.url, {
+      attribution: config.attribution,
+      maxZoom: config.maxZoom,
+      subdomains: "subdomains" in config ? config.subdomains : undefined,
+    }).addTo(map);
+    tileLayerRef.current = layer;
+  }, [googleMapKey, mapProvider, mapReady, mapStyle, viewMode, vworldMapKey]);
 
   // Redraw markers whenever the filtered items change while the map is open.
   useEffect(() => {
@@ -2618,84 +3148,50 @@ export default function TaskBoard() {
 
     layer.clearLayers();
 
-    // Tasks at the same wetland share preset coordinates, so a naive
-    // one-marker-per-task draw stacks them invisibly. Group by exact
-    // coordinate: one marker per place, sized by task count, with a popup
-    // listing every task there.
-    const groups = new Map<
-      string,
-      { lat: number; lng: number; location: string; items: WorkflowItem[] }
-    >();
-
     for (const item of visibleItems) {
       if (item.lat === null || item.lng === null) {
         continue;
       }
 
-      const key = `${item.lat},${item.lng}`;
-      const group = groups.get(key) ?? {
-        lat: item.lat,
-        lng: item.lng,
-        location: item.location,
-        items: [],
-      };
-      group.items.push(item);
-      if (!group.location && item.location) {
-        group.location = item.location;
-      }
-      groups.set(key, group);
-    }
-
-    for (const group of groups.values()) {
-      const anyOverdue = group.items.some((item) => itemHasOverdueDate(item));
-      const anyUrgent = group.items.some((item) => itemHasUrgentDate(item));
-      const allDone = group.items.every((item) => isItemDone(item));
-      const color = allDone
+      const color = isItemDone(item)
         ? COMPLETE_COLOR
-        : anyOverdue
+        : itemHasOverdueDate(item)
           ? "#dc2626"
-          : anyUrgent
+          : itemHasUrgentDate(item)
             ? "#d97706"
             : "#18786f";
-      const count = group.items.length;
-      const marker = L.circleMarker([group.lat, group.lng], {
-        radius: Math.min(9 + (count - 1) * 2, 16),
-        weight: 2,
-        color: "#ffffff",
-        fillColor: color,
-        fillOpacity: 0.95,
+      const marker = L.marker([item.lat, item.lng], {
+        draggable: true,
+        icon: L.divIcon({
+          className: "tb-map-pin",
+          html: `<span style="--pin-color:${color}">${escapeHtml(
+            String(itemProgress(item))
+          )}</span>`,
+          iconSize: [34, 34],
+          iconAnchor: [17, 17],
+        }),
       }).addTo(layer);
-
-      const locationLabel =
-        group.location || group.items[0].title || "이름 없는 위치";
-      marker.bindTooltip(
-        count > 1 ? `${locationLabel} · ${count}건` : locationLabel
-      );
-
-      const rows = group.items
-        .slice(0, 8)
-        .map((item) => {
-          const title = escapeHtml(item.title || "제목 없음");
-          const assignee = escapeHtml(assigneeName(item.assignee));
-          return `<div style="margin-top:7px;display:flex;align-items:center;gap:8px">
-            <div style="min-width:0;flex:1">
-              <div style="font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${title}</div>
-              <div style="color:#61667a;font-size:12px">${assignee} · ${itemProgress(item)}%</div>
-            </div>
-            <button type="button" data-open-item="${item.id}" style="flex-shrink:0;white-space:nowrap;padding:3px 9px;border-radius:8px;border:1px solid #18786f;background:#e4f2ef;color:#18786f;font-weight:600;cursor:pointer">열기</button>
-            <button type="button" data-clear-pin="${item.id}" style="flex-shrink:0;white-space:nowrap;padding:3px 8px;border-radius:8px;border:1px solid #edbeb8;background:#fbecea;color:#c44232;font-weight:600;cursor:pointer">핀 삭제</button>
-          </div>`;
-        })
-        .join("");
-      const more =
-        count > 8
-          ? `<div style="margin-top:6px;color:#9499ab;font-size:12px">외 ${count - 8}건</div>`
-          : "";
+      const locationLabel = item.location || item.title || "이름 없는 위치";
+      marker.bindTooltip(`${locationLabel} · 드래그로 위치 이동`);
+      marker.on("dragend", () => {
+        const next = marker.getLatLng();
+        moveMapPinRef.current(item.id, next.lat, next.lng);
+      });
 
       marker.bindPopup(
         `<div style="min-width:190px;max-width:240px;font-size:13px;line-height:1.5">
-          <div style="font-weight:700">📍 ${escapeHtml(locationLabel)}${count > 1 ? ` <span style="color:#61667a;font-weight:600">(${count}건)</span>` : ""}</div>
-          ${rows}${more}
+          <div style="font-weight:700">📍 ${escapeHtml(locationLabel)}</div>
+          <div style="margin-top:7px;display:flex;align-items:center;gap:8px">
+            <div style="min-width:0;flex:1">
+              <div style="font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escapeHtml(item.title || "제목 없음")}</div>
+              <div style="color:#61667a;font-size:12px">${escapeHtml(
+                assigneeName(item.assignee)
+              )} · ${itemProgress(item)}%</div>
+            </div>
+            <button type="button" data-open-item="${item.id}" style="flex-shrink:0;white-space:nowrap;padding:3px 9px;border-radius:8px;border:1px solid #18786f;background:#e4f2ef;color:#18786f;font-weight:600;cursor:pointer">열기</button>
+            <button type="button" data-clear-pin="${item.id}" style="flex-shrink:0;white-space:nowrap;padding:3px 8px;border-radius:8px;border:1px solid #edbeb8;background:#fbecea;color:#c44232;font-weight:600;cursor:pointer">핀 삭제</button>
+          </div>
+          <div style="margin-top:7px;color:#61667a;font-size:12px">핀을 드래그하면 좌표가 바로 저장됩니다.</div>
         </div>`
       );
     }
@@ -2753,6 +3249,11 @@ export default function TaskBoard() {
 
     return "#18786f";
   }
+
+  const activeMapTileNotice = mapTileConfig(mapProvider, mapStyle, {
+    google: googleMapKey,
+    vworld: vworldMapKey,
+  }).notice;
 
   return (
     <main className="tb-app min-h-dvh">
@@ -3656,12 +4157,12 @@ export default function TaskBoard() {
                   >
                     <div
                       onDragOver={(event) => {
-                        if (draggedGroup) {
+                        if (draggedGroup || draggedId) {
                           event.preventDefault();
                           event.dataTransfer.dropEffect = "move";
                         }
                       }}
-                      onDrop={() => handleGroupDrop(group.name)}
+                      onDrop={(event) => handleGroupDrop(event, group.name)}
                       className={`tb-hierarchy-header tb-list-group-header flex items-center gap-2.5 ${
                         draggedGroup === group.name
                           ? "ring-2 ring-[var(--accent-ring)]"
@@ -3703,16 +4204,66 @@ export default function TaskBoard() {
                       <span className="tb-badge tb-badge-muted shrink-0">
                         {categoryLevelLabel(depth)}
                       </span>
-                      <div className="min-w-0">
-                        <div className="truncate text-sm font-semibold">
-                          {categoryLeaf(group.name)}
-                        </div>
-                        {trail ? (
+                      <div className="min-w-0 flex-1">
+                        {editingGroup === group.name ? (
+                          <form
+                            onSubmit={(event) => {
+                              event.preventDefault();
+                              void renameGroup(group.name, groupNameDraft);
+                            }}
+                            className="flex min-w-0 items-center gap-1.5"
+                          >
+                            <input
+                              value={groupNameDraft}
+                              onChange={(event) =>
+                                setGroupNameDraft(event.target.value)
+                              }
+                              className="tb-field min-w-0 px-2 py-1 text-sm font-semibold"
+                              autoFocus
+                            />
+                            <button
+                              type="submit"
+                              disabled={!groupNameDraft.trim() || savingGroup}
+                              className="tb-btn !px-2.5 !py-1 text-xs"
+                            >
+                              저장
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setEditingGroup(null)}
+                              className="tb-iconbtn h-7 w-7"
+                              title="취소"
+                            >
+                              ×
+                            </button>
+                          </form>
+                        ) : (
+                          <div className="truncate text-sm font-semibold">
+                            {categoryLeaf(group.name)}
+                          </div>
+                        )}
+                        {trail && editingGroup !== group.name ? (
                           <div className="truncate text-[11px] text-[var(--text-faint)]">
                             {trail}
                           </div>
                         ) : null}
+                        {editingGroup === group.name ? (
+                          <div className="mt-1 truncate text-[11px] text-[var(--text-faint)]">
+                            현재 경로: {group.name}
+                          </div>
+                        ) : null}
                       </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setEditingGroup(group.name);
+                          setGroupNameDraft(group.name);
+                        }}
+                        className="tb-iconbtn h-7 w-7 shrink-0 text-xs"
+                        title="대분류 이름 수정"
+                      >
+                        ✎
+                      </button>
                       <span className="tb-badge tb-badge-muted shrink-0">
                         {groupDone}/{group.items.length}
                       </span>
@@ -3770,7 +4321,7 @@ export default function TaskBoard() {
                     key={item.id}
                     id={`item-${item.id}`}
                     onDragOver={handleDragOver}
-                    onDrop={() => handleDrop(item.id)}
+                    onDrop={() => handleDrop(item.id, group.name)}
                     className={`tb-card tb-work-item tb-list-item overflow-hidden transition-shadow ${
                       expanded ? "is-expanded " : ""
                     }${
@@ -3933,6 +4484,24 @@ export default function TaskBoard() {
                         <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_300px]">
                           <div className="space-y-4">
                             <div className="tb-list-quick-edit">
+                              <label className="block">
+                                <span className="tb-label">업무명</span>
+                                <input
+                                  value={item.title}
+                                  onChange={(event) =>
+                                    updateLocalItem(item.id, {
+                                      title: event.target.value,
+                                    })
+                                  }
+                                  onBlur={(event) =>
+                                    updateItem(item.id, {
+                                      title: event.target.value,
+                                    })
+                                  }
+                                  className="tb-field"
+                                  placeholder="업무명"
+                                />
+                              </label>
                               <label className="block">
                                 <span className="tb-label">담당자</span>
                                 <input
@@ -4964,8 +5533,8 @@ export default function TaskBoard() {
             </div>
           </div>
         ) : viewMode === "map" ? (
-          <div className="grid gap-4 lg:grid-cols-[1fr_300px]">
-            <div className="tb-card overflow-hidden">
+          <div className="grid gap-4 lg:grid-cols-[1fr_320px]">
+            <div className="tb-card tb-map-shell overflow-hidden">
               {placingItemId !== null || creatingOnMap ? (
                 <div className="flex items-center justify-between gap-3 border-b border-[var(--warning-border)] bg-[var(--warning-soft)] px-4 py-2 text-sm font-medium text-[var(--warning)]">
                   <span>
@@ -4996,7 +5565,7 @@ export default function TaskBoard() {
               ) : null}
               <div
                 ref={mapContainerRef}
-                className="h-[68vh] min-h-[420px] w-full"
+                className="tb-map-canvas h-[68vh] min-h-[420px] w-full"
               />
             </div>
 
@@ -5012,6 +5581,124 @@ export default function TaskBoard() {
               >
                 ＋ 지도를 클릭해 새 업무 추가
               </button>
+
+              <div className="tb-card p-4">
+                <h2 className="text-sm font-semibold">지도 설정</h2>
+                <div className="mt-3 grid grid-cols-2 gap-2">
+                  <label className="block">
+                    <span className="tb-label">지도</span>
+                    <select
+                      value={mapProvider}
+                      onChange={(event) =>
+                        setMapProvider(event.target.value as MapProvider)
+                      }
+                      className="tb-field"
+                    >
+                      {(
+                        Object.entries(MAP_PROVIDER_LABELS) as Array<
+                          [MapProvider, string]
+                        >
+                      ).map(([key, label]) => (
+                        <option key={key} value={key}>
+                          {label}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="block">
+                    <span className="tb-label">형식</span>
+                    <select
+                      value={mapStyle}
+                      onChange={(event) =>
+                        setMapStyle(event.target.value as MapStyle)
+                      }
+                      className="tb-field"
+                    >
+                      {(
+                        Object.entries(MAP_STYLE_LABELS) as Array<
+                          [MapStyle, string]
+                        >
+                      ).map(([key, label]) => (
+                        <option key={key} value={key}>
+                          {label}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                </div>
+                <div className="mt-2 grid gap-2">
+                  <input
+                    value={vworldMapKey}
+                    onChange={(event) => setVworldMapKey(event.target.value)}
+                    className="tb-field px-2 py-1.5 text-xs"
+                    placeholder="VWorld API 키"
+                  />
+                  <input
+                    value={googleMapKey}
+                    onChange={(event) => setGoogleMapKey(event.target.value)}
+                    className="tb-field px-2 py-1.5 text-xs"
+                    placeholder="Google 지도 API 키"
+                  />
+                </div>
+                {activeMapTileNotice ? (
+                  <p className="mt-2 text-[11px] leading-4 text-[var(--text-faint)]">
+                    {activeMapTileNotice}
+                  </p>
+                ) : null}
+              </div>
+
+              <div className="tb-card p-4">
+                <h2 className="text-sm font-semibold">지명 검색</h2>
+                <form
+                  onSubmit={(event) => void searchMapPlaces(event)}
+                  className="mt-3 flex gap-2"
+                >
+                  <input
+                    value={mapSearchQuery}
+                    onChange={(event) => setMapSearchQuery(event.target.value)}
+                    className="tb-field min-w-0 flex-1"
+                    placeholder="예: 우포늪, 순천만"
+                  />
+                  <button
+                    type="submit"
+                    disabled={!mapSearchQuery.trim() || mapSearching}
+                    className="tb-btn tb-btn-primary shrink-0 !px-3"
+                  >
+                    {mapSearching ? "검색 중" : "검색"}
+                  </button>
+                </form>
+                {mapSearchError ? (
+                  <p className="mt-2 text-[11px] text-[var(--danger)]">
+                    {mapSearchError}
+                  </p>
+                ) : null}
+                {mapSearchResults.length ? (
+                  <div className="mt-2 max-h-40 space-y-1 overflow-auto">
+                    {mapSearchResults.map((result) => (
+                      <button
+                        key={`${result.source}-${result.lat}-${result.lng}-${result.label}`}
+                        type="button"
+                        onClick={() => {
+                          leafletMapRef.current?.setView(
+                            [result.lat, result.lng],
+                            13
+                          );
+                          setMapNewLocation(result.label);
+                        }}
+                        className="w-full rounded-[var(--radius-sm)] px-2 py-1.5 text-left text-xs transition hover:bg-[var(--surface-3)]"
+                      >
+                        <div className="line-clamp-2 font-medium">
+                          {result.label}
+                        </div>
+                        <div className="text-[10px] text-[var(--text-faint)]">
+                          {result.source} · {result.lat.toFixed(4)},{" "}
+                          {result.lng.toFixed(4)}
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
 
               <div className="tb-card p-4">
                 <h2 className="text-sm font-semibold">범례</h2>

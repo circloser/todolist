@@ -241,6 +241,34 @@ select {
     background: rgba(255, 254, 250, 0.54);
   }
 
+  .tb-map-shell {
+    position: relative;
+    z-index: 0;
+    isolation: isolate;
+  }
+  .tb-map-canvas,
+  .tb-map-canvas.leaflet-container {
+    position: relative;
+    z-index: 0;
+  }
+  .tb-map-pin {
+    background: transparent;
+    border: 0;
+  }
+  .tb-map-pin span {
+    display: grid;
+    width: 30px;
+    height: 30px;
+    place-items: center;
+    border: 3px solid #fff;
+    border-radius: 999px;
+    background: var(--pin-color);
+    color: #fff;
+    font-size: 9px;
+    font-weight: 800;
+    box-shadow: 0 10px 22px rgba(30, 42, 36, 0.24);
+  }
+
   .tb-grid-sheet {
     background: rgba(255, 254, 250, 0.82);
     border-color: rgba(203, 215, 205, 0.66);
