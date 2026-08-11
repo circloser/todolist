@@ -1,4 +1,9 @@
 import { getD1 } from "../../../db";
+import {
+  DEFAULT_WORKSPACE_ID,
+  ensureWorkspaceTables,
+  requireWorkspaceAccess,
+} from "../workspace-auth";
 
 // Shared document templates (기안문 양식 등): small office files stored as
 // D1 blobs so no extra storage infrastructure is needed. Uploads are capped
@@ -6,6 +11,7 @@ import { getD1 } from "../../../db";
 
 type DocumentRow = {
   id: number;
+  workspace_id: string;
   name: string;
   filename: string;
   mime_type: string;
@@ -30,6 +36,7 @@ async function prepareDocuments() {
   await getD1()
     .prepare(`CREATE TABLE IF NOT EXISTS document_templates (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
+      workspace_id TEXT NOT NULL DEFAULT '${DEFAULT_WORKSPACE_ID}',
       name TEXT NOT NULL,
       filename TEXT NOT NULL,
       mime_type TEXT NOT NULL DEFAULT 'application/octet-stream',
@@ -40,6 +47,10 @@ async function prepareDocuments() {
       created_at TEXT NOT NULL
     )`)
     .run();
+  await ensureWorkspaceTables({
+    defaultTeamName: "습지복원팀",
+    defaultBoardTitle: "Workflow Command Center",
+  });
   documentsReady = true;
 }
 
@@ -55,12 +66,13 @@ function toDocument(row: DocumentRow) {
   };
 }
 
-async function listDocuments() {
+async function listDocuments(workspaceId: string) {
   const rows = await getD1()
     .prepare(
       `SELECT id, name, filename, mime_type, size, uploaded_by, updated_at, created_at
-       FROM document_templates ORDER BY created_at DESC, id DESC`
+       FROM document_templates WHERE workspace_id = ? ORDER BY created_at DESC, id DESC`
     )
+    .bind(workspaceId)
     .all<DocumentRow>();
 
   return (rows.results ?? []).map(toDocument);
@@ -68,14 +80,18 @@ async function listDocuments() {
 
 // The history table belongs to the tasks route's schema; it may not exist yet
 // on a fresh database, so document history is best-effort only.
-async function logDocumentHistory(summary: string, actor: string) {
+async function logDocumentHistory(
+  workspaceId: string,
+  summary: string,
+  actor: string
+) {
   try {
     await getD1()
       .prepare(
-        `INSERT INTO workflow_history (item_id, entity_type, entity_id, action, summary, actor, created_at)
-         VALUES (NULL, 'document', NULL, 'update', ?, ?, ?)`
+        `INSERT INTO workflow_history (workspace_id, item_id, entity_type, entity_id, action, summary, actor, created_at)
+         VALUES (?, NULL, 'document', NULL, 'update', ?, ?, ?)`
       )
-      .bind(summary, actor, new Date().toISOString())
+      .bind(workspaceId, summary, actor, new Date().toISOString())
       .run();
   } catch {
     // ignore — history is non-essential here
@@ -89,14 +105,19 @@ function errorMessage(error: unknown) {
 export async function GET(request: Request) {
   try {
     await prepareDocuments();
+    const access = await requireWorkspaceAccess(request);
+    if ("response" in access) {
+      return access.response;
+    }
+    const workspaceId = access.workspace.id;
 
     const url = new URL(request.url);
     const id = Number(url.searchParams.get("id"));
 
     if (Number.isFinite(id) && id > 0) {
       const row = await getD1()
-        .prepare("SELECT * FROM document_templates WHERE id = ?")
-        .bind(id)
+        .prepare("SELECT * FROM document_templates WHERE id = ? AND workspace_id = ?")
+        .bind(id, workspaceId)
         .first<DocumentRow & { data: ArrayBuffer | number[] }>();
 
       if (!row) {
@@ -124,7 +145,7 @@ export async function GET(request: Request) {
       });
     }
 
-    return Response.json({ documents: await listDocuments() });
+    return Response.json({ documents: await listDocuments(workspaceId) });
   } catch (error) {
     return Response.json({ error: errorMessage(error) }, { status: 500 });
   }
@@ -133,6 +154,11 @@ export async function GET(request: Request) {
 export async function POST(request: Request) {
   try {
     await prepareDocuments();
+    const access = await requireWorkspaceAccess(request);
+    if ("response" in access) {
+      return access.response;
+    }
+    const workspaceId = access.workspace.id;
 
     const form = await request.formData();
     const file = form.get("file");
@@ -173,10 +199,11 @@ export async function POST(request: Request) {
 
     await getD1()
       .prepare(
-        `INSERT INTO document_templates (name, filename, mime_type, size, data, uploaded_by, updated_at, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+        `INSERT INTO document_templates (workspace_id, name, filename, mime_type, size, data, uploaded_by, updated_at, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .bind(
+        workspaceId,
         name,
         file.name.slice(0, 200),
         file.type || "application/octet-stream",
@@ -188,9 +215,16 @@ export async function POST(request: Request) {
       )
       .run();
 
-    await logDocumentHistory(`${actor}님이 '${name}' 양식을 업로드함`, actor);
+    await logDocumentHistory(
+      workspaceId,
+      `${actor}님이 '${name}' 양식을 업로드함`,
+      actor
+    );
 
-    return Response.json({ documents: await listDocuments() }, { status: 201 });
+    return Response.json(
+      { documents: await listDocuments(workspaceId) },
+      { status: 201 }
+    );
   } catch (error) {
     return Response.json({ error: errorMessage(error) }, { status: 500 });
   }
@@ -203,7 +237,14 @@ export async function DELETE(request: Request) {
     const payload = (await request.json().catch(() => ({}))) as {
       id?: number;
       actor?: string;
+      workspaceId?: string;
+      workspacePassword?: string;
     };
+    const access = await requireWorkspaceAccess(request, payload);
+    if ("response" in access) {
+      return access.response;
+    }
+    const workspaceId = access.workspace.id;
     const id = Number(payload.id);
 
     if (!Number.isFinite(id)) {
@@ -211,8 +252,8 @@ export async function DELETE(request: Request) {
     }
 
     const row = await getD1()
-      .prepare("SELECT name FROM document_templates WHERE id = ?")
-      .bind(id)
+      .prepare("SELECT name FROM document_templates WHERE id = ? AND workspace_id = ?")
+      .bind(id, workspaceId)
       .first<{ name: string }>();
 
     if (!row) {
@@ -220,17 +261,21 @@ export async function DELETE(request: Request) {
     }
 
     await getD1()
-      .prepare("DELETE FROM document_templates WHERE id = ?")
-      .bind(id)
+      .prepare("DELETE FROM document_templates WHERE id = ? AND workspace_id = ?")
+      .bind(id, workspaceId)
       .run();
 
     const actor =
       typeof payload.actor === "string" && payload.actor.trim()
         ? payload.actor.trim().slice(0, 80)
         : "사용자";
-    await logDocumentHistory(`${actor}님이 '${row.name}' 양식을 삭제함`, actor);
+    await logDocumentHistory(
+      workspaceId,
+      `${actor}님이 '${row.name}' 양식을 삭제함`,
+      actor
+    );
 
-    return Response.json({ documents: await listDocuments() });
+    return Response.json({ documents: await listDocuments(workspaceId) });
   } catch (error) {
     return Response.json({ error: errorMessage(error) }, { status: 500 });
   }

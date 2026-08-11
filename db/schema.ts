@@ -2,6 +2,7 @@ import {
   blob,
   index,
   integer,
+  primaryKey,
   real,
   sqliteTable,
   text,
@@ -10,6 +11,7 @@ import {
 
 export const documentTemplates = sqliteTable("document_templates", {
   id: integer("id").primaryKey({ autoIncrement: true }),
+  workspaceId: text("workspace_id").notNull().default("default"),
   name: text("name").notNull(),
   filename: text("filename").notNull(),
   mimeType: text("mime_type").notNull().default("application/octet-stream"),
@@ -20,10 +22,53 @@ export const documentTemplates = sqliteTable("document_templates", {
   createdAt: text("created_at").notNull(),
 });
 
+export const workspaces = sqliteTable(
+  "workspaces",
+  {
+    id: text("id").primaryKey(),
+    departmentName: text("department_name").notNull().default(""),
+    teamName: text("team_name").notNull(),
+    passwordHash: text("password_hash"),
+    passwordSalt: text("password_salt"),
+    updatedAt: text("updated_at").notNull(),
+    createdAt: text("created_at").notNull(),
+  },
+  (table) => [
+    index("workspaces_name_idx").on(table.departmentName, table.teamName),
+  ]
+);
+
+export const workspaceSettings = sqliteTable(
+  "workspace_settings",
+  {
+    workspaceId: text("workspace_id").notNull(),
+    key: text("key").notNull(),
+    value: text("value").notNull(),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.workspaceId, table.key] }),
+  ]
+);
+
+export const workspaceAssigneeSettings = sqliteTable(
+  "workspace_assignee_settings",
+  {
+    workspaceId: text("workspace_id").notNull(),
+    assignee: text("assignee").notNull(),
+    color: text("color").notNull().default("#e6f4ef"),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.workspaceId, table.assignee] }),
+  ]
+);
+
 export const workflowItems = sqliteTable(
   "workflow_items",
   {
     id: integer("id").primaryKey({ autoIncrement: true }),
+    workspaceId: text("workspace_id").notNull().default("default"),
     title: text("title").notNull(),
     assignee: text("assignee").notNull().default(""),
     category: text("category").notNull().default("일반 업무"),
@@ -43,6 +88,10 @@ export const workflowItems = sqliteTable(
   },
   (table) => [
     index("workflow_items_assignee_idx").on(table.assignee, table.position),
+    index("workflow_items_workspace_position_idx").on(
+      table.workspaceId,
+      table.position
+    ),
   ]
 );
 
@@ -106,6 +155,7 @@ export const workflowHistory = sqliteTable(
   "workflow_history",
   {
     id: integer("id").primaryKey({ autoIncrement: true }),
+    workspaceId: text("workspace_id").notNull().default("default"),
     itemId: integer("item_id"),
     entityType: text("entity_type").notNull(),
     entityId: integer("entity_id"),
@@ -114,17 +164,30 @@ export const workflowHistory = sqliteTable(
     actor: text("actor").notNull().default("팀"),
     createdAt: text("created_at").notNull(),
   },
-  (table) => [index("workflow_history_created_idx").on(table.createdAt)]
+  (table) => [
+    index("workflow_history_created_idx").on(table.createdAt),
+    index("workflow_history_workspace_created_idx").on(
+      table.workspaceId,
+      table.createdAt
+    ),
+  ]
 );
 
-export const webhookSettings = sqliteTable("webhook_settings", {
-  id: integer("id").primaryKey({ autoIncrement: true }),
-  name: text("name").notNull().default("팀 알림"),
-  url: text("url").notNull(),
-  enabled: integer("enabled").notNull().default(1),
-  updatedAt: text("updated_at").notNull(),
-  createdAt: text("created_at").notNull(),
-});
+export const webhookSettings = sqliteTable(
+  "webhook_settings",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    workspaceId: text("workspace_id").notNull().default("default"),
+    name: text("name").notNull().default("팀 알림"),
+    url: text("url").notNull(),
+    enabled: integer("enabled").notNull().default(1),
+    updatedAt: text("updated_at").notNull(),
+    createdAt: text("created_at").notNull(),
+  },
+  (table) => [
+    index("webhook_settings_workspace_idx").on(table.workspaceId),
+  ]
+);
 
 export const appSettings = sqliteTable("app_settings", {
   key: text("key").primaryKey(),

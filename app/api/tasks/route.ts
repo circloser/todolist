@@ -1,9 +1,18 @@
 import { getD1 } from "../../../db";
+import {
+  DEFAULT_WORKSPACE_ID,
+  ensureWorkspaceTables,
+  listWorkspaces,
+  makeWorkspacePassword,
+  requireWorkspaceAccess,
+  workspaceLabel,
+} from "../workspace-auth";
 
 type StepStatus = "todo" | "done";
 
 type WorkflowItemRow = {
   id: number;
+  workspace_id: string;
   title: string;
   assignee: string;
   category: string;
@@ -59,6 +68,7 @@ type WorkflowSubtaskRow = {
 
 type HistoryRow = {
   id: number;
+  workspace_id: string;
   item_id: number | null;
   entity_type: string;
   entity_id: number | null;
@@ -565,6 +575,7 @@ async function ensureSchema() {
   await d1.batch([
     d1.prepare(`CREATE TABLE IF NOT EXISTS workflow_items (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
+      workspace_id TEXT NOT NULL DEFAULT '${DEFAULT_WORKSPACE_ID}',
       title TEXT NOT NULL,
       assignee TEXT NOT NULL DEFAULT '',
       category TEXT NOT NULL DEFAULT '일반 업무',
@@ -623,6 +634,7 @@ async function ensureSchema() {
     )`),
     d1.prepare(`CREATE TABLE IF NOT EXISTS workflow_history (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
+      workspace_id TEXT NOT NULL DEFAULT '${DEFAULT_WORKSPACE_ID}',
       item_id INTEGER,
       entity_type TEXT NOT NULL,
       entity_id INTEGER,
@@ -639,6 +651,7 @@ async function ensureSchema() {
     d1.prepare(`CREATE TABLE IF NOT EXISTS webhook_settings (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       name TEXT NOT NULL DEFAULT '팀 알림',
+      workspace_id TEXT NOT NULL DEFAULT '${DEFAULT_WORKSPACE_ID}',
       url TEXT NOT NULL,
       enabled INTEGER NOT NULL DEFAULT 1,
       updated_at TEXT NOT NULL,
@@ -667,6 +680,9 @@ async function ensureSchema() {
       "CREATE INDEX IF NOT EXISTS workflow_items_assignee_idx ON workflow_items (assignee, position)"
     ),
     d1.prepare(
+      "CREATE INDEX IF NOT EXISTS workflow_items_workspace_position_idx ON workflow_items (workspace_id, position)"
+    ),
+    d1.prepare(
       "CREATE INDEX IF NOT EXISTS workflow_steps_item_position_idx ON workflow_steps (item_id, position)"
     ),
     d1.prepare(
@@ -675,8 +691,24 @@ async function ensureSchema() {
     d1.prepare(
       "CREATE INDEX IF NOT EXISTS workflow_history_created_idx ON workflow_history (created_at)"
     ),
+    d1.prepare(
+      "CREATE INDEX IF NOT EXISTS workflow_history_workspace_created_idx ON workflow_history (workspace_id, created_at)"
+    ),
   ]);
 
+  await ensureWorkspaceTables({
+    defaultTeamName: defaultAppSettings.organizationName,
+    defaultBoardTitle: defaultAppSettings.boardTitle,
+  });
+  await addColumnIfMissing(
+    `ALTER TABLE workflow_items ADD COLUMN workspace_id TEXT NOT NULL DEFAULT '${DEFAULT_WORKSPACE_ID}'`
+  );
+  await addColumnIfMissing(
+    `ALTER TABLE workflow_history ADD COLUMN workspace_id TEXT NOT NULL DEFAULT '${DEFAULT_WORKSPACE_ID}'`
+  );
+  await addColumnIfMissing(
+    `ALTER TABLE webhook_settings ADD COLUMN workspace_id TEXT NOT NULL DEFAULT '${DEFAULT_WORKSPACE_ID}'`
+  );
   await addColumnIfMissing("ALTER TABLE workflow_items ADD COLUMN due_date TEXT");
   await addColumnIfMissing(
     "ALTER TABLE workflow_items ADD COLUMN allocated_budget INTEGER"
@@ -721,6 +753,7 @@ async function ensureSchema() {
 }
 
 async function logHistory({
+  workspaceId,
   itemId,
   entityType,
   entityId,
@@ -728,6 +761,7 @@ async function logHistory({
   summary,
   actor,
 }: {
+  workspaceId?: string;
   itemId?: number | null;
   entityType: string;
   entityId?: number | null;
@@ -737,6 +771,7 @@ async function logHistory({
 }) {
   await getD1()
     .prepare(`INSERT INTO workflow_history (
+      workspace_id,
       item_id,
       entity_type,
       entity_id,
@@ -744,8 +779,9 @@ async function logHistory({
       summary,
       actor,
       created_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?)`)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
     .bind(
+      workspaceId ?? DEFAULT_WORKSPACE_ID,
       itemId ?? null,
       entityType,
       entityId ?? null,
@@ -782,6 +818,7 @@ async function readLegacyStatuses() {
 }
 
 async function createItemWithDefaultSteps({
+  workspaceId,
   title,
   assignee,
   category,
@@ -801,6 +838,7 @@ async function createItemWithDefaultSteps({
   position,
   legacyStatuses,
 }: {
+  workspaceId: string;
   title: string;
   assignee: string;
   category: string;
@@ -825,6 +863,7 @@ async function createItemWithDefaultSteps({
   const selectedTemplate = template;
   const insertResult = await d1
     .prepare(`INSERT INTO workflow_items (
+      workspace_id,
       title,
       assignee,
       category,
@@ -844,8 +883,9 @@ async function createItemWithDefaultSteps({
       updated_by,
       updated_at,
       created_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
     .bind(
+      workspaceId,
       title,
       assignee,
       category,
@@ -913,6 +953,7 @@ async function createItemWithDefaultSteps({
   }
 
   await logHistory({
+    workspaceId,
     itemId,
     entityType: "item",
     entityId: itemId,
@@ -924,10 +965,13 @@ async function createItemWithDefaultSteps({
   return itemId;
 }
 
-async function ensureDefaultItem() {
+async function ensureDefaultItem(workspaceId: string) {
   const d1 = getD1();
   const seeded = await d1
-    .prepare("SELECT value FROM app_settings WHERE key = 'defaultItemSeeded'")
+    .prepare(
+      "SELECT value FROM workspace_settings WHERE workspace_id = ? AND key = 'defaultItemSeeded'"
+    )
+    .bind(workspaceId)
     .first<{ value: string }>();
 
   if (seeded) {
@@ -935,21 +979,23 @@ async function ensureDefaultItem() {
   }
 
   const countResult = await d1
-    .prepare("SELECT COUNT(*) AS count FROM workflow_items")
+    .prepare("SELECT COUNT(*) AS count FROM workflow_items WHERE workspace_id = ?")
+    .bind(workspaceId)
     .first<{ count: number }>();
 
   if (Number(countResult?.count ?? 0) > 0) {
     await d1
-      .prepare(`INSERT INTO app_settings (key, value, updated_at)
-        VALUES ('defaultItemSeeded', 'true', ?)
-        ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`)
-      .bind(new Date().toISOString())
+      .prepare(`INSERT INTO workspace_settings (workspace_id, key, value, updated_at)
+        VALUES (?, 'defaultItemSeeded', 'true', ?)
+        ON CONFLICT(workspace_id, key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`)
+      .bind(workspaceId, new Date().toISOString())
       .run();
     return;
   }
 
   const defaultTemplate = resolveTemplate(await getTemplatesFromDb());
   await createItemWithDefaultSteps({
+    workspaceId,
     title: "기본 업무",
     assignee: "미지정",
     category: defaultTemplate.name,
@@ -962,20 +1008,21 @@ async function ensureDefaultItem() {
     legacyStatuses: await readLegacyStatuses(),
   });
   await d1
-    .prepare(`INSERT INTO app_settings (key, value, updated_at)
-      VALUES ('defaultItemSeeded', 'true', ?)
-      ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`)
-    .bind(new Date().toISOString())
+    .prepare(`INSERT INTO workspace_settings (workspace_id, key, value, updated_at)
+      VALUES (?, 'defaultItemSeeded', 'true', ?)
+      ON CONFLICT(workspace_id, key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`)
+    .bind(workspaceId, new Date().toISOString())
     .run();
 }
 
-async function ensureDefaultSettings() {
+async function ensureDefaultSettings(workspaceId: string) {
   const d1 = getD1();
   const now = new Date().toISOString();
   const assignees = await d1
     .prepare(
-      "SELECT DISTINCT assignee FROM workflow_items WHERE assignee IS NOT NULL AND assignee != ''"
+      "SELECT DISTINCT assignee FROM workflow_items WHERE workspace_id = ? AND assignee IS NOT NULL AND assignee != ''"
     )
+    .bind(workspaceId)
     .all<{ assignee: string }>();
   const colors = ["#e6f4ef", "#edf2ff", "#fff4d6", "#fbe7df", "#efe8ff"];
 
@@ -984,9 +1031,9 @@ async function ensureDefaultSettings() {
   const assigneeStatements = (assignees.results ?? []).map((row, index) =>
     d1
       .prepare(
-        "INSERT OR IGNORE INTO assignee_settings (assignee, color, updated_at) VALUES (?, ?, ?)"
+        "INSERT OR IGNORE INTO workspace_assignee_settings (workspace_id, assignee, color, updated_at) VALUES (?, ?, ?, ?)"
       )
-      .bind(row.assignee, colors[index % colors.length], now)
+      .bind(workspaceId, row.assignee, colors[index % colors.length], now)
   );
 
   if (assigneeStatements.length) {
@@ -997,9 +1044,9 @@ async function ensureDefaultSettings() {
     Object.entries(defaultAppSettings).map(([key, value]) =>
       d1
         .prepare(
-          "INSERT OR IGNORE INTO app_settings (key, value, updated_at) VALUES (?, ?, ?)"
+          "INSERT OR IGNORE INTO workspace_settings (workspace_id, key, value, updated_at) VALUES (?, ?, ?, ?)"
         )
-        .bind(key, value, now)
+        .bind(workspaceId, key, value, now)
     )
   );
 }
@@ -1102,14 +1149,21 @@ async function ensureDefaultTemplates() {
 async function reconcileItemsForTemplate(
   templateKey: string,
   stages: ResolvedTemplate["stages"],
-  actor: string
+  actor: string,
+  workspaceId?: string
 ) {
   const d1 = getD1();
   const now = new Date().toISOString();
-  const itemsResult = await d1
-    .prepare("SELECT id FROM workflow_items WHERE template_key = ?")
-    .bind(templateKey)
-    .all<{ id: number }>();
+  const itemsQuery = workspaceId
+    ? d1
+        .prepare(
+          "SELECT id FROM workflow_items WHERE template_key = ? AND workspace_id = ?"
+        )
+        .bind(templateKey, workspaceId)
+    : d1
+        .prepare("SELECT id FROM workflow_items WHERE template_key = ?")
+        .bind(templateKey);
+  const itemsResult = await itemsQuery.all<{ id: number }>();
   const items = itemsResult.results ?? [];
 
   if (!items.length) {
@@ -1207,18 +1261,19 @@ async function prepareWorkflow() {
 
   await ensureSchema();
   await ensureDefaultTemplates();
-  await ensureDefaultItem();
-  await ensureDefaultSettings();
+  await ensureDefaultItem(DEFAULT_WORKSPACE_ID);
+  await ensureDefaultSettings(DEFAULT_WORKSPACE_ID);
   workflowReady = true;
 }
 
-async function getItems() {
+async function getItems(workspaceId: string) {
   const d1 = getD1();
   const [itemsResult, stepsResult, subtasksResult] = await Promise.all([
     d1
       .prepare(
-        "SELECT * FROM workflow_items ORDER BY position, id"
+        "SELECT * FROM workflow_items WHERE workspace_id = ? ORDER BY position, id"
       )
+      .bind(workspaceId)
       .all<WorkflowItemRow>(),
     d1
       .prepare("SELECT * FROM workflow_steps ORDER BY item_id, position, id")
@@ -1251,11 +1306,11 @@ async function getItems() {
   );
 }
 
-async function getItem(itemId: number) {
+async function getItem(itemId: number, workspaceId: string) {
   const d1 = getD1();
   const item = await d1
-    .prepare("SELECT * FROM workflow_items WHERE id = ?")
-    .bind(itemId)
+    .prepare("SELECT * FROM workflow_items WHERE id = ? AND workspace_id = ?")
+    .bind(itemId, workspaceId)
     .first<WorkflowItemRow>();
 
   if (!item) {
@@ -1276,9 +1331,12 @@ async function getItem(itemId: number) {
   return toItem(item, steps.results ?? [], subtasks.results ?? []);
 }
 
-async function getHistory() {
+async function getHistory(workspaceId: string) {
   const history = await getD1()
-    .prepare("SELECT * FROM workflow_history ORDER BY created_at DESC, id DESC LIMIT 80")
+    .prepare(
+      "SELECT * FROM workflow_history WHERE workspace_id = ? ORDER BY created_at DESC, id DESC LIMIT 80"
+    )
+    .bind(workspaceId)
     .all<HistoryRow>();
 
   return (history.results ?? []).map((entry) => ({
@@ -1293,9 +1351,12 @@ async function getHistory() {
   }));
 }
 
-async function getAssigneeSettings() {
+async function getAssigneeSettings(workspaceId: string) {
   const settings = await getD1()
-    .prepare("SELECT * FROM assignee_settings")
+    .prepare(
+      "SELECT assignee, color, updated_at FROM workspace_assignee_settings WHERE workspace_id = ?"
+    )
+    .bind(workspaceId)
     .all<AssigneeSettingRow>();
 
   return Object.fromEntries(
@@ -1306,9 +1367,12 @@ async function getAssigneeSettings() {
   );
 }
 
-async function getAppSettings() {
+async function getAppSettings(workspaceId: string) {
   const settings = await getD1()
-    .prepare("SELECT * FROM app_settings")
+    .prepare(
+      "SELECT key, value, updated_at FROM workspace_settings WHERE workspace_id = ?"
+    )
+    .bind(workspaceId)
     .all<AppSettingRow>();
 
   return {
@@ -1320,9 +1384,12 @@ async function getAppSettings() {
 }
 
 // Saved display order for 대분류(그룹) sections (a preference list of names).
-async function getGroupOrder(): Promise<string[]> {
+async function getGroupOrder(workspaceId: string): Promise<string[]> {
   const row = await getD1()
-    .prepare("SELECT value FROM app_settings WHERE key = 'groupOrder'")
+    .prepare(
+      "SELECT value FROM workspace_settings WHERE workspace_id = ? AND key = 'groupOrder'"
+    )
+    .bind(workspaceId)
     .first<{ value: string }>();
 
   if (!row) {
@@ -1348,9 +1415,10 @@ type WebhookRow = {
   created_at: string;
 };
 
-async function getWebhookSettings() {
+async function getWebhookSettings(workspaceId: string) {
   const row = await getD1()
-    .prepare("SELECT * FROM webhook_settings ORDER BY id LIMIT 1")
+    .prepare("SELECT * FROM webhook_settings WHERE workspace_id = ? ORDER BY id LIMIT 1")
+    .bind(workspaceId)
     .first<WebhookRow>();
 
   return row
@@ -1378,18 +1446,34 @@ export async function GET(request: Request) {
   try {
     await prepareWorkflow();
 
+    const url = new URL(request.url);
+    if (url.searchParams.get("workspaces") === "1") {
+      return Response.json({
+        workspaces: await listWorkspaces(),
+        defaultWorkspaceId: DEFAULT_WORKSPACE_ID,
+      });
+    }
+
+    const access = await requireWorkspaceAccess(request);
+    if ("response" in access) {
+      return access.response;
+    }
+    const workspaceId = access.workspace.id;
     const templateList = await getTemplatesFromDb();
 
     return Response.json({
-      items: await getItems(),
+      items: await getItems(workspaceId),
       stages: templateList[0]?.stages ?? [],
       legacyStages: defaultStages,
       templates: templateList,
-      assigneeSettings: await getAssigneeSettings(),
-      history: await getHistory(),
-      settings: await getAppSettings(),
-      webhook: await getWebhookSettings(),
-      groupOrder: await getGroupOrder(),
+      assigneeSettings: await getAssigneeSettings(workspaceId),
+      history: await getHistory(workspaceId),
+      settings: await getAppSettings(workspaceId),
+      webhook: await getWebhookSettings(workspaceId),
+      groupOrder: await getGroupOrder(workspaceId),
+      workspace: access.summary,
+      workspaces: await listWorkspaces(),
+      defaultWorkspaceId: DEFAULT_WORKSPACE_ID,
       viewer: getActor(request),
     });
   } catch (error) {
@@ -1407,6 +1491,11 @@ export async function POST(request: Request) {
     const payload = (await request.json()) as {
       action?: string;
       actor?: string;
+      workspaceId?: string;
+      workspacePassword?: string;
+      departmentName?: string;
+      teamName?: string;
+      newWorkspacePassword?: string;
       itemId?: number;
       title?: string;
       assignee?: string;
@@ -1430,8 +1519,96 @@ export async function POST(request: Request) {
     const actor = getActor(request, payload.actor);
     const d1 = getD1();
 
+    if (payload.action === "create-workspace") {
+      const departmentName = normalizeText(payload.departmentName, 80);
+      const teamName = normalizeText(payload.teamName, 80);
+      const password =
+        typeof payload.newWorkspacePassword === "string"
+          ? payload.newWorkspacePassword.trim()
+          : "";
+
+      if (!teamName) {
+        return Response.json({ error: "팀 이름을 입력해 주세요." }, { status: 400 });
+      }
+
+      if (password.length < 4) {
+        return Response.json(
+          { error: "부서/팀 암호는 4자 이상으로 입력해 주세요." },
+          { status: 400 }
+        );
+      }
+
+      const now = new Date().toISOString();
+      const credential = await makeWorkspacePassword(password);
+      const workspaceId = `ws-${crypto.randomUUID()}`;
+      const organizationName = workspaceLabel({
+        department_name: departmentName,
+        team_name: teamName,
+      });
+
+      await d1
+        .prepare(
+          `INSERT INTO workspaces (
+            id, department_name, team_name, password_hash, password_salt, updated_at, created_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?)`
+        )
+        .bind(
+          workspaceId,
+          departmentName,
+          teamName,
+          credential.hash,
+          credential.salt,
+          now,
+          now
+        )
+        .run();
+      await d1.batch([
+        d1
+          .prepare(
+            `INSERT INTO workspace_settings (workspace_id, key, value, updated_at)
+             VALUES (?, 'organizationName', ?, ?)`
+          )
+          .bind(workspaceId, organizationName, now),
+        d1
+          .prepare(
+            `INSERT INTO workspace_settings (workspace_id, key, value, updated_at)
+             VALUES (?, 'boardTitle', ?, ?)`
+          )
+          .bind(workspaceId, defaultAppSettings.boardTitle, now),
+      ]);
+      await ensureDefaultItem(workspaceId);
+      await ensureDefaultSettings(workspaceId);
+
+      const workspace = await requireWorkspaceAccess(request, {
+        workspaceId,
+        workspacePassword: password,
+      });
+
+      if ("response" in workspace) {
+        return workspace.response;
+      }
+
+      return Response.json(
+        {
+          workspace: workspace.summary,
+          workspaces: await listWorkspaces(),
+          settings: await getAppSettings(workspaceId),
+          items: await getItems(workspaceId),
+          history: await getHistory(workspaceId),
+          groupOrder: await getGroupOrder(workspaceId),
+        },
+        { status: 201 }
+      );
+    }
+
+    const access = await requireWorkspaceAccess(request, payload);
+    if ("response" in access) {
+      return access.response;
+    }
+    const workspaceId = access.workspace.id;
+
     if (payload.action === "send-deadline-alerts") {
-      const webhook = await getWebhookSettings();
+      const webhook = await getWebhookSettings(workspaceId);
 
       if (!webhook.url || !webhook.enabled) {
         return Response.json(
@@ -1440,7 +1617,7 @@ export async function POST(request: Request) {
         );
       }
 
-      const items = await getItems();
+      const items = await getItems(workspaceId);
       type Alert = { label: string; date: string; days: number };
       const groups = new Map<string, Alert[]>();
       let overdueTotal = 0;
@@ -1499,7 +1676,7 @@ export async function POST(request: Request) {
         return Response.json({ sent: 0 });
       }
 
-      const settings = await getAppSettings();
+      const settings = await getAppSettings(workspaceId);
       const lines: string[] = [
         `📋 [${settings.organizationName}] 마감 알림 (${kstTodayIso()})`,
         `🔴 지연 ${overdueTotal}건 · 🟡 임박(D-3 이내) ${urgentTotal}건`,
@@ -1539,13 +1716,14 @@ export async function POST(request: Request) {
       }
 
       await logHistory({
+        workspaceId,
         entityType: "notification",
         action: "send",
         summary: `${actor}님이 마감 알림 ${total}건을 웹훅으로 발송함`,
         actor,
       });
 
-      return Response.json({ sent: total, history: await getHistory() });
+      return Response.json({ sent: total, history: await getHistory(workspaceId) });
     }
 
     if (payload.action === "duplicate-item") {
@@ -1555,7 +1733,7 @@ export async function POST(request: Request) {
         return Response.json({ error: "복제할 업무가 필요합니다." }, { status: 400 });
       }
 
-      const source = await getItem(sourceId);
+      const source = await getItem(sourceId, workspaceId);
 
       if (!source) {
         return Response.json({ error: "업무를 찾을 수 없습니다." }, { status: 404 });
@@ -1563,7 +1741,8 @@ export async function POST(request: Request) {
 
       const now = new Date().toISOString();
       const last = await d1
-        .prepare("SELECT MAX(position) AS position FROM workflow_items")
+        .prepare("SELECT MAX(position) AS position FROM workflow_items WHERE workspace_id = ?")
+        .bind(workspaceId)
         .first<{ position: number | null }>();
 
       // Copy the structure (steps, subtasks, info); progress always resets —
@@ -1572,14 +1751,16 @@ export async function POST(request: Request) {
       const keepSchedule = payload.keepSchedule === true;
       const insertResult = await d1
         .prepare(`INSERT INTO workflow_items (
+          workspace_id,
           title, assignee, category, memo,
           allocated_budget, required_budget,
           contract_vendor, contract_manager, contract_phone, contract_amount,
           due_date,
           location, lat, lng, links,
           template_key, position, updated_by, updated_at, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
         .bind(
+          workspaceId,
           `${source.title} (복사)`.slice(0, 120),
           source.assignee,
           source.category,
@@ -1676,6 +1857,7 @@ export async function POST(request: Request) {
       }
 
       await logHistory({
+        workspaceId,
         itemId: newItemId,
         entityType: "item",
         entityId: newItemId,
@@ -1686,8 +1868,8 @@ export async function POST(request: Request) {
 
       return Response.json(
         {
-          item: await getItem(newItemId),
-          history: await getHistory(),
+          item: await getItem(newItemId, workspaceId),
+          history: await getHistory(workspaceId),
         },
         { status: 201 }
       );
@@ -1704,8 +1886,8 @@ export async function POST(request: Request) {
       }
 
       const item = await d1
-        .prepare("SELECT title FROM workflow_items WHERE id = ?")
-        .bind(itemId)
+        .prepare("SELECT title FROM workflow_items WHERE id = ? AND workspace_id = ?")
+        .bind(itemId, workspaceId)
         .first<{ title: string }>();
 
       if (!item) {
@@ -1762,6 +1944,7 @@ export async function POST(request: Request) {
         .run();
 
       await logHistory({
+        workspaceId,
         itemId,
         entityType: "subtask",
         action: "create",
@@ -1771,8 +1954,8 @@ export async function POST(request: Request) {
 
       return Response.json(
         {
-          item: await getItem(itemId),
-          history: await getHistory(),
+          item: await getItem(itemId, workspaceId),
+          history: await getHistory(workspaceId),
         },
         { status: 201 }
       );
@@ -1802,9 +1985,11 @@ export async function POST(request: Request) {
     const category = payload.category?.trim().slice(0, 80) ?? "";
 
     const last = await d1
-      .prepare("SELECT MAX(position) AS position FROM workflow_items")
+      .prepare("SELECT MAX(position) AS position FROM workflow_items WHERE workspace_id = ?")
+      .bind(workspaceId)
       .first<{ position: number | null }>();
     const itemId = await createItemWithDefaultSteps({
+      workspaceId,
       title,
       assignee: assignee || "미지정",
       category,
@@ -1826,12 +2011,12 @@ export async function POST(request: Request) {
       actor,
       position: Number(last?.position ?? 0) + 1,
     });
-    const item = await getItem(itemId);
+    const item = await getItem(itemId, workspaceId);
 
     return Response.json(
       {
         item,
-        history: await getHistory(),
+        history: await getHistory(workspaceId),
       },
       { status: 201 }
     );
@@ -1850,6 +2035,11 @@ export async function PATCH(request: Request) {
     const payload = (await request.json()) as {
       action?: string;
       actor?: string;
+      workspaceId?: string;
+      workspacePassword?: string;
+      departmentName?: string;
+      teamName?: string;
+      newWorkspacePassword?: string;
       itemId?: number;
       order?: number[];
       stepId?: number;
@@ -1894,6 +2084,94 @@ export async function PATCH(request: Request) {
     const now = new Date().toISOString();
     const actor = getActor(request, payload.actor);
     const d1 = getD1();
+    const access = await requireWorkspaceAccess(request, payload);
+    if ("response" in access) {
+      return access.response;
+    }
+    const workspaceId = access.workspace.id;
+
+    if (payload.action === "update-workspace") {
+      const departmentName = normalizeText(payload.departmentName, 80);
+      const teamName = normalizeText(payload.teamName, 80);
+      const newPassword =
+        typeof payload.newWorkspacePassword === "string"
+          ? payload.newWorkspacePassword.trim()
+          : "";
+
+      if (!teamName) {
+        return Response.json({ error: "팀 이름을 입력해 주세요." }, { status: 400 });
+      }
+
+      let passwordHash = access.workspace.password_hash;
+      let passwordSalt = access.workspace.password_salt;
+
+      if (newPassword) {
+        if (newPassword.length < 4) {
+          return Response.json(
+            { error: "부서/팀 암호는 4자 이상으로 입력해 주세요." },
+            { status: 400 }
+          );
+        }
+        const credential = await makeWorkspacePassword(newPassword);
+        passwordHash = credential.hash;
+        passwordSalt = credential.salt;
+      }
+
+      const organizationName = workspaceLabel({
+        department_name: departmentName,
+        team_name: teamName,
+      });
+
+      await d1.batch([
+        d1
+          .prepare(
+            `UPDATE workspaces
+             SET department_name = ?,
+                 team_name = ?,
+                 password_hash = ?,
+                 password_salt = ?,
+                 updated_at = ?
+             WHERE id = ?`
+          )
+          .bind(
+            departmentName,
+            teamName,
+            passwordHash,
+            passwordSalt,
+            now,
+            workspaceId
+          ),
+        d1
+          .prepare(`INSERT INTO workspace_settings (workspace_id, key, value, updated_at)
+            VALUES (?, 'organizationName', ?, ?)
+            ON CONFLICT(workspace_id, key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`)
+          .bind(workspaceId, organizationName, now),
+      ]);
+
+      await logHistory({
+        workspaceId,
+        entityType: "workspace",
+        action: "update",
+        summary: `${actor}님이 부서/팀 설정을 변경함`,
+        actor,
+      });
+
+      const workspace = await requireWorkspaceAccess(request, {
+        workspaceId,
+        workspacePassword: newPassword || payload.workspacePassword,
+      });
+
+      if ("response" in workspace) {
+        return workspace.response;
+      }
+
+      return Response.json({
+        workspace: workspace.summary,
+        workspaces: await listWorkspaces(),
+        settings: await getAppSettings(workspaceId),
+        history: await getHistory(workspaceId),
+      });
+    }
 
     if (payload.action === "save-group-order") {
       const order = Array.isArray(payload.groupOrder)
@@ -1904,13 +2182,13 @@ export async function PATCH(request: Request) {
         : [];
 
       await d1
-        .prepare(`INSERT INTO app_settings (key, value, updated_at)
-          VALUES ('groupOrder', ?, ?)
-          ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`)
-        .bind(JSON.stringify(order), now)
+        .prepare(`INSERT INTO workspace_settings (workspace_id, key, value, updated_at)
+          VALUES (?, 'groupOrder', ?, ?)
+          ON CONFLICT(workspace_id, key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`)
+        .bind(workspaceId, JSON.stringify(order), now)
         .run();
 
-      return Response.json({ groupOrder: await getGroupOrder() });
+      return Response.json({ groupOrder: await getGroupOrder(workspaceId) });
     }
 
     if (payload.action === "delete-group") {
@@ -1925,7 +2203,8 @@ export async function PATCH(request: Request) {
       }
 
       const rows = await d1
-        .prepare("SELECT id, title, category FROM workflow_items")
+        .prepare("SELECT id, title, category FROM workflow_items WHERE workspace_id = ?")
+        .bind(workspaceId)
         .all<{ id: number; title: string; category: string }>();
       const affectedItems = (rows.results ?? []).filter(
         (item) => groupContainsCategory(groupName, categoryKey(item.category ?? ""))
@@ -1942,7 +2221,7 @@ export async function PATCH(request: Request) {
         );
       }
 
-      const nextOrder = (await getGroupOrder()).filter(
+      const nextOrder = (await getGroupOrder(workspaceId)).filter(
         (name) => !groupContainsCategory(groupName, categoryKey(name))
       );
       const statements: D1PreparedStatement[] = [
@@ -1954,14 +2233,15 @@ export async function PATCH(request: Request) {
             .bind(actor, now, item.id)
         ),
         d1
-          .prepare(`INSERT INTO app_settings (key, value, updated_at)
-            VALUES ('groupOrder', ?, ?)
-            ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`)
-          .bind(JSON.stringify(nextOrder), now),
+          .prepare(`INSERT INTO workspace_settings (workspace_id, key, value, updated_at)
+            VALUES (?, 'groupOrder', ?, ?)
+            ON CONFLICT(workspace_id, key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`)
+          .bind(workspaceId, JSON.stringify(nextOrder), now),
       ];
 
       await d1.batch(statements);
       await logHistory({
+        workspaceId,
         itemId: null,
         entityType: "group",
         entityId: null,
@@ -1973,9 +2253,9 @@ export async function PATCH(request: Request) {
       });
 
       return Response.json({
-        items: await getItems(),
-        groupOrder: await getGroupOrder(),
-        history: await getHistory(),
+        items: await getItems(workspaceId),
+        groupOrder: await getGroupOrder(workspaceId),
+        history: await getHistory(workspaceId),
       });
     }
 
@@ -1996,21 +2276,22 @@ export async function PATCH(request: Request) {
 
       if (source === target) {
         return Response.json({
-          items: await getItems(),
-          groupOrder: await getGroupOrder(),
-          history: await getHistory(),
+          items: await getItems(workspaceId),
+          groupOrder: await getGroupOrder(workspaceId),
+          history: await getHistory(workspaceId),
         });
       }
 
       const rows = await d1
-        .prepare("SELECT id, category FROM workflow_items")
+        .prepare("SELECT id, category FROM workflow_items WHERE workspace_id = ?")
+        .bind(workspaceId)
         .all<{ id: number; category: string }>();
       const affectedItems = (rows.results ?? []).filter((item) =>
         groupContainsCategory(source, categoryKey(item.category ?? ""))
       );
       const nextOrder = [
         ...new Set(
-          (await getGroupOrder()).map((name) =>
+          (await getGroupOrder(workspaceId)).map((name) =>
             replaceGroupPrefix(name, source, target)
           )
         ),
@@ -2025,13 +2306,14 @@ export async function PATCH(request: Request) {
             .bind(replaceGroupPrefix(item.category, source, target), actor, now, item.id)
         ),
         d1
-          .prepare(`INSERT INTO app_settings (key, value, updated_at)
-            VALUES ('groupOrder', ?, ?)
-            ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`)
-          .bind(JSON.stringify(nextOrder), now),
+          .prepare(`INSERT INTO workspace_settings (workspace_id, key, value, updated_at)
+            VALUES (?, 'groupOrder', ?, ?)
+            ON CONFLICT(workspace_id, key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`)
+          .bind(workspaceId, JSON.stringify(nextOrder), now),
       ]);
 
       await logHistory({
+        workspaceId,
         entityType: "group",
         action: "rename",
         summary: `${actor}님이 대분류 '${source}' 이름을 '${target}'(으)로 변경함`,
@@ -2039,9 +2321,9 @@ export async function PATCH(request: Request) {
       });
 
       return Response.json({
-        items: await getItems(),
-        groupOrder: await getGroupOrder(),
-        history: await getHistory(),
+        items: await getItems(workspaceId),
+        groupOrder: await getGroupOrder(workspaceId),
+        history: await getHistory(workspaceId),
       });
     }
 
@@ -2061,12 +2343,13 @@ export async function PATCH(request: Request) {
       }
 
       const rows = await d1
-        .prepare("SELECT id, category FROM workflow_items")
+        .prepare("SELECT id, category FROM workflow_items WHERE workspace_id = ?")
+        .bind(workspaceId)
         .all<{ id: number; category: string }>();
       const affectedItems = (rows.results ?? []).filter((item) =>
         groupContainsCategory(source, categoryKey(item.category ?? ""))
       );
-      const orderWithoutSource = (await getGroupOrder())
+      const orderWithoutSource = (await getGroupOrder(workspaceId))
         .filter((name) => !groupContainsCategory(source, categoryKey(name)))
         .map((name) => replaceGroupPrefix(name, source, target));
       const nextOrder = [
@@ -2086,13 +2369,14 @@ export async function PATCH(request: Request) {
             .bind(replaceGroupPrefix(item.category, source, target), actor, now, item.id)
         ),
         d1
-          .prepare(`INSERT INTO app_settings (key, value, updated_at)
-            VALUES ('groupOrder', ?, ?)
-            ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`)
-          .bind(JSON.stringify(nextOrder), now),
+          .prepare(`INSERT INTO workspace_settings (workspace_id, key, value, updated_at)
+            VALUES (?, 'groupOrder', ?, ?)
+            ON CONFLICT(workspace_id, key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`)
+          .bind(workspaceId, JSON.stringify(nextOrder), now),
       ]);
 
       await logHistory({
+        workspaceId,
         entityType: "group",
         action: "merge",
         summary: `${actor}님이 대분류 '${source}'를 '${target}'(으)로 합침`,
@@ -2100,9 +2384,9 @@ export async function PATCH(request: Request) {
       });
 
       return Response.json({
-        items: await getItems(),
-        groupOrder: await getGroupOrder(),
-        history: await getHistory(),
+        items: await getItems(workspaceId),
+        groupOrder: await getGroupOrder(workspaceId),
+        history: await getHistory(workspaceId),
       });
     }
 
@@ -2127,7 +2411,8 @@ export async function PATCH(request: Request) {
       }
 
       const existing = await d1
-        .prepare("SELECT id FROM workflow_items")
+        .prepare("SELECT id FROM workflow_items WHERE workspace_id = ?")
+        .bind(workspaceId)
         .all<{ id: number }>();
       const existingIds = new Set((existing.results ?? []).map((item) => item.id));
 
@@ -2153,6 +2438,7 @@ export async function PATCH(request: Request) {
       ]);
 
       await logHistory({
+        workspaceId,
         itemId,
         entityType: "item",
         entityId: itemId,
@@ -2161,7 +2447,7 @@ export async function PATCH(request: Request) {
         actor,
       });
 
-      return Response.json({ items: await getItems(), history: await getHistory() });
+      return Response.json({ items: await getItems(workspaceId), history: await getHistory(workspaceId) });
     }
 
     if (payload.action === "save-template") {
@@ -2300,6 +2586,7 @@ export async function PATCH(request: Request) {
       );
 
       await logHistory({
+        workspaceId,
         entityType: "template",
         action: existing ? "update" : "create",
         summary: `${actor}님이 '${name}' 유형의 단계를 ${existing ? "수정" : "추가"}함`,
@@ -2308,8 +2595,8 @@ export async function PATCH(request: Request) {
 
       return Response.json({
         templates: await getTemplatesFromDb(),
-        items: await getItems(),
-        history: await getHistory(),
+        items: await getItems(workspaceId),
+        history: await getHistory(workspaceId),
       });
     }
 
@@ -2363,6 +2650,7 @@ export async function PATCH(request: Request) {
       ]);
 
       await logHistory({
+        workspaceId,
         entityType: "template",
         action: "delete",
         summary: `${actor}님이 '${template.name}' 유형을 삭제함`,
@@ -2371,8 +2659,8 @@ export async function PATCH(request: Request) {
 
       return Response.json({
         templates: await getTemplatesFromDb(),
-        items: await getItems(),
-        history: await getHistory(),
+        items: await getItems(workspaceId),
+        history: await getHistory(workspaceId),
       });
     }
 
@@ -2387,19 +2675,23 @@ export async function PATCH(request: Request) {
         );
       }
 
-      await d1.prepare("DELETE FROM webhook_settings").run();
+      await d1
+        .prepare("DELETE FROM webhook_settings WHERE workspace_id = ?")
+        .bind(workspaceId)
+        .run();
 
       if (url) {
         await d1
           .prepare(
-            `INSERT INTO webhook_settings (name, url, enabled, updated_at, created_at)
-             VALUES ('팀 알림', ?, ?, ?, ?)`
+            `INSERT INTO webhook_settings (workspace_id, name, url, enabled, updated_at, created_at)
+             VALUES (?, '팀 알림', ?, ?, ?, ?)`
           )
-          .bind(url, enabled ? 1 : 0, now, now)
+          .bind(workspaceId, url, enabled ? 1 : 0, now, now)
           .run();
       }
 
       await logHistory({
+        workspaceId,
         entityType: "settings",
         action: "webhook",
         summary: url
@@ -2409,8 +2701,8 @@ export async function PATCH(request: Request) {
       });
 
       return Response.json({
-        webhook: await getWebhookSettings(),
-        history: await getHistory(),
+        webhook: await getWebhookSettings(workspaceId),
+        history: await getHistory(workspaceId),
       });
     }
 
@@ -2427,8 +2719,8 @@ export async function PATCH(request: Request) {
       }
 
       const item = await d1
-        .prepare("SELECT title FROM workflow_items WHERE id = ?")
-        .bind(itemId)
+        .prepare("SELECT title FROM workflow_items WHERE id = ? AND workspace_id = ?")
+        .bind(itemId, workspaceId)
         .first<{ title: string }>();
 
       if (!item) {
@@ -2450,9 +2742,10 @@ export async function PATCH(request: Request) {
         )
         .bind(templateKey, actor, now, itemId)
         .run();
-      await reconcileItemsForTemplate(templateKey, template.stages, actor);
+      await reconcileItemsForTemplate(templateKey, template.stages, actor, workspaceId);
 
       await logHistory({
+        workspaceId,
         itemId,
         entityType: "item",
         entityId: itemId,
@@ -2462,9 +2755,9 @@ export async function PATCH(request: Request) {
       });
 
       return Response.json({
-        item: await getItem(itemId),
-        items: await getItems(),
-        history: await getHistory(),
+        item: await getItem(itemId, workspaceId),
+        items: await getItems(workspaceId),
+        history: await getHistory(workspaceId),
       });
     }
 
@@ -2487,18 +2780,19 @@ export async function PATCH(request: Request) {
 
       await d1.batch([
         d1
-          .prepare(`INSERT INTO app_settings (key, value, updated_at)
-            VALUES ('organizationName', ?, ?)
-            ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`)
-          .bind(organizationName, now),
+          .prepare(`INSERT INTO workspace_settings (workspace_id, key, value, updated_at)
+            VALUES (?, 'organizationName', ?, ?)
+            ON CONFLICT(workspace_id, key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`)
+          .bind(workspaceId, organizationName, now),
         d1
-          .prepare(`INSERT INTO app_settings (key, value, updated_at)
-            VALUES ('boardTitle', ?, ?)
-            ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`)
-          .bind(boardTitle, now),
+          .prepare(`INSERT INTO workspace_settings (workspace_id, key, value, updated_at)
+            VALUES (?, 'boardTitle', ?, ?)
+            ON CONFLICT(workspace_id, key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`)
+          .bind(workspaceId, boardTitle, now),
       ]);
 
       await logHistory({
+        workspaceId,
         entityType: "settings",
         action: "update",
         summary: `${actor}님이 보드 설정을 변경함`,
@@ -2506,8 +2800,8 @@ export async function PATCH(request: Request) {
       });
 
       return Response.json({
-        settings: await getAppSettings(),
-        history: await getHistory(),
+        settings: await getAppSettings(workspaceId),
+        history: await getHistory(workspaceId),
       });
     }
 
@@ -2524,7 +2818,8 @@ export async function PATCH(request: Request) {
       }
 
       const existing = await d1
-        .prepare("SELECT id FROM workflow_items")
+        .prepare("SELECT id FROM workflow_items WHERE workspace_id = ?")
+        .bind(workspaceId)
         .all<{ id: number }>();
       const existingIds = new Set((existing.results ?? []).map((item) => item.id));
 
@@ -2545,13 +2840,14 @@ export async function PATCH(request: Request) {
       );
 
       await logHistory({
+        workspaceId,
         entityType: "item",
         action: "reorder",
         summary: `${actor}님이 업무 순서를 변경함`,
         actor,
       });
 
-      return Response.json({ items: await getItems(), history: await getHistory() });
+      return Response.json({ items: await getItems(workspaceId), history: await getHistory(workspaceId) });
     }
 
     if (payload.action === "set-assignee-color") {
@@ -2563,13 +2859,14 @@ export async function PATCH(request: Request) {
       }
 
       await d1
-        .prepare(`INSERT INTO assignee_settings (assignee, color, updated_at)
-          VALUES (?, ?, ?)
-          ON CONFLICT(assignee) DO UPDATE SET color = excluded.color, updated_at = excluded.updated_at`)
-        .bind(assignee, color, now)
+        .prepare(`INSERT INTO workspace_assignee_settings (workspace_id, assignee, color, updated_at)
+          VALUES (?, ?, ?, ?)
+          ON CONFLICT(workspace_id, assignee) DO UPDATE SET color = excluded.color, updated_at = excluded.updated_at`)
+        .bind(workspaceId, assignee, color, now)
         .run();
 
       await logHistory({
+        workspaceId,
         entityType: "assignee",
         action: "color",
         summary: `${actor}님이 '${assignee}' 담당자 색상을 변경함`,
@@ -2577,8 +2874,8 @@ export async function PATCH(request: Request) {
       });
 
       return Response.json({
-        assigneeSettings: await getAssigneeSettings(),
-        history: await getHistory(),
+        assigneeSettings: await getAssigneeSettings(workspaceId),
+        history: await getHistory(workspaceId),
       });
     }
 
@@ -2588,8 +2885,8 @@ export async function PATCH(request: Request) {
         .prepare(`SELECT s.*, i.title AS item_title
           FROM workflow_subtasks s
           JOIN workflow_items i ON i.id = s.item_id
-          WHERE s.id = ?`)
-        .bind(subtaskId)
+          WHERE s.id = ? AND i.workspace_id = ?`)
+        .bind(subtaskId, workspaceId)
         .first<WorkflowSubtaskRow & { item_title: string }>();
 
       if (!subtask) {
@@ -2635,6 +2932,7 @@ export async function PATCH(request: Request) {
           : `${actor}님이 '${subtask.item_title}' 세부 체크리스트를 수정함`;
 
       await logHistory({
+        workspaceId,
         itemId: subtask.item_id,
         entityType: "subtask",
         entityId: subtaskId,
@@ -2644,8 +2942,8 @@ export async function PATCH(request: Request) {
       });
 
       return Response.json({
-        item: await getItem(subtask.item_id),
-        history: await getHistory(),
+        item: await getItem(subtask.item_id, workspaceId),
+        history: await getHistory(workspaceId),
       });
     }
 
@@ -2655,8 +2953,8 @@ export async function PATCH(request: Request) {
         .prepare(`SELECT s.*, i.title AS item_title
           FROM workflow_steps s
           JOIN workflow_items i ON i.id = s.item_id
-          WHERE s.id = ?`)
-        .bind(stepId)
+          WHERE s.id = ? AND i.workspace_id = ?`)
+        .bind(stepId, workspaceId)
         .first<WorkflowStepRow & { item_title: string }>();
 
       if (!step) {
@@ -2676,6 +2974,7 @@ export async function PATCH(request: Request) {
         ]);
 
         await logHistory({
+          workspaceId,
           itemId: step.item_id,
           entityType: "step",
           entityId: stepId,
@@ -2685,8 +2984,8 @@ export async function PATCH(request: Request) {
         });
 
         return Response.json({
-          item: await getItem(step.item_id),
-          history: await getHistory(),
+          item: await getItem(step.item_id, workspaceId),
+          history: await getHistory(workspaceId),
         });
       }
 
@@ -2747,6 +3046,7 @@ export async function PATCH(request: Request) {
       const summary = `${actor}님이 '${step.item_title}'의 '${step.title}' 단계를 ${payload.status === "done" ? "완료" : "미완료"}로 변경함`;
 
       await logHistory({
+        workspaceId,
         itemId: step.item_id,
         entityType: "step",
         entityId: stepId,
@@ -2756,16 +3056,16 @@ export async function PATCH(request: Request) {
       });
 
       return Response.json({
-        item: await getItem(step.item_id),
-        history: await getHistory(),
+        item: await getItem(step.item_id, workspaceId),
+        history: await getHistory(workspaceId),
       });
     }
 
     if (Number.isFinite(Number(payload.itemId))) {
       const itemId = Number(payload.itemId);
       const existing = await d1
-        .prepare("SELECT * FROM workflow_items WHERE id = ?")
-        .bind(itemId)
+        .prepare("SELECT * FROM workflow_items WHERE id = ? AND workspace_id = ?")
+        .bind(itemId, workspaceId)
         .first<WorkflowItemRow>();
 
       if (!existing) {
@@ -2876,12 +3176,13 @@ export async function PATCH(request: Request) {
 
       await d1
         .prepare(
-          "INSERT OR IGNORE INTO assignee_settings (assignee, color, updated_at) VALUES (?, '#e6f4ef', ?)"
+          "INSERT OR IGNORE INTO workspace_assignee_settings (workspace_id, assignee, color, updated_at) VALUES (?, ?, '#e6f4ef', ?)"
         )
-        .bind(assignee, now)
+        .bind(workspaceId, assignee, now)
         .run();
 
       await logHistory({
+        workspaceId,
         itemId,
         entityType: "item",
         entityId: itemId,
@@ -2891,9 +3192,9 @@ export async function PATCH(request: Request) {
       });
 
       return Response.json({
-        item: await getItem(itemId),
-        assigneeSettings: await getAssigneeSettings(),
-        history: await getHistory(),
+        item: await getItem(itemId, workspaceId),
+        assigneeSettings: await getAssigneeSettings(workspaceId),
+        history: await getHistory(workspaceId),
       });
     }
 
@@ -2912,11 +3213,18 @@ export async function DELETE(request: Request) {
 
     const payload = (await request.json().catch(() => ({}))) as {
       actor?: string;
+      workspaceId?: string;
+      workspacePassword?: string;
       itemId?: number;
       subtaskId?: number;
     };
     const actor = getActor(request, payload.actor);
     const d1 = getD1();
+    const access = await requireWorkspaceAccess(request, payload);
+    if ("response" in access) {
+      return access.response;
+    }
+    const workspaceId = access.workspace.id;
 
     // Delete a single checklist item.
     if (Number.isFinite(Number(payload.subtaskId))) {
@@ -2926,9 +3234,9 @@ export async function DELETE(request: Request) {
           `SELECT s.item_id, s.title, i.title AS item_title
            FROM workflow_subtasks s
            JOIN workflow_items i ON i.id = s.item_id
-           WHERE s.id = ?`
+           WHERE s.id = ? AND i.workspace_id = ?`
         )
-        .bind(subtaskId)
+        .bind(subtaskId, workspaceId)
         .first<{ item_id: number; title: string; item_title: string }>();
 
       if (!subtask) {
@@ -2944,6 +3252,7 @@ export async function DELETE(request: Request) {
         .run();
 
       await logHistory({
+        workspaceId,
         itemId: subtask.item_id,
         entityType: "subtask",
         entityId: subtaskId,
@@ -2953,8 +3262,8 @@ export async function DELETE(request: Request) {
       });
 
       return Response.json({
-        item: await getItem(subtask.item_id),
-        history: await getHistory(),
+        item: await getItem(subtask.item_id, workspaceId),
+        history: await getHistory(workspaceId),
       });
     }
 
@@ -2965,8 +3274,8 @@ export async function DELETE(request: Request) {
     }
 
     const item = await d1
-      .prepare("SELECT title FROM workflow_items WHERE id = ?")
-      .bind(itemId)
+      .prepare("SELECT title FROM workflow_items WHERE id = ? AND workspace_id = ?")
+      .bind(itemId, workspaceId)
       .first<{ title: string }>();
 
     if (!item) {
@@ -2980,6 +3289,7 @@ export async function DELETE(request: Request) {
     ]);
 
     await logHistory({
+      workspaceId,
       itemId,
       entityType: "item",
       entityId: itemId,
@@ -2989,8 +3299,8 @@ export async function DELETE(request: Request) {
     });
 
     return Response.json({
-      items: await getItems(),
-      history: await getHistory(),
+      items: await getItems(workspaceId),
+      history: await getHistory(workspaceId),
     });
   } catch (error) {
     return Response.json(

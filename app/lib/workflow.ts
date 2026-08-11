@@ -97,6 +97,16 @@ export type AppSettings = {
   boardTitle: string;
 };
 
+export type WorkspaceSummary = {
+  id: string;
+  departmentName: string;
+  teamName: string;
+  label: string;
+  requiresPassword: boolean;
+  updatedAt: string;
+  createdAt: string;
+};
+
 export type TaskResponse = {
   item?: WorkflowItem | null;
   items?: WorkflowItem[];
@@ -104,6 +114,10 @@ export type TaskResponse = {
   assigneeSettings?: Record<string, string>;
   history?: HistoryEntry[];
   settings?: AppSettings;
+  workspace?: WorkspaceSummary;
+  workspaces?: WorkspaceSummary[];
+  defaultWorkspaceId?: string;
+  requiresWorkspacePassword?: boolean;
   webhook?: { url: string; enabled: boolean };
   sent?: number;
   groupOrder?: string[];

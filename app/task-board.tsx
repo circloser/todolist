@@ -64,6 +64,7 @@ import {
   type TemplateOption,
   type DocumentTemplate,
   type ViewMode,
+  type WorkspaceSummary,
   type WorkflowItem,
   type WorkflowStep,
   type WorkflowSubtask,
@@ -282,6 +283,32 @@ function readMapPrefs() {
   }
 }
 
+const WORKSPACE_STORAGE_KEY = "team-progress-workspace-id";
+
+function readStoredWorkspaceId() {
+  if (typeof window === "undefined") {
+    return "default";
+  }
+
+  return window.localStorage.getItem(WORKSPACE_STORAGE_KEY) || "default";
+}
+
+function workspacePasswordKey(id: string) {
+  return `team-progress-workspace-password:${id}`;
+}
+
+function readWorkspacePassword(id: string) {
+  if (typeof window === "undefined") {
+    return "";
+  }
+
+  return window.sessionStorage.getItem(workspacePasswordKey(id)) || "";
+}
+
+function workspaceName(workspace: WorkspaceSummary | null) {
+  return workspace?.label || "부서/팀 보드";
+}
+
 export default function TaskBoard() {
   const [items, setItems] = useState<WorkflowItem[]>([]);
   const [templates, setTemplates] = useState<TemplateOption[]>(defaultTemplates);
@@ -293,6 +320,24 @@ export default function TaskBoard() {
     defaultSettings.organizationName
   );
   const [boardTitle, setBoardTitle] = useState(defaultSettings.boardTitle);
+  const [activeWorkspaceId, setActiveWorkspaceId] = useState(readStoredWorkspaceId);
+  const [activeWorkspace, setActiveWorkspace] = useState<WorkspaceSummary | null>(
+    null
+  );
+  const [workspaces, setWorkspaces] = useState<WorkspaceSummary[]>([]);
+  const [workspacePassword, setWorkspacePassword] = useState(() =>
+    readWorkspacePassword(readStoredWorkspaceId())
+  );
+  const [workspacePasswordInput, setWorkspacePasswordInput] = useState("");
+  const [workspaceLocked, setWorkspaceLocked] = useState(false);
+  const [workspaceDepartmentDraft, setWorkspaceDepartmentDraft] = useState("");
+  const [workspaceTeamDraft, setWorkspaceTeamDraft] = useState("");
+  const [newWorkspaceDepartment, setNewWorkspaceDepartment] = useState("");
+  const [newWorkspaceTeam, setNewWorkspaceTeam] = useState("");
+  const [newWorkspacePassword, setNewWorkspacePassword] = useState("");
+  const [workspacePasswordDraft, setWorkspacePasswordDraft] = useState("");
+  const [creatingWorkspace, setCreatingWorkspace] = useState(false);
+  const [savingWorkspace, setSavingWorkspace] = useState(false);
   const [userName, setUserName] = useState("사용자");
   const [filter, setFilter] = useState<TaskFilter>("all");
   const [dueFilter, setDueFilter] = useState<DueFilter>("all");
@@ -423,18 +468,81 @@ export default function TaskBoard() {
   const [error, setError] = useState("");
   const currentActor = userName.trim() || "사용자";
 
-  async function loadTasks() {
+  function workspaceHeaders(init?: HeadersInit, passwordOverride?: string) {
+    const headers = new Headers(init);
+    headers.set("X-Workspace-Id", activeWorkspaceId);
+
+    const password = passwordOverride ?? workspacePassword;
+    if (password) {
+      headers.set("X-Workspace-Password", password);
+    }
+
+    return headers;
+  }
+
+  function taskRequest(init?: RequestInit, passwordOverride?: string) {
+    return fetch("/api/tasks", {
+      ...init,
+      headers: workspaceHeaders(init?.headers, passwordOverride),
+    });
+  }
+
+  function documentRequest(init?: RequestInit, passwordOverride?: string) {
+    return fetch("/api/documents", {
+      ...init,
+      headers: workspaceHeaders(init?.headers, passwordOverride),
+    });
+  }
+
+  function rememberWorkspacePassword(id: string, password: string) {
+    setWorkspacePassword(password);
+    if (password) {
+      window.sessionStorage.setItem(workspacePasswordKey(id), password);
+    } else {
+      window.sessionStorage.removeItem(workspacePasswordKey(id));
+    }
+  }
+
+  async function loadTasks(passwordOverride?: string) {
     setLoading(true);
     setError("");
+    const submittedPassword =
+      typeof passwordOverride === "string" ? passwordOverride.trim() : "";
 
     try {
-      const response = await fetch("/api/tasks", { cache: "no-store" });
+      const response = await taskRequest({ cache: "no-store" }, submittedPassword);
       const data = (await response.json()) as TaskResponse;
 
+      if (data.workspaces) {
+        setWorkspaces(data.workspaces);
+      }
+
+      if (data.workspace) {
+        setActiveWorkspace(data.workspace);
+        setWorkspaceDepartmentDraft(data.workspace.departmentName);
+        setWorkspaceTeamDraft(data.workspace.teamName);
+      }
+
       if (!response.ok) {
+        if (data.requiresWorkspacePassword) {
+          if (submittedPassword) {
+            rememberWorkspacePassword(activeWorkspaceId, "");
+            setError("암호가 맞지 않습니다. 다시 입력해 주세요.");
+          }
+          setWorkspaceLocked(true);
+          setItems([]);
+          setHistory([]);
+          setWorkspacePasswordInput("");
+          setActiveWorkspace(data.workspace ?? null);
+          return;
+        }
         throw new Error(data.error ?? "진행 목록을 불러오지 못했습니다.");
       }
 
+      if (passwordOverride !== undefined) {
+        rememberWorkspacePassword(activeWorkspaceId, submittedPassword);
+      }
+      setWorkspaceLocked(false);
       setItems(data.items ?? []);
       setTemplates(data.templates?.length ? data.templates : defaultTemplates);
       setHistory(data.history ?? []);
@@ -463,17 +571,133 @@ export default function TaskBoard() {
   }
 
   useEffect(() => {
+    const password = readWorkspacePassword(activeWorkspaceId);
+    window.localStorage.setItem(WORKSPACE_STORAGE_KEY, activeWorkspaceId);
+
     const timer = window.setTimeout(() => {
-      void loadTasks();
+      setWorkspacePassword(password);
+      setWorkspacePasswordInput("");
+      void loadTasks(password);
     }, 0);
 
     return () => window.clearTimeout(timer);
-  }, []);
+    // Switching workspaces is the only intended trigger; loadTasks changes
+    // identity as request-related state changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeWorkspaceId]);
 
   function saveUserName(value: string) {
     const nextUserName = value.trim() || "사용자";
     setUserName(nextUserName);
     window.localStorage.setItem("team-progress-user-name", nextUserName);
+  }
+
+  async function unlockWorkspace(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const password = workspacePasswordInput.trim();
+    await loadTasks(password);
+  }
+
+  async function createWorkspace(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const teamName = newWorkspaceTeam.trim();
+    const password = newWorkspacePassword.trim();
+
+    if (!teamName || password.length < 4) {
+      setError("팀 이름과 4자 이상 암호를 입력해 주세요.");
+      return;
+    }
+
+    setCreatingWorkspace(true);
+    setError("");
+
+    try {
+      const response = await taskRequest({
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "create-workspace",
+          actor: currentActor,
+          departmentName: newWorkspaceDepartment.trim(),
+          teamName,
+          newWorkspacePassword: password,
+        }),
+      });
+      const data = (await response.json()) as TaskResponse;
+
+      if (!response.ok || !data.workspace) {
+        throw new Error(data.error ?? "부서/팀 보드를 만들지 못했습니다.");
+      }
+
+      setWorkspaces(data.workspaces ?? []);
+      setActiveWorkspace(data.workspace);
+      setActiveWorkspaceId(data.workspace.id);
+      setWorkspaceDepartmentDraft(data.workspace.departmentName);
+      setWorkspaceTeamDraft(data.workspace.teamName);
+      rememberWorkspacePassword(data.workspace.id, password);
+      setWorkspaceLocked(false);
+      setNewWorkspaceDepartment("");
+      setNewWorkspaceTeam("");
+      setNewWorkspacePassword("");
+    } catch (createError) {
+      setError(
+        createError instanceof Error
+          ? createError.message
+          : "부서/팀 보드를 만들지 못했습니다."
+      );
+    } finally {
+      setCreatingWorkspace(false);
+    }
+  }
+
+  async function saveWorkspaceSettings() {
+    const teamName = workspaceTeamDraft.trim();
+
+    if (!teamName) {
+      setError("팀 이름을 입력해 주세요.");
+      return;
+    }
+
+    setSavingWorkspace(true);
+    setError("");
+
+    try {
+      const response = await taskRequest({
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "update-workspace",
+          actor: currentActor,
+          departmentName: workspaceDepartmentDraft.trim(),
+          teamName,
+          newWorkspacePassword: workspacePasswordDraft.trim(),
+        }),
+      });
+      const data = (await response.json()) as TaskResponse;
+
+      if (!response.ok || !data.workspace) {
+        throw new Error(data.error ?? "부서/팀 설정을 저장하지 못했습니다.");
+      }
+
+      setWorkspaces(data.workspaces ?? workspaces);
+      setActiveWorkspace(data.workspace);
+      setWorkspaceDepartmentDraft(data.workspace.departmentName);
+      setWorkspaceTeamDraft(data.workspace.teamName);
+      setOrganizationName(data.settings?.organizationName ?? data.workspace.label);
+      if (workspacePasswordDraft.trim()) {
+        rememberWorkspacePassword(data.workspace.id, workspacePasswordDraft.trim());
+      }
+      setWorkspacePasswordDraft("");
+      setHistory(data.history ?? history);
+    } catch (saveError) {
+      setError(
+        saveError instanceof Error
+          ? saveError.message
+          : "부서/팀 설정을 저장하지 못했습니다."
+      );
+    } finally {
+      setSavingWorkspace(false);
+    }
   }
 
   async function saveBoardSettings(nextSettings?: Partial<AppSettings>) {
@@ -491,7 +715,7 @@ export default function TaskBoard() {
     setError("");
 
     try {
-      const response = await fetch("/api/tasks", {
+      const response = await taskRequest( {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -1452,7 +1676,7 @@ export default function TaskBoard() {
     setSavingItemIds((current) => new Set(current).add(id));
 
     try {
-      const response = await fetch("/api/tasks", {
+      const response = await taskRequest( {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ itemId: id, actor: currentActor, ...patch }),
@@ -1516,7 +1740,7 @@ export default function TaskBoard() {
     });
 
     try {
-      const response = await fetch("/api/tasks", {
+      const response = await taskRequest( {
         method: "DELETE",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ itemId: item.id, actor: currentActor }),
@@ -1572,7 +1796,7 @@ export default function TaskBoard() {
     );
 
     try {
-      const response = await fetch("/api/tasks", {
+      const response = await taskRequest( {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ stepId: step.id, actor: currentActor, status }),
@@ -1606,7 +1830,7 @@ export default function TaskBoard() {
     setError("");
 
     try {
-      const response = await fetch("/api/tasks", {
+      const response = await taskRequest( {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ stepId: step.id, actor: currentActor, dueDate }),
@@ -1645,7 +1869,7 @@ export default function TaskBoard() {
     setSavingSubtaskIds((current) => new Set(current).add(subtaskId));
 
     try {
-      const response = await fetch("/api/tasks", {
+      const response = await taskRequest( {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ subtaskId, actor: currentActor, ...patch }),
@@ -1689,7 +1913,7 @@ export default function TaskBoard() {
     setError("");
 
     try {
-      const response = await fetch("/api/tasks", {
+      const response = await taskRequest( {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -1733,7 +1957,7 @@ export default function TaskBoard() {
     setError("");
 
     try {
-      const response = await fetch("/api/tasks", {
+      const response = await taskRequest( {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -1779,7 +2003,7 @@ export default function TaskBoard() {
     );
 
     try {
-      const response = await fetch("/api/tasks", {
+      const response = await taskRequest( {
         method: "DELETE",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ subtaskId: subtask.id, actor: currentActor }),
@@ -1830,7 +2054,7 @@ export default function TaskBoard() {
     setError("");
 
     try {
-      const response = await fetch("/api/tasks", {
+      const response = await taskRequest( {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -1887,7 +2111,7 @@ export default function TaskBoard() {
     setError("");
 
     try {
-      const response = await fetch("/api/tasks", {
+      const response = await taskRequest( {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -1920,7 +2144,7 @@ export default function TaskBoard() {
     setSavingItemIds((current) => new Set(current).add(item.id));
 
     try {
-      const response = await fetch("/api/tasks", {
+      const response = await taskRequest( {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -1960,7 +2184,7 @@ export default function TaskBoard() {
     setError("");
 
     try {
-      const response = await fetch("/api/documents");
+      const response = await documentRequest();
       const data = (await response.json()) as {
         documents?: DocumentTemplate[];
         error?: string;
@@ -1997,7 +2221,7 @@ export default function TaskBoard() {
       form.append("name", docName.trim() || docFile.name);
       form.append("actor", currentActor);
 
-      const response = await fetch("/api/documents", {
+      const response = await documentRequest( {
         method: "POST",
         body: form,
       });
@@ -2032,7 +2256,7 @@ export default function TaskBoard() {
     setError("");
 
     try {
-      const response = await fetch("/api/documents", {
+      const response = await documentRequest( {
         method: "DELETE",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ id: document.id, actor: currentActor }),
@@ -2056,12 +2280,51 @@ export default function TaskBoard() {
     }
   }
 
+  async function downloadDocument(doc: DocumentTemplate) {
+    setError("");
+
+    try {
+      const downloadResponse = await fetch(`/api/documents?id=${doc.id}`, {
+        headers: workspaceHeaders({
+          Accept: doc.mimeType || "application/octet-stream",
+        }),
+      });
+
+      if (!downloadResponse.ok) {
+        let message = "양식을 내려받지 못했습니다.";
+        try {
+          const data = (await downloadResponse.json()) as { error?: string };
+          message = data.error ?? message;
+        } catch {
+          // The response may be a non-JSON error page.
+        }
+        throw new Error(message);
+      }
+
+      const blob = await downloadResponse.blob();
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = doc.filename;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+    } catch (downloadError) {
+      setError(
+        downloadError instanceof Error
+          ? downloadError.message
+          : "양식을 내려받지 못했습니다."
+      );
+    }
+  }
+
   async function saveWebhook(nextUrl: string, nextEnabled: boolean) {
     setSavingWebhook(true);
     setError("");
 
     try {
-      const response = await fetch("/api/tasks", {
+      const response = await taskRequest( {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -2097,7 +2360,7 @@ export default function TaskBoard() {
     setError("");
 
     try {
-      const response = await fetch("/api/tasks", {
+      const response = await taskRequest( {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -2270,7 +2533,7 @@ export default function TaskBoard() {
     setError("");
 
     try {
-      const response = await fetch("/api/tasks", {
+      const response = await taskRequest( {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -2355,7 +2618,7 @@ export default function TaskBoard() {
     setError("");
 
     try {
-      const response = await fetch("/api/tasks", {
+      const response = await taskRequest( {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -2409,7 +2672,7 @@ export default function TaskBoard() {
     setError("");
 
     try {
-      const response = await fetch("/api/tasks", {
+      const response = await taskRequest( {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -2447,7 +2710,7 @@ export default function TaskBoard() {
     setSavingItemIds((current) => new Set(current).add(itemId));
 
     try {
-      const response = await fetch("/api/tasks", {
+      const response = await taskRequest( {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -2516,7 +2779,7 @@ export default function TaskBoard() {
     applyOptimisticOrder(order, itemId, category);
 
     try {
-      const response = await fetch("/api/tasks", {
+      const response = await taskRequest( {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -2681,7 +2944,7 @@ export default function TaskBoard() {
     setError("");
 
     try {
-      const response = await fetch("/api/tasks", {
+      const response = await taskRequest( {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -2819,7 +3082,7 @@ export default function TaskBoard() {
     }
 
     try {
-      const response = await fetch("/api/tasks", {
+      const response = await taskRequest( {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -2886,7 +3149,7 @@ export default function TaskBoard() {
     );
 
     try {
-      const response = await fetch("/api/tasks", {
+      const response = await taskRequest( {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -2951,7 +3214,7 @@ export default function TaskBoard() {
     });
 
     try {
-      const response = await fetch("/api/tasks", {
+      const response = await taskRequest( {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -3436,6 +3699,62 @@ export default function TaskBoard() {
             </div>
           </div>
 
+          <div className="tb-filter-strip flex flex-wrap items-end gap-2">
+            <label className="min-w-[220px] flex-1">
+              <span className="tb-label">부서 / 팀</span>
+              <select
+                value={activeWorkspaceId}
+                onChange={(event) => setActiveWorkspaceId(event.target.value)}
+                className="tb-field"
+              >
+                {workspaces.length ? (
+                  workspaces.map((workspace) => (
+                    <option key={workspace.id} value={workspace.id}>
+                      {workspace.label}
+                      {workspace.requiresPassword ? " · 잠금" : ""}
+                    </option>
+                  ))
+                ) : (
+                  <option value={activeWorkspaceId}>
+                    {workspaceName(activeWorkspace)}
+                  </option>
+                )}
+              </select>
+            </label>
+
+            <form
+              onSubmit={createWorkspace}
+              className="grid flex-[2] gap-2 md:grid-cols-[minmax(120px,1fr)_minmax(140px,1fr)_120px_auto]"
+            >
+              <input
+                value={newWorkspaceDepartment}
+                onChange={(event) => setNewWorkspaceDepartment(event.target.value)}
+                className="tb-field"
+                placeholder="새 부서명"
+              />
+              <input
+                value={newWorkspaceTeam}
+                onChange={(event) => setNewWorkspaceTeam(event.target.value)}
+                className="tb-field"
+                placeholder="새 팀명"
+              />
+              <input
+                type="password"
+                value={newWorkspacePassword}
+                onChange={(event) => setNewWorkspacePassword(event.target.value)}
+                className="tb-field"
+                placeholder="암호"
+              />
+              <button
+                type="submit"
+                disabled={creatingWorkspace}
+                className="tb-btn tb-btn-primary"
+              >
+                {creatingWorkspace ? "추가 중" : "+ 팀"}
+              </button>
+            </form>
+          </div>
+
           <div className="flex flex-col gap-3">
             <div className="flex flex-wrap items-center gap-2">
               <div className="relative min-w-[220px] flex-1">
@@ -3785,7 +4104,51 @@ export default function TaskBoard() {
         </div>
       </header>
 
-      <section className="mx-auto max-w-[1600px] px-4 py-5 sm:px-6 lg:px-8">
+      {workspaceLocked ? (
+        <section className="mx-auto max-w-[720px] px-4 py-10 sm:px-6 lg:px-8">
+          <div className="tb-card p-6 shadow-[var(--shadow)]">
+            <div className="mb-5">
+              <span className="tb-badge tb-badge-muted">잠금 보드</span>
+              <h2 className="mt-3 text-xl font-semibold">
+                {workspaceName(activeWorkspace)}
+              </h2>
+              <p className="mt-2 text-sm leading-6 text-[var(--text-muted)]">
+                이 부서/팀 정보를 보려면 암호를 입력해 주세요. 암호는 현재
+                브라우저 세션에만 기억됩니다.
+              </p>
+            </div>
+
+            {error ? (
+              <div className="mb-4 rounded-[var(--radius)] border border-[var(--danger-border)] bg-[var(--danger-soft)] px-4 py-3 text-sm font-medium text-[var(--danger)]">
+                {error}
+              </div>
+            ) : null}
+
+            <form
+              onSubmit={unlockWorkspace}
+              className="grid gap-2 sm:grid-cols-[1fr_auto]"
+            >
+              <input
+                type="password"
+                value={workspacePasswordInput}
+                onChange={(event) => setWorkspacePasswordInput(event.target.value)}
+                className="tb-field"
+                placeholder="부서/팀 암호"
+                autoFocus
+              />
+              <button type="submit" className="tb-btn tb-btn-primary">
+                입장
+              </button>
+            </form>
+          </div>
+        </section>
+      ) : null}
+
+      <section
+        className={`mx-auto max-w-[1600px] px-4 py-5 sm:px-6 lg:px-8 ${
+          workspaceLocked ? "hidden" : ""
+        }`}
+      >
         {error ? (
           <div className="mb-4 flex items-center gap-2 rounded-[var(--radius)] border border-[var(--danger-border)] bg-[var(--danger-soft)] px-4 py-3 text-sm font-medium text-[var(--danger)]">
             {error}
@@ -6856,6 +7219,44 @@ export default function TaskBoard() {
           <section className="tb-card tb-section p-5">
             <h2 className="text-base font-semibold">보드 설정</h2>
             <div className="mt-3 grid gap-3.5">
+              <div className="grid gap-3 border-b border-[var(--border)] pb-3">
+                <div>
+                  <span className="tb-label">현재 부서/팀</span>
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    <input
+                      value={workspaceDepartmentDraft}
+                      onChange={(event) =>
+                        setWorkspaceDepartmentDraft(event.target.value)
+                      }
+                      className="tb-field"
+                      placeholder="부서명"
+                    />
+                    <input
+                      value={workspaceTeamDraft}
+                      onChange={(event) => setWorkspaceTeamDraft(event.target.value)}
+                      className="tb-field"
+                      placeholder="팀명"
+                    />
+                  </div>
+                </div>
+                <div className="grid gap-2 sm:grid-cols-[1fr_auto]">
+                  <input
+                    type="password"
+                    value={workspacePasswordDraft}
+                    onChange={(event) => setWorkspacePasswordDraft(event.target.value)}
+                    className="tb-field"
+                    placeholder="새 암호 (변경할 때만 입력)"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => void saveWorkspaceSettings()}
+                    disabled={savingWorkspace}
+                    className="tb-btn tb-btn-primary"
+                  >
+                    {savingWorkspace ? "저장 중" : "부서/팀 저장"}
+                  </button>
+                </div>
+              </div>
               <label>
                 <span className="tb-label">조직명</span>
                 <input
@@ -7758,13 +8159,14 @@ export default function TaskBoard() {
                           KB · {doc.uploadedBy} · {formatDate(doc.createdAt)}
                         </div>
                       </div>
-                      <a
-                        href={`/api/documents?id=${doc.id}`}
+                      <button
+                        type="button"
+                        onClick={() => void downloadDocument(doc)}
                         className="tb-btn shrink-0 !px-3 !py-1.5 text-xs"
                         title="다운로드"
                       >
                         ⬇ 다운로드
-                      </a>
+                      </button>
                       <button
                         type="button"
                         onClick={() => void deleteDocument(doc)}

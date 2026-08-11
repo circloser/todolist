@@ -50,6 +50,13 @@
       "when": 1782189491346,
       "tag": "0006_steady_spencer_smythe",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "6",
+      "when": 1786417258995,
+      "tag": "0007_grey_sunspot",
+      "breakpoints": true
     }
   ]
 }
