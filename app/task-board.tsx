@@ -457,6 +457,7 @@ export default function TaskBoard() {
   const [mapSearchResults, setMapSearchResults] = useState<MapSearchResult[]>([]);
   const [mapSearching, setMapSearching] = useState(false);
   const [mapSearchError, setMapSearchError] = useState("");
+  const [mapSettingsOpen, setMapSettingsOpen] = useState(false);
   const [ganttDrag, setGanttDrag] = useState<{
     itemId: number;
     pct: number;
@@ -4053,8 +4054,12 @@ export default function TaskBoard() {
   return (
     <main className="tb-app min-h-dvh">
       {/* On phones the full header would cover most of the viewport, so it
-          only sticks from lg upward. */}
-      <header className="tb-topbar z-30 lg:sticky lg:top-0">
+          only sticks from lg upward. In map view it scrolls away so the map can breathe. */}
+      <header
+        className={`tb-topbar z-30 ${
+          viewMode === "map" ? "" : "lg:sticky lg:top-0"
+        }`}
+      >
         <div className="mx-auto flex max-w-[1600px] flex-col gap-4 px-4 py-4 sm:px-6 lg:px-8">
           <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
             <div className="min-w-0">
@@ -6430,8 +6435,8 @@ export default function TaskBoard() {
             </div>
           </div>
         ) : viewMode === "map" ? (
-          <div className="grid gap-4 lg:grid-cols-[1fr_320px]">
-            <div className="tb-card tb-map-shell overflow-hidden">
+          <div className="grid items-stretch gap-4 lg:grid-cols-[minmax(0,1fr)_300px]">
+            <div className="tb-card tb-map-shell min-h-[560px] overflow-hidden lg:min-h-[calc(100dvh-220px)]">
               {placingItemId !== null || creatingOnMap ? (
                 <div className="flex items-center justify-between gap-3 border-b border-[var(--warning-border)] bg-[var(--warning-soft)] px-4 py-2 text-sm font-medium text-[var(--warning)]">
                   <span>
@@ -6462,86 +6467,33 @@ export default function TaskBoard() {
               ) : null}
               <div
                 ref={mapContainerRef}
-                className="tb-map-canvas h-[68vh] min-h-[420px] w-full"
+                className="tb-map-canvas h-full min-h-[560px] w-full lg:min-h-[calc(100dvh-220px)]"
               />
             </div>
 
-            <div className="space-y-4">
-              <button
-                type="button"
-                onClick={() => {
-                  setPlacingItemId(null);
-                  setCreatingOnMap(true);
-                }}
-                disabled={creatingOnMap}
-                className="tb-btn tb-btn-primary w-full"
-              >
-                ＋ 지도를 클릭해 새 업무 추가
-              </button>
-
-              <div className="tb-card p-4">
-                <h2 className="text-sm font-semibold">지도 설정</h2>
-                <div className="mt-3 grid grid-cols-2 gap-2">
-                  <label className="block">
-                    <span className="tb-label">지도</span>
-                    <select
-                      value={mapProvider}
-                      onChange={(event) =>
-                        setMapProvider(event.target.value as MapProvider)
-                      }
-                      className="tb-field"
-                    >
-                      {(
-                        Object.entries(MAP_PROVIDER_LABELS) as Array<
-                          [MapProvider, string]
-                        >
-                      ).map(([key, label]) => (
-                        <option key={key} value={key}>
-                          {label}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                  <label className="block">
-                    <span className="tb-label">형식</span>
-                    <select
-                      value={mapStyle}
-                      onChange={(event) =>
-                        setMapStyle(event.target.value as MapStyle)
-                      }
-                      className="tb-field"
-                    >
-                      {(
-                        Object.entries(MAP_STYLE_LABELS) as Array<
-                          [MapStyle, string]
-                        >
-                      ).map(([key, label]) => (
-                        <option key={key} value={key}>
-                          {label}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                </div>
-                <div className="mt-2 grid gap-2">
-                  <input
-                    value={vworldMapKey}
-                    onChange={(event) => setVworldMapKey(event.target.value)}
-                    className="tb-field px-2 py-1.5 text-xs"
-                    placeholder="VWorld API 키"
-                  />
-                  <input
-                    value={googleMapKey}
-                    onChange={(event) => setGoogleMapKey(event.target.value)}
-                    className="tb-field px-2 py-1.5 text-xs"
-                    placeholder="Google 지도 API 키"
-                  />
-                </div>
-                {activeMapTileNotice ? (
-                  <p className="mt-2 text-[11px] leading-4 text-[var(--text-faint)]">
-                    {activeMapTileNotice}
-                  </p>
-                ) : null}
+            <div className="space-y-3">
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setPlacingItemId(null);
+                    setCreatingOnMap(true);
+                  }}
+                  disabled={creatingOnMap}
+                  className="tb-btn tb-btn-primary justify-center"
+                >
+                  + 새 업무
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setMapSettingsOpen(true)}
+                  className="tb-btn justify-center"
+                >
+                  지도 설정
+                </button>
+              </div>
+              <div className="text-center text-[11px] text-[var(--text-faint)]">
+                {MAP_PROVIDER_LABELS[mapProvider]} · {MAP_STYLE_LABELS[mapStyle]}
               </div>
 
               <div className="tb-card p-4">
@@ -8128,6 +8080,110 @@ export default function TaskBoard() {
                     ? "보드 설정에서 Slack/Discord 웹훅을 등록하면 발송할 수 있습니다."
                     : "")}
               </span>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {mapSettingsOpen ? (
+        <div
+          className="fixed inset-0 z-50 flex items-start justify-center overflow-auto bg-black/40 p-4 backdrop-blur-sm"
+          onClick={() => setMapSettingsOpen(false)}
+        >
+          <div
+            className="tb-card my-10 w-full max-w-[440px] shadow-[var(--shadow-lg)]"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="flex items-center justify-between border-b border-[var(--border)] px-5 py-3.5">
+              <h2 className="text-base font-semibold">지도 설정</h2>
+              <button
+                type="button"
+                onClick={() => setMapSettingsOpen(false)}
+                className="tb-iconbtn h-8 w-8"
+              >
+                ×
+              </button>
+            </div>
+
+            <div className="space-y-3 p-5">
+              <div className="grid grid-cols-2 gap-2">
+                <label className="block">
+                  <span className="tb-label">지도</span>
+                  <select
+                    value={mapProvider}
+                    onChange={(event) =>
+                      setMapProvider(event.target.value as MapProvider)
+                    }
+                    className="tb-field"
+                  >
+                    {(
+                      Object.entries(MAP_PROVIDER_LABELS) as Array<
+                        [MapProvider, string]
+                      >
+                    ).map(([key, label]) => (
+                      <option key={key} value={key}>
+                        {label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="block">
+                  <span className="tb-label">형식</span>
+                  <select
+                    value={mapStyle}
+                    onChange={(event) =>
+                      setMapStyle(event.target.value as MapStyle)
+                    }
+                    className="tb-field"
+                  >
+                    {(
+                      Object.entries(MAP_STYLE_LABELS) as Array<
+                        [MapStyle, string]
+                      >
+                    ).map(([key, label]) => (
+                      <option key={key} value={key}>
+                        {label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+
+              <label className="block">
+                <span className="tb-label">VWorld API 키</span>
+                <input
+                  value={vworldMapKey}
+                  onChange={(event) => setVworldMapKey(event.target.value)}
+                  className="tb-field"
+                  placeholder="VWorld API 키"
+                />
+              </label>
+
+              <label className="block">
+                <span className="tb-label">Google 지도 API 키</span>
+                <input
+                  value={googleMapKey}
+                  onChange={(event) => setGoogleMapKey(event.target.value)}
+                  className="tb-field"
+                  placeholder="Google 지도 API 키"
+                />
+              </label>
+
+              {activeMapTileNotice ? (
+                <p className="text-xs leading-5 text-[var(--text-faint)]">
+                  {activeMapTileNotice}
+                </p>
+              ) : null}
+
+              <div className="flex justify-end pt-1">
+                <button
+                  type="button"
+                  onClick={() => setMapSettingsOpen(false)}
+                  className="tb-btn tb-btn-primary"
+                >
+                  닫기
+                </button>
+              </div>
             </div>
           </div>
         </div>
