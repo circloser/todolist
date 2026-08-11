@@ -284,6 +284,7 @@ function readMapPrefs() {
 }
 
 const WORKSPACE_STORAGE_KEY = "team-progress-workspace-id";
+const RECENT_WORKSPACES_STORAGE_KEY = "team-progress-recent-workspace-ids";
 
 function readStoredWorkspaceId() {
   if (typeof window === "undefined") {
@@ -291,6 +292,30 @@ function readStoredWorkspaceId() {
   }
 
   return window.localStorage.getItem(WORKSPACE_STORAGE_KEY) || "default";
+}
+
+function readRecentWorkspaceIds() {
+  if (typeof window === "undefined") {
+    return [];
+  }
+
+  const currentWorkspaceId = window.localStorage.getItem(WORKSPACE_STORAGE_KEY);
+  const stored = window.localStorage.getItem(RECENT_WORKSPACES_STORAGE_KEY);
+  let ids: string[] = [];
+
+  try {
+    const parsed = stored ? JSON.parse(stored) : [];
+    ids = Array.isArray(parsed)
+      ? parsed.filter((id): id is string => typeof id === "string" && Boolean(id))
+      : [];
+  } catch {
+    ids = [];
+  }
+
+  return [
+    ...(currentWorkspaceId ? [currentWorkspaceId] : []),
+    ...ids,
+  ].filter((id, index, list) => list.indexOf(id) === index);
 }
 
 function workspacePasswordKey(id: string) {
@@ -374,6 +399,9 @@ export default function TaskBoard() {
   const [creatingWorkspace, setCreatingWorkspace] = useState(false);
   const [savingWorkspace, setSavingWorkspace] = useState(false);
   const [userName, setUserName] = useState(readStoredUserName);
+  const [recentWorkspaceIds, setRecentWorkspaceIds] = useState(
+    readRecentWorkspaceIds
+  );
   const [filter, setFilter] = useState<TaskFilter>("all");
   const [dueFilter, setDueFilter] = useState<DueFilter>("all");
   const [sortMode, setSortMode] = useState<SortMode>("manual");
@@ -397,6 +425,7 @@ export default function TaskBoard() {
   const leafletMapRef = useRef<LeafletNS.Map | null>(null);
   const markerLayerRef = useRef<LeafletNS.LayerGroup | null>(null);
   const tileLayerRef = useRef<LeafletNS.TileLayer | null>(null);
+  const landingPasswordRef = useRef<HTMLInputElement | null>(null);
   const openItemRef = useRef<(id: number) => void>(() => {});
   const clearMapPinRef = useRef<(id: number) => void>(() => {});
   const moveMapPinRef = useRef<(id: number, lat: number, lng: number) => void>(
@@ -558,6 +587,19 @@ export default function TaskBoard() {
     }
   }
 
+  function rememberRecentWorkspace(id: string) {
+    setRecentWorkspaceIds((current) => {
+      const next = [id, ...current.filter((workspaceId) => workspaceId !== id)]
+        .filter(Boolean)
+        .slice(0, 6);
+      window.localStorage.setItem(
+        RECENT_WORKSPACES_STORAGE_KEY,
+        JSON.stringify(next)
+      );
+      return next;
+    });
+  }
+
   async function loadTasks(passwordOverride?: string, workspaceIdOverride?: string) {
     setLoading(true);
     setError("");
@@ -603,6 +645,7 @@ export default function TaskBoard() {
         rememberWorkspacePassword(targetWorkspaceId, submittedPassword);
       }
       setActiveWorkspaceId(targetWorkspaceId);
+      rememberRecentWorkspace(data.workspace?.id ?? targetWorkspaceId);
       setWorkspaceLocked(false);
       setItems(data.items ?? []);
       setTemplates(data.templates?.length ? data.templates : defaultTemplates);
@@ -704,6 +747,7 @@ export default function TaskBoard() {
       }
 
       window.localStorage.setItem(WORKSPACE_STORAGE_KEY, data.workspace.id);
+      rememberRecentWorkspace(data.workspace.id);
       setWorkspaces(data.workspaces ?? []);
       setActiveWorkspace(data.workspace);
       setActiveWorkspaceId(data.workspace.id);
@@ -3754,6 +3798,20 @@ export default function TaskBoard() {
     .map((workspace) => workspaceTeam(workspace))
     .filter((team, index, list) => list.indexOf(team) === index)
     .sort((first, second) => first.localeCompare(second, "ko-KR"));
+  const recentLandingWorkspaces = recentWorkspaceIds
+    .map((id) => landingWorkspaces.find((workspace) => workspace.id === id))
+    .filter(
+      (workspace, index, list): workspace is WorkspaceSummary => {
+        if (!workspace) {
+          return false;
+        }
+
+        return (
+          list.findIndex((candidate) => candidate?.id === workspace.id) === index
+        );
+      }
+    )
+    .slice(0, 4);
 
   function chooseLandingYear(year: string) {
     const workspace =
@@ -3764,6 +3822,14 @@ export default function TaskBoard() {
       setActiveWorkspaceId(workspace.id);
       setActiveWorkspace(workspace);
     }
+  }
+
+  function chooseRecentWorkspace(workspace: WorkspaceSummary) {
+    setActiveWorkspaceId(workspace.id);
+    setActiveWorkspace(workspace);
+    setWorkspacePasswordInput("");
+    setError("");
+    window.setTimeout(() => landingPasswordRef.current?.focus(), 0);
   }
 
   function chooseLandingTeam(team: string) {
@@ -3824,6 +3890,37 @@ export default function TaskBoard() {
               />
             </label>
 
+            {recentLandingWorkspaces.length ? (
+              <div className="mb-4 grid gap-2">
+                <span className="tb-label">최근 접속</span>
+                <div className="grid gap-2">
+                  {recentLandingWorkspaces.map((workspace) => {
+                    const selected = workspace.id === selectedLandingWorkspace?.id;
+
+                    return (
+                      <button
+                        key={workspace.id}
+                        type="button"
+                        onClick={() => chooseRecentWorkspace(workspace)}
+                        className={`flex w-full items-center justify-between rounded-[calc(var(--radius)-2px)] border px-3 py-2 text-left text-sm transition ${
+                          selected
+                            ? "border-[var(--accent)] bg-[var(--accent-soft)] text-[var(--text)]"
+                            : "border-[var(--border)] bg-transparent text-[var(--text-muted)] hover:border-[var(--accent-border)] hover:text-[var(--text)]"
+                        }`}
+                      >
+                        <span className="font-semibold">
+                          {workspaceName(workspace)}
+                        </span>
+                        <span className="text-xs text-[var(--text-faint)]">
+                          선택
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            ) : null}
+
             <form onSubmit={enterLanding} className="grid gap-3">
               <label>
                 <span className="tb-label">연도</span>
@@ -3868,6 +3965,7 @@ export default function TaskBoard() {
               <label>
                 <span className="tb-label">암호</span>
                 <input
+                  ref={landingPasswordRef}
                   type="password"
                   value={workspacePasswordInput}
                   onChange={(event) => setWorkspacePasswordInput(event.target.value)}
