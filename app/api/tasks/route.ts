@@ -2,9 +2,11 @@ import { getD1 } from "../../../db";
 import {
   DEFAULT_WORKSPACE_ID,
   ensureWorkspaceTables,
+  hashWorkspacePassword,
   listWorkspaces,
   makeWorkspacePassword,
   requireWorkspaceAccess,
+  type WorkspaceRow,
   workspaceLabel,
 } from "../workspace-auth";
 
@@ -971,6 +973,277 @@ async function createItemWithDefaultSteps({
   return itemId;
 }
 
+function previousYearLabel(year: string) {
+  const match = year.match(/\d{4}/);
+
+  if (!match) {
+    return "";
+  }
+
+  return String(Number(match[0]) - 1);
+}
+
+async function findPreviousYearWorkspace(year: string, teamName: string) {
+  const previous = previousYearLabel(year);
+
+  if (!previous || !teamName) {
+    return null;
+  }
+
+  return await getD1()
+    .prepare(
+      `SELECT * FROM workspaces
+       WHERE team_name = ?
+         AND (department_name = ? OR department_name = ?)
+       ORDER BY updated_at DESC, created_at DESC
+       LIMIT 1`
+    )
+    .bind(teamName, previous, `${previous}년도`)
+    .first<WorkspaceRow>();
+}
+
+async function verifyWorkspacePassword(
+  workspace: WorkspaceRow,
+  password: string
+) {
+  if (!workspace.password_hash || !workspace.password_salt) {
+    return true;
+  }
+
+  if (!password) {
+    return false;
+  }
+
+  const hash = await hashWorkspacePassword(password, workspace.password_salt);
+  return hash === workspace.password_hash;
+}
+
+async function copyWorkspaceData({
+  sourceWorkspaceId,
+  targetWorkspaceId,
+  actor,
+}: {
+  sourceWorkspaceId: string;
+  targetWorkspaceId: string;
+  actor: string;
+}) {
+  const d1 = getD1();
+  const now = new Date().toISOString();
+  const itemIdMap = new Map<number, number>();
+  const stepIdMap = new Map<number, number>();
+
+  const sourceItems = await d1
+    .prepare(
+      "SELECT * FROM workflow_items WHERE workspace_id = ? ORDER BY position, id"
+    )
+    .bind(sourceWorkspaceId)
+    .all<WorkflowItemRow>();
+
+  for (const item of sourceItems.results ?? []) {
+    const insertResult = await d1
+      .prepare(`INSERT INTO workflow_items (
+        workspace_id,
+        title,
+        assignee,
+        category,
+        memo,
+        allocated_budget,
+        required_budget,
+        contract_vendor,
+        contract_manager,
+        contract_phone,
+        contract_amount,
+        due_date,
+        location,
+        lat,
+        lng,
+        links,
+        template_key,
+        position,
+        updated_by,
+        updated_at,
+        created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+      .bind(
+        targetWorkspaceId,
+        item.title,
+        item.assignee,
+        item.category ?? "",
+        item.memo ?? "",
+        item.allocated_budget,
+        item.required_budget,
+        item.contract_vendor ?? "",
+        item.contract_manager ?? "",
+        item.contract_phone ?? "",
+        item.contract_amount,
+        item.due_date,
+        item.location ?? "",
+        item.lat,
+        item.lng,
+        item.links ?? "[]",
+        item.template_key,
+        item.position,
+        item.updated_by || actor,
+        now,
+        now
+      )
+      .run();
+
+    itemIdMap.set(item.id, Number(insertResult.meta.last_row_id));
+  }
+
+  const sourceSteps = await d1
+    .prepare(
+      `SELECT s.*
+       FROM workflow_steps s
+       JOIN workflow_items i ON i.id = s.item_id
+       WHERE i.workspace_id = ?
+       ORDER BY s.item_id, s.position, s.id`
+    )
+    .bind(sourceWorkspaceId)
+    .all<WorkflowStepRow>();
+
+  for (const step of sourceSteps.results ?? []) {
+    const nextItemId = itemIdMap.get(step.item_id);
+
+    if (!nextItemId) {
+      continue;
+    }
+
+    const insertResult = await d1
+      .prepare(`INSERT INTO workflow_steps (
+        item_id,
+        stage_key,
+        title,
+        description,
+        phase_group,
+        position,
+        progress_value,
+        status,
+        due_date,
+        completed_at,
+        updated_by,
+        updated_at,
+        created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+      .bind(
+        nextItemId,
+        step.stage_key,
+        step.title,
+        step.description,
+        step.phase_group,
+        step.position,
+        step.progress_value,
+        step.status,
+        step.due_date,
+        step.completed_at,
+        step.updated_by || actor,
+        now,
+        now
+      )
+      .run();
+
+    stepIdMap.set(step.id, Number(insertResult.meta.last_row_id));
+  }
+
+  const sourceSubtasks = await d1
+    .prepare(
+      `SELECT s.*
+       FROM workflow_subtasks s
+       JOIN workflow_items i ON i.id = s.item_id
+       WHERE i.workspace_id = ?
+       ORDER BY s.item_id, s.position, s.id`
+    )
+    .bind(sourceWorkspaceId)
+    .all<WorkflowSubtaskRow>();
+
+  const subtaskStatements = (sourceSubtasks.results ?? [])
+    .map((subtask) => {
+      const nextItemId = itemIdMap.get(subtask.item_id);
+
+      if (!nextItemId) {
+        return null;
+      }
+
+      const nextStepId =
+        subtask.step_id !== null ? stepIdMap.get(subtask.step_id) ?? null : null;
+
+      return d1
+        .prepare(`INSERT INTO workflow_subtasks (
+          item_id,
+          step_id,
+          title,
+          status,
+          due_date,
+          blockers,
+          position,
+          updated_by,
+          updated_at,
+          created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+        .bind(
+          nextItemId,
+          nextStepId,
+          subtask.title,
+          subtask.status,
+          subtask.due_date,
+          subtask.blockers ?? "",
+          subtask.position,
+          subtask.updated_by || actor,
+          now,
+          now
+        );
+    })
+    .filter((statement): statement is D1PreparedStatement => Boolean(statement));
+
+  const assigneeSettings = await d1
+    .prepare(
+      "SELECT assignee, color, updated_at FROM workspace_assignee_settings WHERE workspace_id = ?"
+    )
+    .bind(sourceWorkspaceId)
+    .all<AssigneeSettingRow>();
+  const assigneeStatements = (assigneeSettings.results ?? []).map((setting) =>
+    d1
+      .prepare(`INSERT OR REPLACE INTO workspace_assignee_settings (
+        workspace_id, assignee, color, updated_at
+      ) VALUES (?, ?, ?, ?)`)
+      .bind(targetWorkspaceId, setting.assignee, setting.color, now)
+  );
+
+  const settings = await d1
+    .prepare(
+      "SELECT key, value, updated_at FROM workspace_settings WHERE workspace_id = ?"
+    )
+    .bind(sourceWorkspaceId)
+    .all<AppSettingRow>();
+  const settingStatements = (settings.results ?? [])
+    .filter((setting) => !["organizationName", "defaultItemSeeded"].includes(setting.key))
+    .map((setting) =>
+      d1
+        .prepare(`INSERT INTO workspace_settings (workspace_id, key, value, updated_at)
+          VALUES (?, ?, ?, ?)
+          ON CONFLICT(workspace_id, key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`)
+        .bind(targetWorkspaceId, setting.key, setting.value, now)
+    );
+
+  const statements = [
+    ...subtaskStatements,
+    ...assigneeStatements,
+    ...settingStatements,
+    d1
+      .prepare(`INSERT INTO workspace_settings (workspace_id, key, value, updated_at)
+        VALUES (?, 'defaultItemSeeded', 'true', ?)
+        ON CONFLICT(workspace_id, key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`)
+      .bind(targetWorkspaceId, now),
+  ];
+
+  if (statements.length) {
+    await d1.batch(statements);
+  }
+
+  return itemIdMap.size;
+}
+
 async function ensureDefaultItem(workspaceId: string) {
   const d1 = getD1();
   const seeded = await d1
@@ -1502,6 +1775,8 @@ export async function POST(request: Request) {
       departmentName?: string;
       teamName?: string;
       newWorkspacePassword?: string;
+      copyPreviousYear?: boolean;
+      sourceWorkspacePassword?: string;
       itemId?: number;
       title?: string;
       assignee?: string;
@@ -1532,6 +1807,15 @@ export async function POST(request: Request) {
         typeof payload.newWorkspacePassword === "string"
           ? payload.newWorkspacePassword.trim()
           : "";
+      const copyPreviousYear = payload.copyPreviousYear === true;
+      const sourceWorkspacePassword =
+        typeof payload.sourceWorkspacePassword === "string"
+          ? payload.sourceWorkspacePassword.trim()
+          : "";
+
+      if (!departmentName) {
+        return Response.json({ error: "연도를 입력해 주세요." }, { status: 400 });
+      }
 
       if (!teamName) {
         return Response.json({ error: "팀 이름을 입력해 주세요." }, { status: 400 });
@@ -1539,7 +1823,7 @@ export async function POST(request: Request) {
 
       if (password.length < 4) {
         return Response.json(
-          { error: "부서/팀 암호는 4자 이상으로 입력해 주세요." },
+          { error: "연도/팀 암호는 4자 이상으로 입력해 주세요." },
           { status: 400 }
         );
       }
@@ -1551,6 +1835,41 @@ export async function POST(request: Request) {
         department_name: departmentName,
         team_name: teamName,
       });
+      const existing = await d1
+        .prepare(
+          "SELECT id FROM workspaces WHERE department_name = ? AND team_name = ? LIMIT 1"
+        )
+        .bind(departmentName, teamName)
+        .first<{ id: string }>();
+
+      if (existing) {
+        return Response.json(
+          { error: "이미 같은 연도와 팀의 보드가 있습니다." },
+          { status: 409 }
+        );
+      }
+
+      let sourceWorkspace: WorkspaceRow | null = null;
+
+      if (copyPreviousYear) {
+        sourceWorkspace = await findPreviousYearWorkspace(departmentName, teamName);
+
+        if (!sourceWorkspace) {
+          return Response.json(
+            { error: "복사할 전년도 같은 팀 보드를 찾지 못했습니다." },
+            { status: 404 }
+          );
+        }
+
+        if (
+          !(await verifyWorkspacePassword(sourceWorkspace, sourceWorkspacePassword))
+        ) {
+          return Response.json(
+            { error: "전년도 보드 암호가 맞지 않습니다." },
+            { status: 401 }
+          );
+        }
+      }
 
       await d1
         .prepare(
@@ -1582,8 +1901,31 @@ export async function POST(request: Request) {
           )
           .bind(workspaceId, defaultAppSettings.boardTitle, now),
       ]);
-      await ensureDefaultItem(workspaceId);
+      let copiedItemCount = 0;
+
+      if (sourceWorkspace) {
+        copiedItemCount = await copyWorkspaceData({
+          sourceWorkspaceId: sourceWorkspace.id,
+          targetWorkspaceId: workspaceId,
+          actor,
+        });
+      }
+
+      if (!sourceWorkspace || copiedItemCount === 0) {
+        await ensureDefaultItem(workspaceId);
+      }
+
       await ensureDefaultSettings(workspaceId);
+
+      await logHistory({
+        workspaceId,
+        entityType: "workspace",
+        action: "create",
+        summary: sourceWorkspace
+          ? `${actor}님이 전년도 데이터를 복사해 '${organizationName}' 보드를 생성함`
+          : `${actor}님이 '${organizationName}' 보드를 생성함`,
+        actor,
+      });
 
       const workspace = await requireWorkspaceAccess(request, {
         workspaceId,
@@ -1602,6 +1944,7 @@ export async function POST(request: Request) {
           items: await getItems(workspaceId),
           history: await getHistory(workspaceId),
           groupOrder: await getGroupOrder(workspaceId),
+          templates: await getTemplatesFromDb(),
         },
         { status: 201 }
       );
@@ -2114,7 +2457,7 @@ export async function PATCH(request: Request) {
       if (newPassword) {
         if (newPassword.length < 4) {
           return Response.json(
-            { error: "부서/팀 암호는 4자 이상으로 입력해 주세요." },
+            { error: "연도/팀 암호는 4자 이상으로 입력해 주세요." },
             { status: 400 }
           );
         }
@@ -2158,7 +2501,7 @@ export async function PATCH(request: Request) {
         workspaceId,
         entityType: "workspace",
         action: "update",
-        summary: `${actor}님이 부서/팀 설정을 변경함`,
+        summary: `${actor}님이 연도/팀 설정을 변경함`,
         actor,
       });
 

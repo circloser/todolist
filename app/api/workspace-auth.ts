@@ -1,6 +1,8 @@
 import { getD1 } from "../../db";
 
 export const DEFAULT_WORKSPACE_ID = "default";
+export const DEFAULT_WORKSPACE_YEAR = "2026";
+const DEFAULT_WORKSPACE_PASSWORD = "5541";
 
 export type WorkspaceRow = {
   id: string;
@@ -119,11 +121,12 @@ async function copyLegacySettings(defaultTeamName: string, defaultBoardTitle: st
     d1
       .prepare(
         `UPDATE workspaces
-         SET team_name = CASE WHEN team_name = '' THEN ? ELSE team_name END,
+         SET department_name = CASE WHEN department_name = '' THEN ? ELSE department_name END,
+             team_name = CASE WHEN team_name = '' THEN ? ELSE team_name END,
              updated_at = ?
          WHERE id = ?`
       )
-      .bind(teamName, now, DEFAULT_WORKSPACE_ID),
+      .bind(DEFAULT_WORKSPACE_YEAR, teamName, now, DEFAULT_WORKSPACE_ID),
     d1
       .prepare(
         `INSERT OR IGNORE INTO workspace_settings (workspace_id, key, value, updated_at)
@@ -143,6 +146,36 @@ async function copyLegacySettings(defaultTeamName: string, defaultBoardTitle: st
       )
       .bind(DEFAULT_WORKSPACE_ID, groupOrder, now),
   ]);
+}
+
+async function ensureDefaultWorkspacePassword() {
+  const d1 = getD1();
+  const current = await getWorkspaceById(DEFAULT_WORKSPACE_ID);
+
+  if (!current) {
+    return;
+  }
+
+  const now = new Date().toISOString();
+
+  if (!current.department_name.trim()) {
+    await d1
+      .prepare(
+        "UPDATE workspaces SET department_name = ?, updated_at = ? WHERE id = ?"
+      )
+      .bind(DEFAULT_WORKSPACE_YEAR, now, DEFAULT_WORKSPACE_ID)
+      .run();
+  }
+
+  if (!current.password_hash || !current.password_salt) {
+    const credential = await makeWorkspacePassword(DEFAULT_WORKSPACE_PASSWORD);
+    await d1
+      .prepare(
+        "UPDATE workspaces SET password_hash = ?, password_salt = ?, updated_at = ? WHERE id = ?"
+      )
+      .bind(credential.hash, credential.salt, now, DEFAULT_WORKSPACE_ID)
+      .run();
+  }
 }
 
 export async function ensureWorkspaceTables({
@@ -194,6 +227,7 @@ export async function ensureWorkspaceTables({
     .run();
 
   await copyLegacySettings(defaultTeamName, defaultBoardTitle);
+  await ensureDefaultWorkspacePassword();
   await addColumnIfMissing(
     `ALTER TABLE workflow_items ADD COLUMN workspace_id TEXT NOT NULL DEFAULT '${DEFAULT_WORKSPACE_ID}'`
   );
@@ -259,7 +293,7 @@ export async function requireWorkspaceAccess(
     return {
       response: Response.json(
         {
-          error: "선택한 부서/팀을 찾을 수 없습니다.",
+          error: "선택한 연도/팀을 찾을 수 없습니다.",
           workspaces,
           defaultWorkspaceId: DEFAULT_WORKSPACE_ID,
         },
@@ -278,7 +312,7 @@ export async function requireWorkspaceAccess(
       return {
         response: Response.json(
           {
-            error: "이 부서/팀은 암호가 필요합니다.",
+            error: "이 연도/팀은 암호가 필요합니다.",
             requiresWorkspacePassword: true,
             workspace: toWorkspaceSummary(workspace),
             workspaces,
