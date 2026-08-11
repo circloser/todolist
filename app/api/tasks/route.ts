@@ -680,9 +680,6 @@ async function ensureSchema() {
       "CREATE INDEX IF NOT EXISTS workflow_items_assignee_idx ON workflow_items (assignee, position)"
     ),
     d1.prepare(
-      "CREATE INDEX IF NOT EXISTS workflow_items_workspace_position_idx ON workflow_items (workspace_id, position)"
-    ),
-    d1.prepare(
       "CREATE INDEX IF NOT EXISTS workflow_steps_item_position_idx ON workflow_steps (item_id, position)"
     ),
     d1.prepare(
@@ -690,9 +687,6 @@ async function ensureSchema() {
     ),
     d1.prepare(
       "CREATE INDEX IF NOT EXISTS workflow_history_created_idx ON workflow_history (created_at)"
-    ),
-    d1.prepare(
-      "CREATE INDEX IF NOT EXISTS workflow_history_workspace_created_idx ON workflow_history (workspace_id, created_at)"
     ),
   ]);
 
@@ -750,6 +744,18 @@ async function ensureSchema() {
   await addColumnIfMissing(
     "ALTER TABLE workflow_subtasks ADD COLUMN step_id INTEGER"
   );
+
+  await d1.batch([
+    d1.prepare(
+      "CREATE INDEX IF NOT EXISTS workflow_items_workspace_position_idx ON workflow_items (workspace_id, position)"
+    ),
+    d1.prepare(
+      "CREATE INDEX IF NOT EXISTS workflow_history_workspace_created_idx ON workflow_history (workspace_id, created_at)"
+    ),
+    d1.prepare(
+      "CREATE INDEX IF NOT EXISTS webhook_settings_workspace_idx ON webhook_settings (workspace_id)"
+    ),
+  ]);
 }
 
 async function logHistory({
