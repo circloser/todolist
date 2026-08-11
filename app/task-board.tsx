@@ -306,7 +306,7 @@ function readWorkspacePassword(id: string) {
 }
 
 function workspaceName(workspace: WorkspaceSummary | null) {
-  return workspace?.label || "연도/팀 보드";
+  return workspace?.label || "연도/조직 보드";
 }
 
 function workspaceYear(workspace: WorkspaceSummary | null) {
@@ -315,6 +315,20 @@ function workspaceYear(workspace: WorkspaceSummary | null) {
 
 function workspaceTeam(workspace: WorkspaceSummary | null) {
   return workspace?.teamName.trim() || "습지복원팀";
+}
+
+function workspaceOrganizationName(workspace: WorkspaceSummary | null) {
+  if (!workspace) {
+    return defaultSettings.organizationName;
+  }
+
+  return (
+    workspace.label.trim() ||
+    [workspace.departmentName.trim(), workspace.teamName.trim()]
+      .filter(Boolean)
+      .join(" ") ||
+    defaultSettings.organizationName
+  );
 }
 
 export default function TaskBoard() {
@@ -587,7 +601,8 @@ export default function TaskBoard() {
       setHistory(data.history ?? []);
       setAssigneeSettings(data.assigneeSettings ?? {});
       setOrganizationName(
-        data.settings?.organizationName ?? defaultSettings.organizationName
+        data.settings?.organizationName ??
+          workspaceOrganizationName(data.workspace ?? activeWorkspace)
       );
       setBoardTitle(data.settings?.boardTitle ?? defaultSettings.boardTitle);
       setWebhookUrl(data.webhook?.url ?? "");
@@ -650,7 +665,7 @@ export default function TaskBoard() {
     const password = newWorkspacePassword.trim();
 
     if (!year || !teamName || password.length < 4) {
-      setError("연도, 팀 이름, 4자 이상 암호를 입력해 주세요.");
+      setError("연도, 조직/팀 이름, 4자 이상 암호를 입력해 주세요.");
       return;
     }
 
@@ -674,9 +689,10 @@ export default function TaskBoard() {
       const data = (await response.json()) as TaskResponse;
 
       if (!response.ok || !data.workspace) {
-        throw new Error(data.error ?? "연도/팀 보드를 만들지 못했습니다.");
+        throw new Error(data.error ?? "연도/조직 보드를 만들지 못했습니다.");
       }
 
+      window.localStorage.setItem(WORKSPACE_STORAGE_KEY, data.workspace.id);
       setWorkspaces(data.workspaces ?? []);
       setActiveWorkspace(data.workspace);
       setActiveWorkspaceId(data.workspace.id);
@@ -688,8 +704,10 @@ export default function TaskBoard() {
       setItems(data.items ?? []);
       setTemplates(data.templates?.length ? data.templates : templates);
       setHistory(data.history ?? []);
-      setOrganizationName(data.settings?.organizationName ?? data.workspace.label);
-      setBoardTitle(data.settings?.boardTitle ?? boardTitle);
+      setOrganizationName(
+        data.settings?.organizationName ?? workspaceOrganizationName(data.workspace)
+      );
+      setBoardTitle(data.settings?.boardTitle ?? defaultSettings.boardTitle);
       setGroupOrder(data.groupOrder ?? []);
       setNewWorkspaceDepartment("");
       setNewWorkspaceTeam("");
@@ -700,7 +718,7 @@ export default function TaskBoard() {
       setError(
         createError instanceof Error
           ? createError.message
-          : "연도/팀 보드를 만들지 못했습니다."
+          : "연도/조직 보드를 만들지 못했습니다."
       );
     } finally {
       setCreatingWorkspace(false);
@@ -711,7 +729,7 @@ export default function TaskBoard() {
     const teamName = workspaceTeamDraft.trim();
 
     if (!teamName) {
-      setError("팀 이름을 입력해 주세요.");
+      setError("조직/팀 이름을 입력해 주세요.");
       return;
     }
 
@@ -733,7 +751,7 @@ export default function TaskBoard() {
       const data = (await response.json()) as TaskResponse;
 
       if (!response.ok || !data.workspace) {
-        throw new Error(data.error ?? "연도/팀 설정을 저장하지 못했습니다.");
+        throw new Error(data.error ?? "연도/조직 설정을 저장하지 못했습니다.");
       }
 
       setWorkspaces(data.workspaces ?? workspaces);
@@ -750,7 +768,7 @@ export default function TaskBoard() {
       setError(
         saveError instanceof Error
           ? saveError.message
-          : "연도/팀 설정을 저장하지 못했습니다."
+          : "연도/조직 설정을 저장하지 못했습니다."
       );
     } finally {
       setSavingWorkspace(false);
@@ -3755,7 +3773,7 @@ export default function TaskBoard() {
     event.preventDefault();
 
     if (!selectedLandingWorkspace) {
-      setError("입장할 연도와 팀을 선택해 주세요.");
+      setError("입장할 연도와 조직/팀을 선택해 주세요.");
       return;
     }
 
@@ -3778,7 +3796,7 @@ export default function TaskBoard() {
               Workflow Command Center
             </h1>
             <p className="mt-2 text-sm text-[var(--text-muted)]">
-              연도와 팀을 선택하고 암호를 입력해 주세요.
+              연도와 조직/팀을 선택하고 암호를 입력해 주세요.
             </p>
           </div>
 
@@ -3855,7 +3873,7 @@ export default function TaskBoard() {
               onSubmit={createWorkspace}
               className="mt-5 grid gap-3 border-t border-[var(--border)] pt-5"
             >
-              <div className="text-sm font-semibold">새 연도/팀 생성</div>
+              <div className="text-sm font-semibold">새 연도/조직 생성</div>
               <div className="grid gap-2 sm:grid-cols-2">
                 <input
                   value={newWorkspaceDepartment}
@@ -3867,7 +3885,7 @@ export default function TaskBoard() {
                   value={newWorkspaceTeam}
                   onChange={(event) => setNewWorkspaceTeam(event.target.value)}
                   className="tb-field"
-                  placeholder="팀명"
+                  placeholder="조직/팀명"
                 />
               </div>
               <input
@@ -3977,7 +3995,7 @@ export default function TaskBoard() {
               }}
               className="tb-btn"
             >
-              다른 연도/팀
+              다른 연도/조직
             </button>
           </div>
 
@@ -4339,7 +4357,7 @@ export default function TaskBoard() {
                 {workspaceName(activeWorkspace)}
               </h2>
               <p className="mt-2 text-sm leading-6 text-[var(--text-muted)]">
-                이 연도/팀 정보를 보려면 암호를 입력해 주세요. 암호는 현재
+                이 연도/조직 정보를 보려면 암호를 입력해 주세요. 암호는 현재
                 브라우저 세션에만 기억됩니다.
               </p>
             </div>
@@ -4359,7 +4377,7 @@ export default function TaskBoard() {
                 value={workspacePasswordInput}
                 onChange={(event) => setWorkspacePasswordInput(event.target.value)}
                 className="tb-field"
-                placeholder="연도/팀 암호"
+                placeholder="연도/조직 암호"
                 autoFocus
               />
               <button type="submit" className="tb-btn tb-btn-primary">
@@ -7447,7 +7465,7 @@ export default function TaskBoard() {
             <div className="mt-3 grid gap-3.5">
               <div className="grid gap-3 border-b border-[var(--border)] pb-3">
                 <div>
-                  <span className="tb-label">현재 연도/팀</span>
+                  <span className="tb-label">현재 연도/조직</span>
                   <div className="grid gap-2 sm:grid-cols-2">
                     <input
                       value={workspaceDepartmentDraft}
@@ -7461,7 +7479,7 @@ export default function TaskBoard() {
                       value={workspaceTeamDraft}
                       onChange={(event) => setWorkspaceTeamDraft(event.target.value)}
                       className="tb-field"
-                      placeholder="팀명"
+                      placeholder="조직/팀명"
                     />
                   </div>
                 </div>
@@ -7479,7 +7497,7 @@ export default function TaskBoard() {
                     disabled={savingWorkspace}
                     className="tb-btn tb-btn-primary"
                   >
-                    {savingWorkspace ? "저장 중" : "연도/팀 저장"}
+                    {savingWorkspace ? "저장 중" : "연도/조직 저장"}
                   </button>
                 </div>
               </div>
