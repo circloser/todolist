@@ -4053,13 +4053,7 @@ export default function TaskBoard() {
 
   return (
     <main className="tb-app min-h-dvh">
-      {/* On phones the full header would cover most of the viewport, so it
-          only sticks from lg upward. In map view it scrolls away so the map can breathe. */}
-      <header
-        className={`tb-topbar z-30 ${
-          viewMode === "map" ? "" : "lg:sticky lg:top-0"
-        }`}
-      >
+      <header className="tb-topbar z-30">
         <div className="mx-auto flex max-w-[1600px] flex-col gap-4 px-4 py-4 sm:px-6 lg:px-8">
           <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
             <div className="min-w-0">
