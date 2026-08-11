@@ -3254,11 +3254,16 @@ export default function TaskBoard() {
       google: googleMapKey,
       vworld: vworldMapKey,
     });
-    const layer = L.tileLayer(config.url, {
+    const tileOptions: LeafletNS.TileLayerOptions = {
       attribution: config.attribution,
       maxZoom: config.maxZoom,
-      subdomains: "subdomains" in config ? config.subdomains : undefined,
-    }).addTo(map);
+    };
+
+    if ("subdomains" in config) {
+      tileOptions.subdomains = config.subdomains;
+    }
+
+    const layer = L.tileLayer(config.url, tileOptions).addTo(map);
     tileLayerRef.current = layer;
   }, [googleMapKey, mapProvider, mapReady, mapStyle, viewMode, vworldMapKey]);
 
