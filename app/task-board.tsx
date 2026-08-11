@@ -305,6 +305,14 @@ function readWorkspacePassword(id: string) {
   return window.sessionStorage.getItem(workspacePasswordKey(id)) || "";
 }
 
+function readStoredUserName() {
+  if (typeof window === "undefined") {
+    return "사용자";
+  }
+
+  return window.localStorage.getItem("team-progress-user-name")?.trim() || "사용자";
+}
+
 function workspaceName(workspace: WorkspaceSummary | null) {
   return workspace?.label || "연도/조직 보드";
 }
@@ -365,7 +373,7 @@ export default function TaskBoard() {
   const [workspacePasswordDraft, setWorkspacePasswordDraft] = useState("");
   const [creatingWorkspace, setCreatingWorkspace] = useState(false);
   const [savingWorkspace, setSavingWorkspace] = useState(false);
-  const [userName, setUserName] = useState("사용자");
+  const [userName, setUserName] = useState(readStoredUserName);
   const [filter, setFilter] = useState<TaskFilter>("all");
   const [dueFilter, setDueFilter] = useState<DueFilter>("all");
   const [sortMode, setSortMode] = useState<SortMode>("manual");
@@ -647,6 +655,7 @@ export default function TaskBoard() {
     const nextUserName = value.trim() || "사용자";
     setUserName(nextUserName);
     window.localStorage.setItem("team-progress-user-name", nextUserName);
+    return nextUserName;
   }
 
   async function unlockWorkspace(event: FormEvent<HTMLFormElement>) {
@@ -669,6 +678,8 @@ export default function TaskBoard() {
       return;
     }
 
+    const actor = saveUserName(userName);
+
     setCreatingWorkspace(true);
     setError("");
 
@@ -678,7 +689,7 @@ export default function TaskBoard() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           action: "create-workspace",
-          actor: currentActor,
+          actor,
           departmentName: year,
           teamName,
           newWorkspacePassword: password,
@@ -3777,6 +3788,8 @@ export default function TaskBoard() {
       return;
     }
 
+    saveUserName(userName);
+
     const ok = await loadTasks(
       workspacePasswordInput,
       selectedLandingWorkspace.id
@@ -3801,6 +3814,16 @@ export default function TaskBoard() {
           </div>
 
           <div className="tb-card p-5 shadow-[var(--shadow)]">
+            <label className="mb-3 block">
+              <span className="tb-label">사용자명</span>
+              <input
+                value={userName}
+                onChange={(event) => setUserName(event.target.value)}
+                className="tb-field"
+                placeholder="이름"
+              />
+            </label>
+
             <form onSubmit={enterLanding} className="grid gap-3">
               <label>
                 <span className="tb-label">연도</span>
@@ -3823,7 +3846,7 @@ export default function TaskBoard() {
               </label>
 
               <label>
-                <span className="tb-label">팀</span>
+                <span className="tb-label">조직/팀</span>
                 <select
                   value={workspaceTeam(selectedLandingWorkspace)}
                   onChange={(event) => chooseLandingTeam(event.target.value)}
