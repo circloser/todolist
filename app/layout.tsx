@@ -2,8 +2,8 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "팀 진행 체크리스트",
-  description: "팀이 함께 보는 업무 단계별 진행 보드입니다.",
+  title: "부서/팀 업무 진행 보드",
+  description: "여러 부서와 팀이 함께 쓰는 암호 기반 업무 진행 보드입니다.",
   icons: {
     icon: "/favicon.svg",
     shortcut: "/favicon.svg",
