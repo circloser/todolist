@@ -147,6 +147,18 @@ select {
   #report-print table {
     break-inside: auto;
   }
+  #report-print .tb-report-list-section {
+    overflow: visible !important;
+  }
+  #report-print .tb-report-table {
+    min-width: 0 !important;
+    width: 100% !important;
+    font-size: 9px !important;
+  }
+  #report-print .tb-report-table th,
+  #report-print .tb-report-table td {
+    padding: 4px 5px !important;
+  }
   #report-print thead {
     display: table-header-group;
   }
@@ -291,6 +303,28 @@ select {
   .tb-line-button:hover {
     border-bottom-color: var(--accent-soft-2) !important;
     background: rgba(242, 246, 241, 0.6) !important;
+  }
+
+  .tb-report-table {
+    table-layout: fixed;
+  }
+
+  .tb-report-table th,
+  .tb-report-table td {
+    white-space: nowrap;
+    vertical-align: middle;
+  }
+
+  .tb-report-cell {
+    display: block;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .tb-report-table .tb-badge {
+    white-space: nowrap;
   }
 
   .tb-inline-panel {

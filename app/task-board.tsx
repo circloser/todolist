@@ -1592,7 +1592,7 @@ export default function TaskBoard() {
       <button
         type="button"
         onClick={() => toggleReportSort(key)}
-        className={`inline-flex items-center gap-1 font-semibold ${
+        className={`inline-flex items-center gap-1 whitespace-nowrap font-semibold ${
           align === "right" ? "ml-auto" : ""
         }`}
         title={`${label} 기준 정렬`}
@@ -8659,7 +8659,7 @@ export default function TaskBoard() {
           onClick={() => setReportOpen(false)}
         >
           <div
-            className="tb-print-card tb-card my-6 w-full max-w-[820px] shadow-[var(--shadow-lg)]"
+            className="tb-print-card tb-card my-6 w-full max-w-[1120px] shadow-[var(--shadow-lg)]"
             onClick={(event) => event.stopPropagation()}
           >
             <div className="tb-print-toolbar flex flex-wrap items-center gap-2 border-b border-[var(--border)] px-5 py-3.5">
@@ -8695,7 +8695,7 @@ export default function TaskBoard() {
               </div>
             </div>
 
-            <div id="report-print" className="max-h-[74vh] overflow-auto p-6">
+            <div id="report-print" className="max-h-[74vh] overflow-auto p-5">
               <div className="tb-report-dashboard">
                 <div className="mb-1 text-lg font-bold">
                   {organizationName} 업무 보고서 — {report.month}
@@ -8900,30 +8900,39 @@ export default function TaskBoard() {
                 </table>
               </div>
 
-              <div className="tb-report-list-section">
+              <div className="tb-report-list-section overflow-x-auto">
                 <div className="mb-2 text-sm font-semibold">업무 목록</div>
-                <table className="tb-table text-xs">
+                <table className="tb-table tb-report-table min-w-[980px] text-[11px] sm:text-xs">
+                <colgroup>
+                  <col className="w-[16%]" />
+                  <col className="w-[38%]" />
+                  <col className="w-[10%]" />
+                  <col className="w-[8%]" />
+                  <col className="w-[7%]" />
+                  <col className="w-[12%]" />
+                  <col className="w-[9%]" />
+                </colgroup>
                 <thead>
                   <tr className="text-left">
-                    <th className="px-3 py-2">
+                    <th className="px-2 py-2">
                       {reportSortButton("category", "대분류")}
                     </th>
-                    <th className="px-3 py-2">
+                    <th className="px-2 py-2">
                       {reportSortButton("title", "업무명")}
                     </th>
-                    <th className="px-3 py-2 text-right">
+                    <th className="px-2 py-2 text-right">
                       {reportSortButton("budget", "예산", "right")}
                     </th>
-                    <th className="px-3 py-2">
+                    <th className="px-2 py-2">
                       {reportSortButton("assignee", "담당")}
                     </th>
-                    <th className="px-3 py-2 text-right">
+                    <th className="px-2 py-2 text-right">
                       {reportSortButton("progress", "진행률", "right")}
                     </th>
-                    <th className="px-3 py-2">
+                    <th className="px-2 py-2">
                       {reportSortButton("dueDate", "마감일")}
                     </th>
-                    <th className="px-3 py-2">
+                    <th className="px-2 py-2">
                       {reportSortButton("status", "상태")}
                     </th>
                   </tr>
@@ -8931,17 +8940,43 @@ export default function TaskBoard() {
                 <tbody>
                   {report.itemRows.map((row) => (
                     <tr key={row.item.id}>
-                      <td className="px-3 py-2">{row.categoryName}</td>
-                      <td className="px-3 py-2">{row.item.title}</td>
-                      <td className="px-3 py-2 text-right">
-                        {row.budgetLabel || "—"}
+                      <td className="px-2 py-2">
+                        <span
+                          className="tb-report-cell"
+                          title={row.categoryName}
+                        >
+                          {row.categoryName}
+                        </span>
                       </td>
-                      <td className="px-3 py-2">
-                        {assigneeName(row.item.assignee)}
+                      <td className="px-2 py-2">
+                        <span
+                          className="tb-report-cell"
+                          title={row.item.title}
+                        >
+                          {row.item.title}
+                        </span>
                       </td>
-                      <td className="px-3 py-2 text-right">{row.progress}%</td>
-                      <td className="px-3 py-2">{row.item.dueDate ?? "—"}</td>
-                      <td className="px-3 py-2">
+                      <td className="px-2 py-2 text-right">
+                        <span
+                          className="tb-report-cell text-right"
+                          title={row.budgetLabel || "—"}
+                        >
+                          {row.budgetLabel || "—"}
+                        </span>
+                      </td>
+                      <td className="px-2 py-2">
+                        <span
+                          className="tb-report-cell"
+                          title={assigneeName(row.item.assignee)}
+                        >
+                          {assigneeName(row.item.assignee)}
+                        </span>
+                      </td>
+                      <td className="px-2 py-2 text-right">
+                        {row.progress}%
+                      </td>
+                      <td className="px-2 py-2">{row.item.dueDate ?? "—"}</td>
+                      <td className="px-2 py-2">
                         <span
                           className={`tb-badge ${
                             row.status === "완료"
