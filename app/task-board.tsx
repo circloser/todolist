@@ -1646,6 +1646,21 @@ export default function TaskBoard() {
     URL.revokeObjectURL(link.href);
   }
 
+  function printReport() {
+    document.body.classList.add("tb-printing-report");
+
+    const cleanup = () => {
+      document.body.classList.remove("tb-printing-report");
+      window.removeEventListener("afterprint", cleanup);
+    };
+
+    window.addEventListener("afterprint", cleanup);
+    window.setTimeout(() => {
+      window.print();
+      window.setTimeout(cleanup, 1000);
+    }, 0);
+  }
+
   // Date-axis timeline for the gantt view: range spans every known date
   // (creation, item due, step due) plus today, with light padding.
   const gantt = useMemo(() => {
@@ -8680,7 +8695,7 @@ export default function TaskBoard() {
                 </button>
                 <button
                   type="button"
-                  onClick={() => window.print()}
+                  onClick={printReport}
                   className="tb-btn tb-btn-primary text-sm"
                 >
                   인쇄 / PDF

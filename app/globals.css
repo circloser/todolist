@@ -103,6 +103,19 @@ select {
   body * {
     visibility: hidden;
   }
+  body.tb-printing-report,
+  body:has(#report-print) {
+    background: #ffffff !important;
+  }
+  body.tb-printing-report .tb-app,
+  body:has(#report-print) .tb-app {
+    min-height: 0 !important;
+    background: #ffffff !important;
+  }
+  body.tb-printing-report .tb-app > :not(.tb-print-shell),
+  body:has(#report-print) .tb-app > :not(.tb-print-shell) {
+    display: none !important;
+  }
   #report-print,
   #report-print *,
   #manual-print,
@@ -119,6 +132,16 @@ select {
     overflow: visible !important;
     padding: 0 !important;
   }
+  body.tb-printing-report #report-print,
+  body:has(#report-print) #report-print {
+    position: static !important;
+  }
+  body.tb-printing-report .tb-print-shell,
+  body.tb-printing-report .tb-print-shell *,
+  body:has(#report-print) .tb-print-shell,
+  body:has(#report-print) .tb-print-shell * {
+    visibility: visible !important;
+  }
   .tb-print-shell {
     position: absolute !important;
     inset: 0 auto auto 0 !important;
@@ -128,6 +151,12 @@ select {
     background: transparent !important;
     padding: 0 !important;
     backdrop-filter: none !important;
+  }
+  body.tb-printing-report .tb-print-shell,
+  body:has(#report-print) .tb-print-shell {
+    position: static !important;
+    inset: auto !important;
+    min-height: 0 !important;
   }
   .tb-print-card {
     width: 100% !important;
