@@ -9,12 +9,13 @@
   --surface-2: #f2f6f1;
   --surface-3: #e8eee8;
 
-  --border: #e3e9e0;
-  --border-strong: #cbd7cd;
+  --border: #dde5da;
+  --border-strong: #bfcdc2;
 
   --text: #17231f;
-  --text-muted: #5d6b65;
-  --text-faint: #8b9790;
+  /* 흰 배경 대비 4.5:1 이상을 유지해 작은 글씨도 읽히도록 */
+  --text-muted: #4f5d57;
+  --text-faint: #6b7871;
 
   --accent: #18786f;
   --accent-hover: #11645d;
@@ -243,8 +244,8 @@ select {
 
   /* Cards / surfaces */
   .tb-card {
-    background: rgba(255, 254, 250, 0.78);
-    border: 1px solid rgba(203, 215, 205, 0.62);
+    background: rgba(255, 254, 250, 0.94);
+    border: 1px solid rgba(191, 205, 194, 0.78);
     border-radius: var(--radius);
     box-shadow: var(--shadow-sm);
   }
@@ -850,6 +851,10 @@ select {
     background: var(--surface-3);
     border-color: var(--border-strong);
   }
+  .tb-btn:disabled {
+    cursor: not-allowed;
+    opacity: 0.6;
+  }
   .tb-btn:active {
     transform: translateY(0.5px);
   }
@@ -870,6 +875,7 @@ select {
     background: #9fb9b2;
     border-color: #9fb9b2;
     cursor: not-allowed;
+    opacity: 1;
   }
 
   .tb-iconbtn {
@@ -885,6 +891,13 @@ select {
   .tb-iconbtn:hover {
     background: var(--surface-3);
     color: var(--text);
+  }
+  .tb-iconbtn:focus-visible,
+  .tb-chip-btn:focus-visible,
+  .tb-seg-btn:focus-visible,
+  .tb-stage:focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 3px var(--accent-ring);
   }
   .tb-iconbtn-danger:hover {
     background: var(--danger-soft);
@@ -928,7 +941,7 @@ select {
     gap: 4px;
     padding: 2px 7px;
     border-radius: var(--radius-pill);
-    font-size: 11px;
+    font-size: 11.5px;
     font-weight: 600;
     border: 1px solid transparent;
     white-space: nowrap;
@@ -990,10 +1003,15 @@ select {
     color: var(--text-muted);
     transition: background 0.12s ease, color 0.12s ease, box-shadow 0.12s ease;
   }
+  .tb-seg-btn:hover {
+    color: var(--text);
+  }
   .tb-seg-btn[data-active="true"] {
     background: var(--surface);
     color: var(--accent);
-    box-shadow: 0 1px 2px rgba(19, 36, 30, 0.08);
+    box-shadow:
+      0 0 0 1px rgba(24, 120, 111, 0.18),
+      0 1px 3px rgba(19, 36, 30, 0.12);
   }
 
   /* Stat blocks */
@@ -1006,7 +1024,7 @@ select {
     background: transparent;
   }
   .tb-stat-label {
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 600;
     color: var(--text-muted);
   }
@@ -1036,7 +1054,7 @@ select {
     border-radius: var(--radius-pill);
     border: 1px solid transparent;
     background: var(--surface-3);
-    font-size: 10px;
+    font-size: 11px;
     font-weight: 700;
     line-height: 1;
     color: var(--text-faint);
@@ -1088,7 +1106,7 @@ select {
     border: 1px solid transparent;
     background: transparent;
     color: var(--text-faint);
-    font-size: 10px;
+    font-size: 10.5px;
     cursor: pointer;
   }
   .tb-stage-due:hover {
@@ -1109,7 +1127,7 @@ select {
     z-index: 2;
     background: rgba(242, 246, 241, 0.92);
     border-bottom: 1px solid var(--border-strong);
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 600;
     color: var(--text-muted);
   }
@@ -1124,5 +1142,28 @@ select {
   }
   .tb-row:hover {
     background: rgba(242, 246, 241, 0.66);
+  }
+}
+
+/* ============================================================
+   Accessibility baseline
+   ============================================================ */
+@layer base {
+  /* 키보드로 이동할 때 현재 위치가 항상 보이도록 */
+  :where(a, button, summary, [role="button"], input[type="checkbox"],
+      input[type="radio"]):focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
   }
 }

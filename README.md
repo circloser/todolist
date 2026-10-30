@@ -32,6 +32,15 @@
 13. 대금 지급 요청
 14. 결과 보고
 
+## 코드 구조
+
+- `app/task-board.tsx`: 화면 껍데기. 보기·팝업을 고르고, 목록 외 보기와 팝업은 처음 열 때 불러옵니다(코드 분할).
+- `app/board/use-task-board.tsx`: 보드 상태와 API 호출 로직을 모은 훅
+- `app/board/board-context.tsx`: 하위 컴포넌트가 `useBoard()`로 상태를 읽는 컨텍스트
+- `app/board/views/`: 목록·대시보드·지도·그리드·간트 보기
+- `app/board/modals/`: 보고서, 양식함, 필터, 알림, 지도 설정 등 팝업
+- `app/board/board-utils.ts`: 색상, 지도 타일, 브라우저 저장소 관련 도우미
+
 ## 실행
 
 ```powershell
