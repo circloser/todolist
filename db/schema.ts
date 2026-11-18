@@ -1,3 +1,4 @@
+import { sql } from "drizzle-orm";
 import {
   blob,
   index,
@@ -211,3 +212,104 @@ export const workflowTasks = sqliteTable("workflow_tasks", {
   updatedAt: text("updated_at").notNull(),
   createdAt: text("created_at").notNull(),
 });
+
+export const workspaceMembers = sqliteTable(
+  "workspace_members",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    workspaceId: text("workspace_id").notNull(),
+    name: text("name").notNull(),
+    role: text("role").notNull().default(""),
+    color: text("color").notNull().default("#e6f4ef"),
+    active: integer("active").notNull().default(1),
+    position: integer("position").notNull().default(0),
+    // Linked login account; null for roster-only names.
+    userId: integer("user_id"),
+    // 'manager' (부서장) or 'member' (구성원).
+    accessRole: text("access_role").notNull().default("member"),
+    // 1 = may read everyone's 업무일지 when the board's visibility is "selected".
+    logViewer: integer("log_viewer").notNull().default(0),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (table) => [
+    uniqueIndex("workspace_members_name_idx").on(table.workspaceId, table.name),
+    index("workspace_members_position_idx").on(table.workspaceId, table.position),
+    uniqueIndex("workspace_members_user_idx")
+      .on(table.workspaceId, table.userId)
+      .where(sql`user_id IS NOT NULL`),
+  ]
+);
+
+export const workLogs = sqliteTable(
+  "work_logs",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    workspaceId: text("workspace_id").notNull(),
+    memberId: integer("member_id").notNull(),
+    memberName: text("member_name").notNull(),
+    logDate: text("log_date").notNull(),
+    content: text("content").notNull().default(""),
+    plan: text("plan").notNull().default(""),
+    issues: text("issues").notNull().default(""),
+    itemIds: text("item_ids").notNull().default("[]"),
+    // 'submitted' | 'approved' | 'rejected'
+    status: text("status").notNull().default("submitted"),
+    reviewerName: text("reviewer_name").notNull().default(""),
+    reviewedAt: text("reviewed_at"),
+    reviewComment: text("review_comment").notNull().default(""),
+    updatedBy: text("updated_by").notNull().default(""),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (table) => [
+    uniqueIndex("work_logs_member_date_idx").on(
+      table.workspaceId,
+      table.memberId,
+      table.logDate
+    ),
+    index("work_logs_workspace_date_idx").on(table.workspaceId, table.logDate),
+  ]
+);
+
+export const users = sqliteTable(
+  "users",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    loginId: text("login_id").notNull(),
+    name: text("name").notNull(),
+    passwordHash: text("password_hash").notNull(),
+    failedLogins: integer("failed_logins").notNull().default(0),
+    lockedUntil: text("locked_until"),
+    lastLoginAt: text("last_login_at"),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (table) => [uniqueIndex("users_login_id_idx").on(table.loginId)]
+);
+
+export const userSessions = sqliteTable(
+  "user_sessions",
+  {
+    // SHA-256 of the cookie token; the token itself is never stored.
+    tokenHash: text("token_hash").primaryKey(),
+    userId: integer("user_id").notNull(),
+    createdAt: text("created_at").notNull(),
+    expiresAt: text("expires_at").notNull(),
+  },
+  (table) => [index("user_sessions_user_idx").on(table.userId)]
+);
+
+export const workspaceJoinRequests = sqliteTable(
+  "workspace_join_requests",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    workspaceId: text("workspace_id").notNull(),
+    userId: integer("user_id").notNull(),
+    name: text("name").notNull(),
+    createdAt: text("created_at").notNull(),
+  },
+  (table) => [
+    uniqueIndex("workspace_join_requests_user_idx").on(table.workspaceId, table.userId),
+  ]
+);

@@ -24,10 +24,6 @@ export type WorkspaceSummary = {
   createdAt: string;
 };
 
-export type WorkspaceAccess =
-  | { workspace: WorkspaceRow; summary: WorkspaceSummary; response?: never }
-  | { workspace?: never; summary?: never; response: Response };
-
 function toHex(bytes: ArrayBuffer) {
   return Array.from(new Uint8Array(bytes))
     .map((byte) => byte.toString(16).padStart(2, "0"))
@@ -260,7 +256,7 @@ export async function getWorkspaceById(id: string) {
     .first<WorkspaceRow>();
 }
 
-function workspaceIdFromRequest(request: Request, payload?: { workspaceId?: unknown }) {
+export function workspaceIdFromRequest(request: Request, payload?: { workspaceId?: unknown }) {
   const url = new URL(request.url);
   return (
     normalizeWorkspaceId(request.headers.get("x-workspace-id")) ||
@@ -270,62 +266,22 @@ function workspaceIdFromRequest(request: Request, payload?: { workspaceId?: unkn
   );
 }
 
-function passwordFromRequest(request: Request, payload?: { workspacePassword?: unknown }) {
-  const url = new URL(request.url);
-  const headerPassword = request.headers.get("x-workspace-password");
+export { normalizeWorkspaceId };
+
+// The board password is now a join code: it proves someone belongs to the
+// team when they ask to join. Day-to-day access uses personal accounts
+// (see auth-store.ts / requireWorkspaceAccess).
+export async function verifyBoardPassword(workspace: WorkspaceRow, password: string) {
+  if (!workspace.password_hash || !workspace.password_salt) {
+    return true;
+  }
+
+  if (!password) {
+    return false;
+  }
 
   return (
-    (typeof headerPassword === "string" ? headerPassword : "") ||
-    (typeof payload?.workspacePassword === "string" ? payload.workspacePassword : "") ||
-    (url.searchParams.get("workspacePassword") ?? "")
+    (await hashWorkspacePassword(password, workspace.password_salt)) ===
+    workspace.password_hash
   );
-}
-
-export async function requireWorkspaceAccess(
-  request: Request,
-  payload?: { workspaceId?: unknown; workspacePassword?: unknown }
-): Promise<WorkspaceAccess> {
-  const workspaceId = workspaceIdFromRequest(request, payload);
-  const workspace = await getWorkspaceById(workspaceId);
-  const workspaces = await listWorkspaces();
-
-  if (!workspace) {
-    return {
-      response: Response.json(
-        {
-          error: "선택한 연도/팀을 찾을 수 없습니다.",
-          workspaces,
-          defaultWorkspaceId: DEFAULT_WORKSPACE_ID,
-        },
-        { status: 404 }
-      ),
-    };
-  }
-
-  if (workspace.password_hash && workspace.password_salt) {
-    const password = passwordFromRequest(request, payload);
-    const hash = password
-      ? await hashWorkspacePassword(password, workspace.password_salt)
-      : "";
-
-    if (hash !== workspace.password_hash) {
-      return {
-        response: Response.json(
-          {
-            error: "이 연도/팀은 암호가 필요합니다.",
-            requiresWorkspacePassword: true,
-            workspace: toWorkspaceSummary(workspace),
-            workspaces,
-            defaultWorkspaceId: DEFAULT_WORKSPACE_ID,
-          },
-          { status: 401 }
-        ),
-      };
-    }
-  }
-
-  return {
-    workspace,
-    summary: toWorkspaceSummary(workspace),
-  };
 }

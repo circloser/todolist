@@ -6,6 +6,7 @@ import {
   FormEvent,
   Fragment,
   PointerEvent as ReactPointerEvent,
+  useCallback,
   useEffect,
   useMemo,
   useRef,
@@ -34,6 +35,21 @@ import {
 } from "./lib/board-config";
 import { WETLAND_PRESETS } from "./lib/wetlands";
 import ManualContent from "./manual-content";
+import AuthScreen from "./auth-screen";
+import { BRAND, CompassMark } from "./brand";
+import MembersPanel from "./members-panel";
+import WorkLogPanel from "./work-log-panel";
+import {
+  canEditItem,
+  type AuthResponse,
+  type JoinRequest,
+  type MembersResponse,
+  type WorkLogsResponse,
+  DEFAULT_POLICY,
+  type TeamMember,
+  type TeamPolicy,
+  type Viewer,
+} from "./lib/team";
 
 import {
   assigneeName,
@@ -284,62 +300,12 @@ function readMapPrefs() {
 }
 
 const WORKSPACE_STORAGE_KEY = "team-progress-workspace-id";
-const RECENT_WORKSPACES_STORAGE_KEY = "team-progress-recent-workspace-ids";
-
 function readStoredWorkspaceId() {
   if (typeof window === "undefined") {
     return "default";
   }
 
   return window.localStorage.getItem(WORKSPACE_STORAGE_KEY) || "default";
-}
-
-function readRecentWorkspaceIds() {
-  if (typeof window === "undefined") {
-    return [];
-  }
-
-  const currentWorkspaceId = window.localStorage.getItem(WORKSPACE_STORAGE_KEY);
-  const stored = window.localStorage.getItem(RECENT_WORKSPACES_STORAGE_KEY);
-  let ids: string[] = [];
-
-  try {
-    const parsed = stored ? JSON.parse(stored) : [];
-    ids = Array.isArray(parsed)
-      ? parsed.filter((id): id is string => typeof id === "string" && Boolean(id))
-      : [];
-  } catch {
-    ids = [];
-  }
-
-  return [
-    ...(currentWorkspaceId ? [currentWorkspaceId] : []),
-    ...ids,
-  ].filter((id, index, list) => list.indexOf(id) === index);
-}
-
-function workspacePasswordKey(id: string) {
-  return `team-progress-workspace-password:${id}`;
-}
-
-function readWorkspacePassword(id: string) {
-  if (typeof window === "undefined") {
-    return "";
-  }
-
-  return window.sessionStorage.getItem(workspacePasswordKey(id)) || "";
-}
-
-function readStoredUserName() {
-  if (typeof window === "undefined") {
-    return "사용자";
-  }
-
-  return window.localStorage.getItem("team-progress-user-name")?.trim() || "사용자";
-}
-
-function workspaceName(workspace: WorkspaceSummary | null) {
-  return workspace?.label || "연도/조직 보드";
 }
 
 function workspaceYear(workspace: WorkspaceSummary | null) {
@@ -380,28 +346,15 @@ export default function TaskBoard() {
     null
   );
   const [workspaces, setWorkspaces] = useState<WorkspaceSummary[]>([]);
-  const [workspacePassword, setWorkspacePassword] = useState(() =>
-    readWorkspacePassword(readStoredWorkspaceId())
-  );
-  const [workspacePasswordInput, setWorkspacePasswordInput] = useState("");
-  const [workspaceLocked, setWorkspaceLocked] = useState(false);
-  const [landingOpen, setLandingOpen] = useState(() =>
-    !readWorkspacePassword(readStoredWorkspaceId())
-  );
+  // Signed-in account and its identity on the open board (from the server).
+  const [auth, setAuth] = useState<AuthResponse | null>(null);
+  const [me, setMe] = useState<Viewer | null>(null);
+  const [landingOpen, setLandingOpen] = useState(true);
+  const [landingMessage, setLandingMessage] = useState("");
   const [workspaceDepartmentDraft, setWorkspaceDepartmentDraft] = useState("");
   const [workspaceTeamDraft, setWorkspaceTeamDraft] = useState("");
-  const [newWorkspaceDepartment, setNewWorkspaceDepartment] = useState("");
-  const [newWorkspaceTeam, setNewWorkspaceTeam] = useState("");
-  const [newWorkspacePassword, setNewWorkspacePassword] = useState("");
-  const [copyPreviousYear, setCopyPreviousYear] = useState(false);
-  const [sourceWorkspacePassword, setSourceWorkspacePassword] = useState("");
   const [workspacePasswordDraft, setWorkspacePasswordDraft] = useState("");
-  const [creatingWorkspace, setCreatingWorkspace] = useState(false);
   const [savingWorkspace, setSavingWorkspace] = useState(false);
-  const [userName, setUserName] = useState(readStoredUserName);
-  const [recentWorkspaceIds, setRecentWorkspaceIds] = useState(
-    readRecentWorkspaceIds
-  );
   const [filter, setFilter] = useState<TaskFilter>("all");
   const [dueFilter, setDueFilter] = useState<DueFilter>("all");
   const [sortMode, setSortMode] = useState<SortMode>("manual");
@@ -425,7 +378,6 @@ export default function TaskBoard() {
   const leafletMapRef = useRef<LeafletNS.Map | null>(null);
   const markerLayerRef = useRef<LeafletNS.LayerGroup | null>(null);
   const tileLayerRef = useRef<LeafletNS.TileLayer | null>(null);
-  const landingPasswordRef = useRef<HTMLInputElement | null>(null);
   const openItemRef = useRef<(id: number) => void>(() => {});
   const clearMapPinRef = useRef<(id: number) => void>(() => {});
   const moveMapPinRef = useRef<(id: number, lat: number, lng: number) => void>(
@@ -471,6 +423,12 @@ export default function TaskBoard() {
   const [reportOpen, setReportOpen] = useState(false);
   const [docsOpen, setDocsOpen] = useState(false);
   const [manualOpen, setManualOpen] = useState(false);
+  const [members, setMembers] = useState<TeamMember[]>([]);
+  const [joinRequests, setJoinRequests] = useState<JoinRequest[]>([]);
+  const [pendingReview, setPendingReview] = useState(0);
+  const [policy, setPolicy] = useState<TeamPolicy>(DEFAULT_POLICY);
+  const [membersOpen, setMembersOpen] = useState(false);
+  const [workLogOpen, setWorkLogOpen] = useState(false);
   const [documents, setDocuments] = useState<DocumentTemplate[]>([]);
   const [docsLoading, setDocsLoading] = useState(false);
   const [uploadingDoc, setUploadingDoc] = useState(false);
@@ -531,123 +489,157 @@ export default function TaskBoard() {
   const [savingStepIds, setSavingStepIds] = useState<Set<number>>(new Set());
   const [savingSubtaskIds, setSavingSubtaskIds] = useState<Set<number>>(new Set());
   const [error, setError] = useState("");
-  const currentActor = userName.trim() || "사용자";
+  const currentActor = me?.name ?? "사용자";
+  const isManager = me?.accessRole === "manager";
+  // Mirrors the server rule: the assignee or a 부서장 may change an item.
+  const canEdit = (item: Pick<WorkflowItem, "assignee">) => canEditItem(me, item);
+  // Board options a 부서장 can switch (enforced by the API as well).
+  const canCreateItems = isManager || policy.memberCanCreateItems;
+  const canDelete = (item: Pick<WorkflowItem, "assignee">) =>
+    canEdit(item) && (isManager || policy.memberCanDeleteItems);
 
-  function workspaceHeaders(
-    init?: HeadersInit,
-    passwordOverride?: string,
-    workspaceIdOverride?: string
-  ) {
+  // The session cookie identifies the user; the header picks the board.
+  function workspaceHeaders(init?: HeadersInit, workspaceIdOverride?: string) {
     const headers = new Headers(init);
     headers.set("X-Workspace-Id", workspaceIdOverride ?? activeWorkspaceId);
-
-    const password = passwordOverride ?? workspacePassword;
-    if (password) {
-      headers.set("X-Workspace-Password", password);
-    }
-
     return headers;
   }
 
-  function taskRequest(
-    init?: RequestInit,
-    passwordOverride?: string,
-    workspaceIdOverride?: string
-  ) {
+  function taskRequest(init?: RequestInit, workspaceIdOverride?: string) {
     return fetch("/api/tasks", {
       ...init,
-      headers: workspaceHeaders(
-        init?.headers,
-        passwordOverride,
-        workspaceIdOverride
-      ),
+      headers: workspaceHeaders(init?.headers, workspaceIdOverride),
     });
   }
 
-  function documentRequest(
-    init?: RequestInit,
-    passwordOverride?: string,
-    workspaceIdOverride?: string
-  ) {
+  function documentRequest(init?: RequestInit) {
     return fetch("/api/documents", {
       ...init,
-      headers: workspaceHeaders(
-        init?.headers,
-        passwordOverride,
-        workspaceIdOverride
-      ),
+      headers: workspaceHeaders(init?.headers),
     });
   }
 
-  function rememberWorkspacePassword(id: string, password: string) {
-    setWorkspacePassword(password);
-    if (password) {
-      window.sessionStorage.setItem(workspacePasswordKey(id), password);
-    } else {
-      window.sessionStorage.removeItem(workspacePasswordKey(id));
+  // Stable identity so panels can use it as an effect dependency.
+  const apiRequest = useCallback(
+    (path: string, init?: RequestInit) => {
+      const headers = new Headers(init?.headers);
+      headers.set("X-Workspace-Id", activeWorkspaceId);
+      return fetch(path, { ...init, headers });
+    },
+    [activeWorkspaceId]
+  );
+
+  async function loadMembers(workspaceIdOverride?: string) {
+    try {
+      const response = await fetch("/api/members", {
+        cache: "no-store",
+        headers: workspaceHeaders(undefined, workspaceIdOverride),
+      });
+      const data = (await response.json()) as MembersResponse;
+
+      if (response.ok) {
+        setMembers(data.members ?? []);
+        setJoinRequests(data.requests ?? []);
+        setPolicy(data.policy ?? DEFAULT_POLICY);
+      }
+    } catch {
+      // The roster is optional; the board works without it.
     }
   }
 
-  function rememberRecentWorkspace(id: string) {
-    setRecentWorkspaceIds((current) => {
-      const next = [id, ...current.filter((workspaceId) => workspaceId !== id)]
-        .filter(Boolean)
-        .slice(0, 6);
-      window.localStorage.setItem(
-        RECENT_WORKSPACES_STORAGE_KEY,
-        JSON.stringify(next)
+  // Badge count of other members' logs waiting for this 부서장.
+  async function loadPendingReview(workspaceIdOverride?: string) {
+    try {
+      const response = await fetch(
+        `/api/work-logs?date=${new Date().toISOString().slice(0, 10)}`,
+        { cache: "no-store", headers: workspaceHeaders(undefined, workspaceIdOverride) }
       );
-      return next;
-    });
+      const data = (await response.json()) as WorkLogsResponse;
+      setPendingReview(response.ok ? data.pendingReview ?? 0 : 0);
+    } catch {
+      setPendingReview(0);
+    }
   }
 
-  async function loadTasks(passwordOverride?: string, workspaceIdOverride?: string) {
+  function applyMembersResponse(data: MembersResponse) {
+    if (data.members) {
+      setMembers(data.members);
+    }
+    if (data.requests) {
+      setJoinRequests(data.requests);
+    }
+    if (data.policy) {
+      setPolicy(data.policy);
+      if (!data.policy.logApproval) {
+        setPendingReview(0);
+      }
+    }
+    if (data.assigneeSettings) {
+      setAssigneeSettings(data.assigneeSettings);
+    }
+  }
+
+  // Back to the sign-in / board picker, e.g. after the session expired or
+  // membership was revoked.
+  function openLanding(message = "") {
+    setLandingMessage(message);
+    setLandingOpen(true);
+  }
+
+  async function refreshAuth() {
+    try {
+      const response = await fetch("/api/auth", { cache: "no-store" });
+      const data = (await response.json()) as AuthResponse;
+      setAuth(data);
+      return data;
+    } catch {
+      const empty: AuthResponse = { user: null, boards: [], pending: [] };
+      setAuth(empty);
+      return empty;
+    }
+  }
+
+  async function loadTasks(workspaceIdOverride?: string) {
     setLoading(true);
     setError("");
-    const submittedPassword =
-      typeof passwordOverride === "string" ? passwordOverride.trim() : "";
     const targetWorkspaceId = workspaceIdOverride ?? activeWorkspaceId;
 
     try {
-      const response = await taskRequest(
-        { cache: "no-store" },
-        submittedPassword,
-        targetWorkspaceId
-      );
-      const data = (await response.json()) as TaskResponse;
-
-      if (data.workspaces) {
-        setWorkspaces(data.workspaces);
-      }
-
-      if (data.workspace) {
-        setActiveWorkspace(data.workspace);
-        setWorkspaceDepartmentDraft(data.workspace.departmentName);
-        setWorkspaceTeamDraft(data.workspace.teamName);
-      }
+      const response = await taskRequest({ cache: "no-store" }, targetWorkspaceId);
+      const data = (await response.json()) as TaskResponse & {
+        me?: Viewer;
+        requiresLogin?: boolean;
+        notMember?: boolean;
+      };
 
       if (!response.ok) {
-        if (data.requiresWorkspacePassword) {
-          if (submittedPassword) {
-            rememberWorkspacePassword(activeWorkspaceId, "");
-            setError("암호가 맞지 않습니다. 다시 입력해 주세요.");
-          }
-          setWorkspaceLocked(true);
+        if (data.requiresLogin || data.notMember) {
           setItems([]);
           setHistory([]);
-          setWorkspacePasswordInput("");
-          setActiveWorkspace(data.workspace ?? null);
+          setMembers([]);
+          setMe(null);
+          if (data.requiresLogin) {
+            setAuth({ user: null, boards: [], pending: [] });
+          } else {
+            void refreshAuth();
+          }
+          openLanding(data.error ?? "");
           return false;
         }
         throw new Error(data.error ?? "진행 목록을 불러오지 못했습니다.");
       }
 
-      if (passwordOverride !== undefined) {
-        rememberWorkspacePassword(targetWorkspaceId, submittedPassword);
+      if (data.workspaces) {
+        setWorkspaces(data.workspaces);
       }
+      if (data.workspace) {
+        setActiveWorkspace(data.workspace);
+        setWorkspaceDepartmentDraft(data.workspace.departmentName);
+        setWorkspaceTeamDraft(data.workspace.teamName);
+      }
+      setMe(data.me ?? null);
       setActiveWorkspaceId(targetWorkspaceId);
-      rememberRecentWorkspace(data.workspace?.id ?? targetWorkspaceId);
-      setWorkspaceLocked(false);
+      window.localStorage.setItem(WORKSPACE_STORAGE_KEY, targetWorkspaceId);
       setItems(data.items ?? []);
       setTemplates(data.templates?.length ? data.templates : defaultTemplates);
       setHistory(data.history ?? []);
@@ -660,11 +652,12 @@ export default function TaskBoard() {
       setWebhookUrl(data.webhook?.url ?? "");
       setWebhookEnabled(data.webhook?.enabled ?? false);
       setGroupOrder(data.groupOrder ?? []);
-
-      const storedUserName = window.localStorage
-        .getItem("team-progress-user-name")
-        ?.trim();
-      setUserName(storedUserName || data.viewer || "사용자");
+      void loadMembers(targetWorkspaceId);
+      if (data.me?.accessRole === "manager") {
+        void loadPendingReview(targetWorkspaceId);
+      } else {
+        setPendingReview(0);
+      }
     } catch (loadError) {
       setError(
         loadError instanceof Error
@@ -679,106 +672,43 @@ export default function TaskBoard() {
     return true;
   }
 
-  useEffect(() => {
-    const password = readWorkspacePassword(activeWorkspaceId);
-    window.localStorage.setItem(WORKSPACE_STORAGE_KEY, activeWorkspaceId);
-
-    const timer = window.setTimeout(() => {
-      setWorkspacePassword(password);
-      setWorkspacePasswordInput("");
-      void loadTasks(password);
-    }, 0);
-
-    return () => window.clearTimeout(timer);
-    // Switching workspaces is the only intended trigger; loadTasks changes
-    // identity as request-related state changes.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeWorkspaceId]);
-
-  function saveUserName(value: string) {
-    const nextUserName = value.trim() || "사용자";
-    setUserName(nextUserName);
-    window.localStorage.setItem("team-progress-user-name", nextUserName);
-    return nextUserName;
-  }
-
-  async function unlockWorkspace(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const password = workspacePasswordInput.trim();
-    const ok = await loadTasks(password);
+  async function enterBoard(workspaceId: string) {
+    setLandingMessage("");
+    const ok = await loadTasks(workspaceId);
     if (ok) {
       setLandingOpen(false);
     }
   }
 
-  async function createWorkspace(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const year = newWorkspaceDepartment.trim();
-    const teamName = newWorkspaceTeam.trim();
-    const password = newWorkspacePassword.trim();
-
-    if (!year || !teamName || password.length < 4) {
-      setError("연도, 조직/팀 이름, 4자 이상 암호를 입력해 주세요.");
-      return;
-    }
-
-    const actor = saveUserName(userName);
-
-    setCreatingWorkspace(true);
-    setError("");
-
-    try {
-      const response = await taskRequest({
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          action: "create-workspace",
-          actor,
-          departmentName: year,
-          teamName,
-          newWorkspacePassword: password,
-          copyPreviousYear,
-          sourceWorkspacePassword: sourceWorkspacePassword.trim(),
-        }),
+  // On first load: if already signed in, reopen the last board.
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      void refreshAuth().then((data) => {
+        const stored = readStoredWorkspaceId();
+        const board = data.boards?.find(
+          (entry) => entry.workspaceId === stored && entry.active
+        );
+        if (data.user && board) {
+          void enterBoard(board.workspaceId);
+        }
       });
-      const data = (await response.json()) as TaskResponse;
+    }, 0);
+    return () => window.clearTimeout(timer);
+    // Runs once on mount.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
-      if (!response.ok || !data.workspace) {
-        throw new Error(data.error ?? "연도/조직 보드를 만들지 못했습니다.");
-      }
-
-      window.localStorage.setItem(WORKSPACE_STORAGE_KEY, data.workspace.id);
-      rememberRecentWorkspace(data.workspace.id);
-      setWorkspaces(data.workspaces ?? []);
-      setActiveWorkspace(data.workspace);
-      setActiveWorkspaceId(data.workspace.id);
-      setWorkspaceDepartmentDraft(data.workspace.departmentName);
-      setWorkspaceTeamDraft(data.workspace.teamName);
-      rememberWorkspacePassword(data.workspace.id, password);
-      setWorkspaceLocked(false);
-      setLandingOpen(false);
-      setItems(data.items ?? []);
-      setTemplates(data.templates?.length ? data.templates : templates);
-      setHistory(data.history ?? []);
-      setOrganizationName(
-        data.settings?.organizationName ?? workspaceOrganizationName(data.workspace)
-      );
-      setBoardTitle(data.settings?.boardTitle ?? defaultSettings.boardTitle);
-      setGroupOrder(data.groupOrder ?? []);
-      setNewWorkspaceDepartment("");
-      setNewWorkspaceTeam("");
-      setNewWorkspacePassword("");
-      setCopyPreviousYear(false);
-      setSourceWorkspacePassword("");
-    } catch (createError) {
-      setError(
-        createError instanceof Error
-          ? createError.message
-          : "연도/조직 보드를 만들지 못했습니다."
-      );
-    } finally {
-      setCreatingWorkspace(false);
-    }
+  async function logout() {
+    await fetch("/api/auth", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "logout" }),
+    }).catch(() => undefined);
+    setAuth({ user: null, boards: [], pending: [] });
+    setMe(null);
+    setItems([]);
+    setMembers([]);
+    openLanding();
   }
 
   async function saveWorkspaceSettings() {
@@ -815,9 +745,6 @@ export default function TaskBoard() {
       setWorkspaceDepartmentDraft(data.workspace.departmentName);
       setWorkspaceTeamDraft(data.workspace.teamName);
       setOrganizationName(data.settings?.organizationName ?? data.workspace.label);
-      if (workspacePasswordDraft.trim()) {
-        rememberWorkspacePassword(data.workspace.id, workspacePasswordDraft.trim());
-      }
       setWorkspacePasswordDraft("");
       setHistory(data.history ?? history);
     } catch (saveError) {
@@ -2733,6 +2660,10 @@ export default function TaskBoard() {
             stages: [{ stageKey: null, title: "", group: "" }],
           }
     );
+    if (!isManager) {
+      setError("업무 유형·단계는 부서장만 관리할 수 있습니다.");
+      return;
+    }
     setTemplateEditorOpen(true);
   }
 
@@ -3119,6 +3050,9 @@ export default function TaskBoard() {
   }
 
   function openGroupTaskForm(groupNameForTask: string) {
+    if (!canCreateItems) {
+      return;
+    }
     const name = categoryKey(groupNameForTask);
     setActiveAddGroup(name);
     setNewGroup(name === categoryKey("") ? "" : name);
@@ -3699,8 +3633,9 @@ export default function TaskBoard() {
           : itemHasUrgentDate(item)
             ? "#d97706"
             : "#18786f";
+      const editable = canEditItem(me, item);
       const marker = L.marker([item.lat, item.lng], {
-        draggable: true,
+        draggable: editable,
         icon: L.divIcon({
           className: "tb-map-pin",
           html: `<span style="--pin-color:${color}">${escapeHtml(
@@ -3711,7 +3646,7 @@ export default function TaskBoard() {
         }),
       }).addTo(layer);
       const locationLabel = item.location || item.title || "이름 없는 위치";
-      marker.bindTooltip(`${locationLabel} · 드래그로 위치 이동`);
+      marker.bindTooltip(editable ? `${locationLabel} · 드래그로 위치 이동` : locationLabel);
       marker.on("dragend", () => {
         const next = marker.getLatLng();
         moveMapPinRef.current(item.id, next.lat, next.lng);
@@ -3728,13 +3663,13 @@ export default function TaskBoard() {
               )} · ${itemProgress(item)}%</div>
             </div>
             <button type="button" data-open-item="${item.id}" style="flex-shrink:0;white-space:nowrap;padding:3px 9px;border-radius:8px;border:1px solid #18786f;background:#e4f2ef;color:#18786f;font-weight:600;cursor:pointer">열기</button>
-            <button type="button" data-clear-pin="${item.id}" style="flex-shrink:0;white-space:nowrap;padding:3px 8px;border-radius:8px;border:1px solid #edbeb8;background:#fbecea;color:#c44232;font-weight:600;cursor:pointer">핀 삭제</button>
+            ${editable ? `<button type="button" data-clear-pin="${item.id}" style="flex-shrink:0;white-space:nowrap;padding:3px 8px;border-radius:8px;border:1px solid #edbeb8;background:#fbecea;color:#c44232;font-weight:600;cursor:pointer">핀 삭제</button>` : ""}
           </div>
-          <div style="margin-top:7px;color:#61667a;font-size:12px">핀을 드래그하면 좌표가 바로 저장됩니다.</div>
+          <div style="margin-top:7px;color:#61667a;font-size:12px">${editable ? "핀을 드래그하면 좌표가 바로 저장됩니다." : "담당자 또는 부서장만 위치를 바꿀 수 있습니다."}</div>
         </div>`
       );
     }
-  }, [viewMode, visibleItems, mapReady]);
+  }, [viewMode, visibleItems, mapReady, me]);
 
   // Drag a gantt bar's end handle to move the item's final due date.
   function startGanttDrag(
@@ -3794,275 +3729,18 @@ export default function TaskBoard() {
     vworld: vworldMapKey,
   }).notice;
 
-  const landingWorkspaces = workspaces.length
-    ? workspaces
-    : activeWorkspace
-      ? [activeWorkspace]
-      : [];
-  const selectedLandingWorkspace =
-    landingWorkspaces.find((workspace) => workspace.id === activeWorkspaceId) ??
-    landingWorkspaces[0] ??
-    activeWorkspace;
-  const landingYears = [
-    ...new Set(landingWorkspaces.map((workspace) => workspaceYear(workspace))),
-  ].sort((first, second) => second.localeCompare(first, "ko-KR"));
-  const landingTeams = landingWorkspaces
-    .filter(
-      (workspace) =>
-        workspaceYear(workspace) === workspaceYear(selectedLandingWorkspace)
-    )
-    .map((workspace) => workspaceTeam(workspace))
-    .filter((team, index, list) => list.indexOf(team) === index)
-    .sort((first, second) => first.localeCompare(second, "ko-KR"));
-  const recentLandingWorkspaces = recentWorkspaceIds
-    .map((id) => landingWorkspaces.find((workspace) => workspace.id === id))
-    .filter(
-      (workspace, index, list): workspace is WorkspaceSummary => {
-        if (!workspace) {
-          return false;
-        }
-
-        return (
-          list.findIndex((candidate) => candidate?.id === workspace.id) === index
-        );
-      }
-    )
-    .slice(0, 4);
-
-  function chooseLandingYear(year: string) {
-    const workspace =
-      landingWorkspaces.find((candidate) => workspaceYear(candidate) === year) ??
-      selectedLandingWorkspace;
-
-    if (workspace) {
-      setActiveWorkspaceId(workspace.id);
-      setActiveWorkspace(workspace);
-    }
-  }
-
-  function chooseRecentWorkspace(workspace: WorkspaceSummary) {
-    setActiveWorkspaceId(workspace.id);
-    setActiveWorkspace(workspace);
-    setWorkspacePasswordInput("");
-    setError("");
-    window.setTimeout(() => landingPasswordRef.current?.focus(), 0);
-  }
-
-  function chooseLandingTeam(team: string) {
-    const year = workspaceYear(selectedLandingWorkspace);
-    const workspace =
-      landingWorkspaces.find(
-        (candidate) =>
-          workspaceYear(candidate) === year && workspaceTeam(candidate) === team
-      ) ?? selectedLandingWorkspace;
-
-    if (workspace) {
-      setActiveWorkspaceId(workspace.id);
-      setActiveWorkspace(workspace);
-    }
-  }
-
-  async function enterLanding(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-
-    if (!selectedLandingWorkspace) {
-      setError("입장할 연도와 조직/팀을 선택해 주세요.");
-      return;
-    }
-
-    saveUserName(userName);
-
-    const ok = await loadTasks(
-      workspacePasswordInput,
-      selectedLandingWorkspace.id
-    );
-
-    if (ok) {
-      setLandingOpen(false);
-    }
-  }
-
   if (landingOpen) {
     return (
-      <main className="tb-app flex min-h-dvh items-center justify-center px-4 py-8">
-        <section className="w-full max-w-[440px]">
-          <div className="mb-5 text-center">
-            <h1 className="text-2xl font-semibold tracking-tight">
-              Workflow Command Center
-            </h1>
-            <p className="mt-2 text-sm text-[var(--text-muted)]">
-              연도와 조직/팀을 선택하고 암호를 입력해 주세요.
-            </p>
-          </div>
-
-          <div className="tb-card p-5 shadow-[var(--shadow)]">
-            <label className="mb-3 block">
-              <span className="tb-label">사용자명</span>
-              <input
-                value={userName}
-                onChange={(event) => setUserName(event.target.value)}
-                className="tb-field"
-                placeholder="이름"
-              />
-            </label>
-
-            {recentLandingWorkspaces.length ? (
-              <div className="mb-4 grid gap-2">
-                <span className="tb-label">최근 접속</span>
-                <div className="grid gap-2">
-                  {recentLandingWorkspaces.map((workspace) => {
-                    const selected = workspace.id === selectedLandingWorkspace?.id;
-
-                    return (
-                      <button
-                        key={workspace.id}
-                        type="button"
-                        onClick={() => chooseRecentWorkspace(workspace)}
-                        className={`flex w-full items-center justify-between rounded-[calc(var(--radius)-2px)] border px-3 py-2 text-left text-sm transition ${
-                          selected
-                            ? "border-[var(--accent)] bg-[var(--accent-soft)] text-[var(--text)]"
-                            : "border-[var(--border)] bg-transparent text-[var(--text-muted)] hover:border-[var(--accent-border)] hover:text-[var(--text)]"
-                        }`}
-                      >
-                        <span className="font-semibold">
-                          {workspaceName(workspace)}
-                        </span>
-                        <span className="text-xs text-[var(--text-faint)]">
-                          선택
-                        </span>
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-            ) : null}
-
-            <form onSubmit={enterLanding} className="grid gap-3">
-              <label>
-                <span className="tb-label">연도</span>
-                <select
-                  value={workspaceYear(selectedLandingWorkspace)}
-                  onChange={(event) => chooseLandingYear(event.target.value)}
-                  className="tb-field"
-                  disabled={!landingWorkspaces.length}
-                >
-                  {landingYears.length ? (
-                    landingYears.map((year) => (
-                      <option key={year} value={year}>
-                        {year}
-                      </option>
-                    ))
-                  ) : (
-                    <option>불러오는 중</option>
-                  )}
-                </select>
-              </label>
-
-              <label>
-                <span className="tb-label">조직/팀</span>
-                <select
-                  value={workspaceTeam(selectedLandingWorkspace)}
-                  onChange={(event) => chooseLandingTeam(event.target.value)}
-                  className="tb-field"
-                  disabled={!landingTeams.length}
-                >
-                  {landingTeams.length ? (
-                    landingTeams.map((team) => (
-                      <option key={team} value={team}>
-                        {team}
-                      </option>
-                    ))
-                  ) : (
-                    <option>팀 없음</option>
-                  )}
-                </select>
-              </label>
-
-              <label>
-                <span className="tb-label">암호</span>
-                <input
-                  ref={landingPasswordRef}
-                  type="password"
-                  value={workspacePasswordInput}
-                  onChange={(event) => setWorkspacePasswordInput(event.target.value)}
-                  className="tb-field"
-                  placeholder="암호"
-                  autoFocus
-                />
-              </label>
-
-              {error ? (
-                <div className="rounded-[var(--radius)] border border-[var(--danger-border)] bg-[var(--danger-soft)] px-3 py-2 text-sm font-medium text-[var(--danger)]">
-                  {error}
-                </div>
-              ) : null}
-
-              <button
-                type="submit"
-                className="tb-btn tb-btn-primary w-full justify-center"
-                disabled={!selectedLandingWorkspace || loading}
-              >
-                {loading ? "확인 중" : "입장"}
-              </button>
-            </form>
-
-            <form
-              onSubmit={createWorkspace}
-              className="mt-5 grid gap-3 border-t border-[var(--border)] pt-5"
-            >
-              <div className="text-sm font-semibold">새 연도/조직 생성</div>
-              <div className="grid gap-2 sm:grid-cols-2">
-                <input
-                  value={newWorkspaceDepartment}
-                  onChange={(event) => setNewWorkspaceDepartment(event.target.value)}
-                  className="tb-field"
-                  placeholder="연도 예: 2027"
-                />
-                <input
-                  value={newWorkspaceTeam}
-                  onChange={(event) => setNewWorkspaceTeam(event.target.value)}
-                  className="tb-field"
-                  placeholder="조직/팀명"
-                />
-              </div>
-              <input
-                type="password"
-                value={newWorkspacePassword}
-                onChange={(event) => setNewWorkspacePassword(event.target.value)}
-                className="tb-field"
-                placeholder="새 보드 암호"
-              />
-              <label className="flex items-center gap-2 text-sm text-[var(--text-muted)]">
-                <input
-                  type="checkbox"
-                  checked={copyPreviousYear}
-                  onChange={(event) => setCopyPreviousYear(event.target.checked)}
-                  className="h-4 w-4 accent-[var(--accent)]"
-                />
-                전년도 같은 팀 데이터 가져오기
-              </label>
-              {copyPreviousYear ? (
-                <input
-                  type="password"
-                  value={sourceWorkspacePassword}
-                  onChange={(event) =>
-                    setSourceWorkspacePassword(event.target.value)
-                  }
-                  className="tb-field"
-                  placeholder="전년도 보드 암호"
-                />
-              ) : null}
-              <button
-                type="submit"
-                className="tb-btn w-full justify-center"
-                disabled={creatingWorkspace}
-              >
-                {creatingWorkspace ? "생성 중" : "생성 후 입장"}
-              </button>
-            </form>
-          </div>
-        </section>
-      </main>
+      <AuthScreen
+        auth={auth}
+        message={landingMessage}
+        onAuth={(data) => {
+          setAuth(data);
+          setLandingMessage("");
+        }}
+        onEnter={(workspaceId) => void enterBoard(workspaceId)}
+        onBack={me ? () => setLandingOpen(false) : undefined}
+      />
     );
   }
 
@@ -4079,12 +3757,22 @@ export default function TaskBoard() {
                   </span>
                 </div>
               ) : null}
+              <div className="mb-1 flex items-center gap-1.5 text-xs font-semibold text-[var(--accent)]">
+                <CompassMark size={18} />
+                <span>{BRAND.name}</span>
+                <span className="font-medium text-[var(--text-faint)]">· {organizationName}</span>
+              </div>
               <input
                 value={boardTitle}
+                readOnly={!isManager}
+                title={isManager ? "보드 제목 (부서장만 바꿀 수 있습니다)" : undefined}
+                aria-label="보드 제목"
                 onChange={(event) => setBoardTitle(event.target.value)}
-                onBlur={(event) =>
-                  void saveBoardSettings({ boardTitle: event.target.value })
-                }
+                onBlur={(event) => {
+                  if (isManager) {
+                    void saveBoardSettings({ boardTitle: event.target.value });
+                  }
+                }}
                 className="tb-title-field tb-ghost text-2xl font-bold tracking-tight sm:text-[28px]"
               />
             </div>
@@ -4116,22 +3804,37 @@ export default function TaskBoard() {
           </div>
 
           <div className="tb-filter-strip flex flex-wrap items-center justify-between gap-2">
-            <div>
+            <div className="min-w-0">
               <span className="tb-label">현재 보드</span>
               <div className="text-sm font-semibold">
                 {workspaceYear(activeWorkspace)} · {workspaceTeam(activeWorkspace)}
               </div>
             </div>
-            <button
-              type="button"
-              onClick={() => {
-                setWorkspacePasswordInput("");
-                setLandingOpen(true);
-              }}
-              className="tb-btn"
-            >
-              다른 연도/조직
-            </button>
+            <div className="flex flex-wrap items-center gap-2">
+              {me ? (
+                <span className="flex items-center gap-1.5 text-sm" title={`@${me.loginId}`}>
+                  <span className="font-semibold">{me.name}</span>
+                  <span
+                    className={`tb-badge ${isManager ? "tb-badge-complete" : "tb-badge-muted"}`}
+                  >
+                    {isManager ? "부서장" : "구성원"}
+                  </span>
+                </span>
+              ) : null}
+              <button
+                type="button"
+                onClick={() => {
+                  void refreshAuth();
+                  openLanding();
+                }}
+                className="tb-btn"
+              >
+                보드 전환·계정
+              </button>
+              <button type="button" onClick={() => void logout()} className="tb-btn">
+                로그아웃
+              </button>
+            </div>
           </div>
 
           <div className="flex flex-col gap-3">
@@ -4284,6 +3987,74 @@ export default function TaskBoard() {
 
               <button
                 type="button"
+                onClick={() => setWorkLogOpen(true)}
+                className="tb-btn"
+                title="구성원 업무일지 작성·조회"
+              >
+                <svg
+                  width="15"
+                  height="15"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                >
+                  <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" />
+                  <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z" />
+                  <path d="M9 7h7" />
+                  <path d="M9 11h5" />
+                </svg>
+                업무일지
+                {isManager && policy.logApproval && pendingReview ? (
+                  <span
+                    className="ml-0.5 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-[var(--warning)] px-1 text-[10px] font-bold text-white"
+                    title="승인 대기 업무일지"
+                  >
+                    {pendingReview}
+                  </span>
+                ) : null}
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setMembersOpen(true)}
+                className="tb-btn hidden md:inline-flex"
+                title="구성원 등록·관리"
+              >
+                <svg
+                  width="15"
+                  height="15"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                >
+                  <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
+                  <circle cx="9" cy="7" r="4" />
+                  <path d="M22 21v-2a4 4 0 0 0-3-3.87" />
+                  <path d="M16 3.13a4 4 0 0 1 0 7.75" />
+                </svg>
+                구성원
+                {isManager && joinRequests.length ? (
+                  <span
+                    className="ml-0.5 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-[var(--warning)] px-1 text-[10px] font-bold text-white"
+                    title="가입 신청"
+                  >
+                    {joinRequests.length}
+                  </span>
+                ) : members.length ? (
+                  <span className="tb-badge tb-badge-muted">
+                    {members.filter((member) => member.active).length}
+                  </span>
+                ) : null}
+              </button>
+
+              <button
+                type="button"
                 onClick={() => setReportOpen(true)}
                 className="tb-btn hidden md:inline-flex"
                 title="월간 보고서 (CSV/인쇄)"
@@ -4306,6 +4077,7 @@ export default function TaskBoard() {
                 보고서
               </button>
 
+              {isManager ? (
               <button
                 type="button"
                 onClick={() => openTemplateEditor(null)}
@@ -4327,6 +4099,7 @@ export default function TaskBoard() {
                 </svg>
                 유형·단계
               </button>
+              ) : null}
 
               <div className="tb-seg ml-auto">
                 {(["list", "dashboard", "map", "gantt"] as const).map(
@@ -4483,51 +4256,7 @@ export default function TaskBoard() {
         </div>
       </header>
 
-      {workspaceLocked ? (
-        <section className="mx-auto max-w-[720px] px-4 py-10 sm:px-6 lg:px-8">
-          <div className="tb-card p-6 shadow-[var(--shadow)]">
-            <div className="mb-5">
-              <span className="tb-badge tb-badge-muted">잠금 보드</span>
-              <h2 className="mt-3 text-xl font-semibold">
-                {workspaceName(activeWorkspace)}
-              </h2>
-              <p className="mt-2 text-sm leading-6 text-[var(--text-muted)]">
-                이 연도/조직 정보를 보려면 암호를 입력해 주세요. 암호는 현재
-                브라우저 세션에만 기억됩니다.
-              </p>
-            </div>
-
-            {error ? (
-              <div className="mb-4 rounded-[var(--radius)] border border-[var(--danger-border)] bg-[var(--danger-soft)] px-4 py-3 text-sm font-medium text-[var(--danger)]">
-                {error}
-              </div>
-            ) : null}
-
-            <form
-              onSubmit={unlockWorkspace}
-              className="grid gap-2 sm:grid-cols-[1fr_auto]"
-            >
-              <input
-                type="password"
-                value={workspacePasswordInput}
-                onChange={(event) => setWorkspacePasswordInput(event.target.value)}
-                className="tb-field"
-                placeholder="연도/조직 암호"
-                autoFocus
-              />
-              <button type="submit" className="tb-btn tb-btn-primary">
-                입장
-              </button>
-            </form>
-          </div>
-        </section>
-      ) : null}
-
-      <section
-        className={`mx-auto max-w-[1600px] px-4 py-5 sm:px-6 lg:px-8 ${
-          workspaceLocked ? "hidden" : ""
-        }`}
-      >
+      <section className="mx-auto max-w-[1600px] px-4 py-5 sm:px-6 lg:px-8">
         {error ? (
           <div className="mb-4 flex items-center gap-2 rounded-[var(--radius)] border border-[var(--danger-border)] bg-[var(--danger-soft)] px-4 py-3 text-sm font-medium text-[var(--danger)]">
             {error}
@@ -5037,7 +4766,7 @@ export default function TaskBoard() {
                         handleGroupDragOver(event, group.name)
                       }
                       onDrop={(event) => handleGroupDrop(event, group.name)}
-                      className={`tb-hierarchy-header tb-list-group-header flex items-center gap-2.5 ${
+                      className={`tb-hierarchy-header tb-list-group-header flex flex-wrap items-center gap-1.5 sm:flex-nowrap sm:gap-2.5 ${
                         draggedGroup === group.name
                           ? "is-dragging ring-2 ring-[var(--accent-ring)]"
                           : ""
@@ -5060,6 +4789,7 @@ export default function TaskBoard() {
                       }`}
                       style={{ paddingLeft: `${12 + indent}px` }}
                     >
+                      {isManager ? (
                       <button
                         type="button"
                         draggable
@@ -5076,6 +4806,7 @@ export default function TaskBoard() {
                       >
                         ⋮⋮
                       </button>
+                      ) : null}
                       <button
                         type="button"
                         onClick={() =>
@@ -5094,7 +4825,7 @@ export default function TaskBoard() {
                       >
                         {groupCollapsed ? "▸" : "▾"}
                       </button>
-                      <span className="tb-badge tb-badge-muted shrink-0">
+                      <span className="tb-badge tb-badge-muted hidden shrink-0 sm:inline-flex">
                         {categoryLevelLabel(depth)}
                       </span>
                       <div className="min-w-0 flex-1">
@@ -5146,6 +4877,7 @@ export default function TaskBoard() {
                           </div>
                         ) : null}
                       </div>
+                      {isManager ? (
                       <button
                         type="button"
                         onClick={() => {
@@ -5157,6 +4889,7 @@ export default function TaskBoard() {
                       >
                         ✎
                       </button>
+                      ) : null}
                       <span className="tb-badge tb-badge-muted shrink-0">
                         {groupDone}/{group.items.length}
                       </span>
@@ -5173,14 +4906,19 @@ export default function TaskBoard() {
                           {groupProgress}%
                         </span>
                       </div>
+                      {canCreateItems ? (
                       <button
                         type="button"
                         onClick={() => openGroupTaskForm(group.name)}
                         className="tb-btn ml-auto shrink-0 !px-2.5 !py-1 text-xs"
                         title="이 그룹으로 새 업무 추가"
+                        aria-label="이 그룹으로 새 업무 추가"
                       >
-                        ＋ 업무
+                        <span className="sm:hidden">＋</span>
+                        <span className="hidden sm:inline">＋ 업무</span>
                       </button>
+                      ) : null}
+                      {isManager ? (
                       <button
                         type="button"
                         disabled={deletingGroups.has(group.name)}
@@ -5190,6 +4928,7 @@ export default function TaskBoard() {
                       >
                         ×
                       </button>
+                      ) : null}
                     </div>
 
                     {groupCollapsed
@@ -5244,7 +4983,8 @@ export default function TaskBoard() {
                     >
                       <button
                         type="button"
-                        draggable
+                        draggable={canEdit(item)}
+                        disabled={!canEdit(item)}
                         onDragStart={(event) => {
                           setDraggedId(item.id);
                           event.dataTransfer.effectAllowed = "move";
@@ -5253,7 +4993,9 @@ export default function TaskBoard() {
                           setDraggedId(null);
                           setDropIndicator(null);
                         }}
-                        className="tb-iconbtn h-8 w-6 shrink-0 cursor-grab active:cursor-grabbing"
+                        className={`tb-iconbtn h-8 w-6 shrink-0 cursor-grab active:cursor-grabbing ${
+                          canEdit(item) ? "" : "invisible"
+                        }`}
                         title="드래그로 순서 변경"
                       >
                         ⋮⋮
@@ -5369,15 +5111,25 @@ export default function TaskBoard() {
                         >
                           {expanded ? "▴" : "▾"}
                         </button>
+                        {canEdit(item) ? (
                         <button
                           type="button"
-                          disabled={savingItemIds.has(item.id)}
+                          disabled={savingItemIds.has(item.id) || !canCreateItems}
                           onClick={() => setDuplicateTarget(item)}
                           className="tb-iconbtn h-8 w-8 disabled:cursor-not-allowed disabled:opacity-40"
                           title="업무 복제"
                         >
                           ⧉
                         </button>
+                        ) : (
+                          <span
+                            className="tb-badge tb-badge-muted"
+                            title="담당자 본인 또는 부서장만 수정할 수 있습니다"
+                          >
+                            보기 전용
+                          </span>
+                        )}
+                        {canDelete(item) ? (
                         <button
                           type="button"
                           disabled={deletingItemIds.has(item.id)}
@@ -5387,11 +5139,21 @@ export default function TaskBoard() {
                         >
                           ×
                         </button>
+                        ) : null}
                       </div>
                     </div>
 
                     {expanded ? (
-                      <div className="tb-item-detail tb-list-detail p-4">
+                      <fieldset
+                        disabled={!canEdit(item)}
+                        className="tb-item-detail tb-list-detail m-0 min-w-0 border-0 p-4"
+                      >
+                        {!canEdit(item) ? (
+                          <p className="mb-3 rounded-[var(--radius)] bg-[var(--surface-2)] px-3 py-2 text-xs text-[var(--text-muted)]">
+                            &lsquo;{assigneeName(item.assignee)}&rsquo; 담당 업무입니다. 담당자 본인
+                            또는 부서장만 수정할 수 있습니다.
+                          </p>
+                        ) : null}
                         <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_300px]">
                           <div className="space-y-4">
                             <div className="tb-list-quick-edit">
@@ -5417,6 +5179,7 @@ export default function TaskBoard() {
                                 <span className="tb-label">담당자</span>
                                 <input
                                   value={item.assignee}
+                                  list="member-list"
                                   onChange={(event) =>
                                     updateLocalItem(item.id, {
                                       assignee: event.target.value,
@@ -5639,7 +5402,7 @@ export default function TaskBoard() {
                                   const stepSubsDone = stepSubs.filter(
                                     (subtask) => subtask.status === "done"
                                   ).length;
-                                  const stepPanelOpen = expandedStepIds.has(
+                                  const stepPanelOpen = !canEdit(item) || expandedStepIds.has(
                                     step.id
                                   );
 
@@ -5714,7 +5477,7 @@ export default function TaskBoard() {
                                               toggleStepExpanded(step.id)
                                             }
                                             data-active={stepPanelOpen}
-                                            className={`tb-btn tb-list-subtask-toggle shrink-0 !py-1.5 text-xs ${
+                                            className={`tb-btn tb-list-subtask-toggle max-w-full shrink-0 !py-1.5 text-xs ${
                                               stepSubs.length &&
                                               stepSubsDone === stepSubs.length
                                                 ? "tb-btn-soft-success"
@@ -5974,6 +5737,7 @@ export default function TaskBoard() {
                                 <div className="flex items-center gap-2">
                                   <input
                                     value={item.assignee}
+                                    list="member-list"
                                     onChange={(event) =>
                                       updateLocalItem(item.id, {
                                         assignee: event.target.value,
@@ -6313,7 +6077,7 @@ export default function TaskBoard() {
                             </div>
                           </div>
                         </div>
-                      </div>
+                      </fieldset>
                     ) : null}
                   </div>
                 );
@@ -6366,7 +6130,7 @@ export default function TaskBoard() {
                                 {template.name} ({template.stages.length}단계)
                               </option>
                             ))}
-                            <option value="__new__">＋ 새 유형 만들기</option>
+                            {isManager ? <option value="__new__">＋ 새 유형 만들기</option> : null}
                           </select>
                           <input
                             id="new-task-title"
@@ -6376,7 +6140,9 @@ export default function TaskBoard() {
                             placeholder="새 업무명"
                           />
                           <input
-                            value={newAssignee}
+                            value={isManager ? newAssignee : currentActor}
+                            disabled={!isManager}
+                            list="member-list"
                             onChange={(event) => setNewAssignee(event.target.value)}
                             className="tb-field"
                             placeholder="담당자"
@@ -6414,6 +6180,7 @@ export default function TaskBoard() {
                 );
               })}
 
+            {isManager ? (
             <div className="tb-card tb-add-strip tb-category-add p-3.5">
               <div className="mb-2.5 flex items-center gap-2 text-sm font-semibold text-[var(--text-muted)]">
                 <span className="flex h-5 w-5 items-center justify-center rounded-full bg-[var(--accent-soft)] text-[var(--accent)]">
@@ -6442,6 +6209,7 @@ export default function TaskBoard() {
                 </button>
               </form>
             </div>
+            ) : null}
           </div>
         ) : viewMode === "map" ? (
           <div className="grid items-stretch gap-4 lg:grid-cols-[minmax(0,1fr)_300px]">
@@ -6488,7 +6256,8 @@ export default function TaskBoard() {
                     setPlacingItemId(null);
                     setCreatingOnMap(true);
                   }}
-                  disabled={creatingOnMap}
+                  disabled={creatingOnMap || !canCreateItems}
+                  title={canCreateItems ? undefined : "이 보드는 부서장만 새 업무를 등록할 수 있습니다"}
                   className="tb-btn tb-btn-primary justify-center"
                 >
                   + 새 업무
@@ -6617,7 +6386,8 @@ export default function TaskBoard() {
                         <button
                           type="button"
                           onClick={() => setPlacingItemId(item.id)}
-                          className="tb-iconbtn h-7 w-7 shrink-0 text-xs"
+                          disabled={!canEdit(item)}
+                          className="tb-iconbtn h-7 w-7 shrink-0 text-xs disabled:cursor-not-allowed disabled:opacity-30"
                           title="지도를 클릭해 위치 다시 지정"
                         >
                           📍
@@ -6670,7 +6440,8 @@ export default function TaskBoard() {
                         <button
                           type="button"
                           onClick={() => setPlacingItemId(item.id)}
-                          className="tb-iconbtn h-7 w-7 shrink-0 text-xs"
+                          disabled={!canEdit(item)}
+                          className="tb-iconbtn h-7 w-7 shrink-0 text-xs disabled:cursor-not-allowed disabled:opacity-30"
                           title="지도를 클릭해 위치 지정"
                         >
                           📍
@@ -6858,6 +6629,7 @@ export default function TaskBoard() {
                             <td className="px-2 py-2.5 align-top">
                               <input
                                 value={item.assignee}
+                                list="member-list"
                                 onChange={(event) =>
                                   updateLocalItem(item.id, {
                                     assignee: event.target.value,
@@ -7289,7 +7061,7 @@ export default function TaskBoard() {
                       {template.name} ({template.stages.length}단계)
                     </option>
                   ))}
-                  <option value="__new__">＋ 새 유형 만들기…</option>
+                  {isManager ? <option value="__new__">＋ 새 유형 만들기…</option> : null}
                 </select>
                 <input
                   value={newTitle}
@@ -7298,7 +7070,9 @@ export default function TaskBoard() {
                   placeholder="새 업무명"
                 />
                 <input
-                  value={newAssignee}
+                  value={isManager ? newAssignee : currentActor}
+                  disabled={!isManager}
+                  list="member-list"
                   onChange={(event) => setNewAssignee(event.target.value)}
                   className="tb-field"
                   placeholder="담당자"
@@ -7466,9 +7240,12 @@ export default function TaskBoard() {
 
                           <button
                             type="button"
-                            onPointerDown={(event) =>
-                              startGanttDrag(event, item.id)
-                            }
+                            onPointerDown={(event) => {
+                              if (canEdit(item)) {
+                                startGanttDrag(event, item.id);
+                              }
+                            }}
+                            disabled={!canEdit(item)}
                             className="absolute top-1/2 z-10 h-4 w-4 -translate-x-1/2 -translate-y-1/2 cursor-ew-resize rounded-full border-2 border-white shadow"
                             style={{
                               left: `${endPct ?? startPct}%`,
@@ -7542,6 +7319,7 @@ export default function TaskBoard() {
             </div>
           </section>
 
+          {isManager ? (
           <section className="tb-card tb-section p-5">
             <h2 className="text-base font-semibold">보드 설정</h2>
             <div className="mt-3 grid gap-3.5">
@@ -7607,16 +7385,6 @@ export default function TaskBoard() {
                   className="tb-field"
                 />
               </label>
-              <label>
-                <span className="tb-label">사용자명</span>
-                <input
-                  value={userName}
-                  onChange={(event) => setUserName(event.target.value)}
-                  onBlur={(event) => saveUserName(event.target.value)}
-                  className="tb-field"
-                  placeholder="이름"
-                />
-              </label>
 
               <div className="border-t border-[var(--border)] pt-3">
                 <span className="tb-label">
@@ -7651,6 +7419,7 @@ export default function TaskBoard() {
               </div>
             </div>
           </section>
+          ) : null}
         </div>
       </section>
 
@@ -7680,6 +7449,20 @@ export default function TaskBoard() {
               className="hover:text-[var(--text-muted)] hover:underline"
             >
               📄 월간 보고서
+            </button>
+            <button
+              type="button"
+              onClick={() => setWorkLogOpen(true)}
+              className="hover:text-[var(--text-muted)] hover:underline"
+            >
+              📝 업무일지
+            </button>
+            <button
+              type="button"
+              onClick={() => setMembersOpen(true)}
+              className="hover:text-[var(--text-muted)] hover:underline"
+            >
+              👥 구성원 관리
             </button>
           </div>
         </div>
@@ -7773,6 +7556,7 @@ export default function TaskBoard() {
                     </span>
                   </button>
                 ))}
+                {isManager ? (
                 <button
                   type="button"
                   onClick={() => openTemplateEditor(null)}
@@ -7780,6 +7564,7 @@ export default function TaskBoard() {
                 >
                   + 새 유형
                 </button>
+                ) : null}
               </div>
 
               <div className="space-y-3">
@@ -8070,7 +7855,7 @@ export default function TaskBoard() {
               <button
                 type="button"
                 disabled={
-                  !webhookUrl || !webhookEnabled || sendingAlerts ||
+                  !isManager || !webhookUrl || !webhookEnabled || sendingAlerts ||
                   !notifications.total
                 }
                 onClick={() => void sendDeadlineAlerts()}
@@ -8256,7 +8041,7 @@ export default function TaskBoard() {
                       {template.name} ({template.stages.length}단계)
                     </option>
                   ))}
-                  <option value="__new__">＋ 새 유형 만들기…</option>
+                  {isManager ? <option value="__new__">＋ 새 유형 만들기…</option> : null}
                 </select>
                 <span className="mt-1 block text-[10px] text-[var(--text-faint)]">
                   {templatesByKey.get(newTemplateKey)?.stages.length ?? 0}개
@@ -8277,7 +8062,9 @@ export default function TaskBoard() {
                 <label className="block">
                   <span className="tb-label">담당자</span>
                   <input
-                    value={mapNewAssignee}
+                    value={isManager ? mapNewAssignee : currentActor}
+                    disabled={!isManager}
+                    list="member-list"
                     onChange={(event) => setMapNewAssignee(event.target.value)}
                     className="tb-field"
                     placeholder="담당자"
@@ -8476,6 +8263,7 @@ export default function TaskBoard() {
               >
                 📎 기안문 양식
               </button>
+              {isManager ? (
               <button
                 type="button"
                 onClick={() => {
@@ -8486,6 +8274,7 @@ export default function TaskBoard() {
               >
                 ✏️ 유형·단계 관리
               </button>
+              ) : null}
               <button
                 type="button"
                 onClick={() => {
@@ -9015,6 +8804,52 @@ export default function TaskBoard() {
           </div>
         </div>
       ) : null}
+
+      {membersOpen ? (
+        <MembersPanel
+          members={members}
+          requests={joinRequests}
+          policy={policy}
+          boardAssignees={assignees}
+          request={apiRequest}
+          onMembersChange={applyMembersResponse}
+          viewer={me}
+          onAssignmentsRenamed={() => void loadTasks()}
+          onOpenWorkLog={() => {
+            setMembersOpen(false);
+            setWorkLogOpen(true);
+          }}
+          onClose={() => setMembersOpen(false)}
+        />
+      ) : null}
+
+      {workLogOpen ? (
+        <WorkLogPanel
+          viewer={me}
+          members={members}
+          items={items}
+          organizationName={organizationName}
+          request={apiRequest}
+          onPendingReviewChange={setPendingReview}
+          policy={policy}
+          boardTitle={boardTitle}
+          onOpenMembers={() => {
+            setWorkLogOpen(false);
+            setMembersOpen(true);
+          }}
+          onClose={() => setWorkLogOpen(false)}
+        />
+      ) : null}
+
+      <datalist id="member-list">
+        {members
+          .filter((member) => member.active)
+          .map((member) => (
+            <option key={member.id} value={member.name}>
+              {member.role}
+            </option>
+          ))}
+      </datalist>
 
       <datalist id="wetland-presets">
         {WETLAND_PRESETS.map((preset) => (

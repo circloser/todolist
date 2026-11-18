@@ -57,6 +57,27 @@
       "when": 1786417258995,
       "tag": "0007_grey_sunspot",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "6",
+      "when": 1794978671677,
+      "tag": "0008_team_members_work_logs",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "6",
+      "when": 1794999345107,
+      "tag": "0009_accounts_roles_log_review",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "6",
+      "when": 1795000479914,
+      "tag": "0010_member_log_viewer",
+      "breakpoints": true
     }
   ]
 }

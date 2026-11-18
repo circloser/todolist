@@ -1,9 +1,6 @@
 import { getD1 } from "../../../db";
-import {
-  DEFAULT_WORKSPACE_ID,
-  ensureWorkspaceTables,
-  requireWorkspaceAccess,
-} from "../workspace-auth";
+import { forbidden, requireWorkspaceAccess } from "../auth-store";
+import { DEFAULT_WORKSPACE_ID, ensureWorkspaceTables } from "../workspace-auth";
 
 // Shared document templates (기안문 양식 등): small office files stored as
 // D1 blobs so no extra storage infrastructure is needed. Uploads are capped
@@ -49,7 +46,7 @@ async function prepareDocuments() {
     .run();
   await ensureWorkspaceTables({
     defaultTeamName: "습지복원팀",
-    defaultBoardTitle: "Workflow Command Center",
+    defaultBoardTitle: "업무나침반",
   });
   documentsReady = true;
 }
@@ -191,10 +188,7 @@ export async function POST(request: Request) {
     const name =
       (typeof nameField === "string" ? nameField.trim().slice(0, 80) : "") ||
       file.name;
-    const actorField = form.get("actor");
-    const actor =
-      (typeof actorField === "string" ? actorField.trim().slice(0, 80) : "") ||
-      "사용자";
+    const actor = access.actor;
     const now = new Date().toISOString();
 
     await getD1()
@@ -252,12 +246,18 @@ export async function DELETE(request: Request) {
     }
 
     const row = await getD1()
-      .prepare("SELECT name FROM document_templates WHERE id = ? AND workspace_id = ?")
+      .prepare(
+        "SELECT name, uploaded_by FROM document_templates WHERE id = ? AND workspace_id = ?"
+      )
       .bind(id, workspaceId)
-      .first<{ name: string }>();
+      .first<{ name: string; uploaded_by: string }>();
 
     if (!row) {
       return Response.json({ error: "양식을 찾을 수 없습니다." }, { status: 404 });
+    }
+
+    if (!access.isManager && row.uploaded_by !== access.actor) {
+      return forbidden("양식은 올린 사람 또는 부서장만 삭제할 수 있습니다.");
     }
 
     await getD1()
@@ -265,10 +265,7 @@ export async function DELETE(request: Request) {
       .bind(id, workspaceId)
       .run();
 
-    const actor =
-      typeof payload.actor === "string" && payload.actor.trim()
-        ? payload.actor.trim().slice(0, 80)
-        : "사용자";
+    const actor = access.actor;
     await logDocumentHistory(
       workspaceId,
       `${actor}님이 '${row.name}' 양식을 삭제함`,

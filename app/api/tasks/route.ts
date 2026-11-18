@@ -5,10 +5,19 @@ import {
   hashWorkspacePassword,
   listWorkspaces,
   makeWorkspacePassword,
-  requireWorkspaceAccess,
   type WorkspaceRow,
   workspaceLabel,
 } from "../workspace-auth";
+import { getTeamPolicy, prepareTeamTables } from "../team-store";
+import {
+  forbidden,
+  getSessionUser,
+  requireWorkspaceAccess,
+  viewerOf,
+  type BoardAccess,
+} from "../auth-store";
+import { pickMemberColor, sameMemberName } from "../../lib/team";
+import { displayBoardTitle } from "../../brand";
 
 type StepStatus = "todo" | "done";
 
@@ -343,35 +352,10 @@ const seedTemplates: ResolvedTemplate[] = rawTemplates.map((template) => ({
 
 const defaultAppSettings = {
   organizationName: "습지복원팀",
-  boardTitle: "Workflow Command Center",
+  boardTitle: "업무나침반",
 };
 
-function normalizeActor(value: unknown) {
-  if (typeof value !== "string") {
-    return "";
-  }
 
-  return value.trim().slice(0, 80);
-}
-
-function getActor(request: Request, override?: unknown) {
-  const overrideName = normalizeActor(override);
-
-  if (overrideName) {
-    return overrideName;
-  }
-
-  const encodedName = request.headers.get("oai-authenticated-user-full-name");
-  const nameEncoding = request.headers.get(
-    "oai-authenticated-user-full-name-encoding"
-  );
-
-  if (encodedName && nameEncoding === "percent-encoded-utf-8") {
-    return decodeURIComponent(encodedName);
-  }
-
-  return request.headers.get("oai-authenticated-user-email") ?? "사용자";
-}
 
 function toRouteErrorMessage(error: unknown) {
   const message = error instanceof Error ? error.message : "Unexpected error";
@@ -1018,6 +1002,70 @@ async function verifyWorkspacePassword(
   return hash === workspace.password_hash;
 }
 
+async function ensureCreatorIsManager(workspaceId: string, userId: number, name: string) {
+  await prepareTeamTables();
+  const d1 = getD1();
+  const now = new Date().toISOString();
+  const linked = await d1
+    .prepare("SELECT id FROM workspace_members WHERE workspace_id = ? AND user_id = ?")
+    .bind(workspaceId, userId)
+    .first<{ id: number }>();
+
+  if (linked) {
+    await d1
+      .prepare(
+        "UPDATE workspace_members SET access_role = 'manager', active = 1, updated_at = ? WHERE id = ?"
+      )
+      .bind(now, linked.id)
+      .run();
+    return;
+  }
+
+  const sameName = await d1
+    .prepare(
+      "SELECT id FROM workspace_members WHERE workspace_id = ? AND name = ? AND user_id IS NULL"
+    )
+    .bind(workspaceId, name)
+    .first<{ id: number }>();
+
+  if (sameName) {
+    await d1
+      .prepare(
+        "UPDATE workspace_members SET user_id = ?, access_role = 'manager', active = 1, updated_at = ? WHERE id = ?"
+      )
+      .bind(userId, now, sameName.id)
+      .run();
+    return;
+  }
+
+  const count = await d1
+    .prepare("SELECT COUNT(*) AS count, COALESCE(MAX(position), -1) + 1 AS next FROM workspace_members WHERE workspace_id = ?")
+    .bind(workspaceId)
+    .first<{ count: number; next: number }>();
+  // Another roster entry may already use this name with an account; fall
+  // back to a distinguishable name rather than failing board creation.
+  const taken = await d1
+    .prepare("SELECT id FROM workspace_members WHERE workspace_id = ? AND name = ?")
+    .bind(workspaceId, name)
+    .first<{ id: number }>();
+  await d1
+    .prepare(
+      `INSERT INTO workspace_members
+         (workspace_id, name, role, color, active, position, user_id, access_role, created_at, updated_at)
+       VALUES (?, ?, '', ?, 1, ?, ?, 'manager', ?, ?)`
+    )
+    .bind(
+      workspaceId,
+      taken ? `${name} (${userId})` : name,
+      pickMemberColor(count?.count ?? 0),
+      count?.next ?? 0,
+      userId,
+      now,
+      now
+    )
+    .run();
+}
+
 async function copyWorkspaceData({
   sourceWorkspaceId,
   targetWorkspaceId,
@@ -1210,6 +1258,46 @@ async function copyWorkspaceData({
       .bind(targetWorkspaceId, setting.assignee, setting.color, now)
   );
 
+  // The team roster carries over to the new year; 업무일지 stay with the
+  // year they were written in.
+  await prepareTeamTables();
+  const sourceMembers = await d1
+    .prepare(
+      `SELECT name, role, color, active, position, user_id, access_role, log_viewer
+       FROM workspace_members WHERE workspace_id = ? ORDER BY position, id`
+    )
+    .bind(sourceWorkspaceId)
+    .all<{
+      name: string;
+      role: string;
+      color: string;
+      active: number;
+      position: number;
+      user_id: number | null;
+      access_role: string;
+      log_viewer: number;
+    }>();
+  // Accounts and roles carry over so the same team can sign straight in.
+  const memberStatements = (sourceMembers.results ?? []).map((member) =>
+    d1
+      .prepare(`INSERT OR IGNORE INTO workspace_members (
+        workspace_id, name, role, color, active, position, user_id, access_role, log_viewer, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+      .bind(
+        targetWorkspaceId,
+        member.name,
+        member.role,
+        member.color,
+        member.active,
+        member.position,
+        member.user_id,
+        member.access_role === "manager" ? "manager" : "member",
+        member.log_viewer ? 1 : 0,
+        now,
+        now
+      )
+  );
+
   const settings = await d1
     .prepare(
       "SELECT key, value, updated_at FROM workspace_settings WHERE workspace_id = ?"
@@ -1229,6 +1317,7 @@ async function copyWorkspaceData({
   const statements = [
     ...subtaskStatements,
     ...assigneeStatements,
+    ...memberStatements,
     ...settingStatements,
     d1
       .prepare(`INSERT INTO workspace_settings (workspace_id, key, value, updated_at)
@@ -1654,12 +1743,14 @@ async function getAppSettings(workspaceId: string) {
     .bind(workspaceId)
     .all<AppSettingRow>();
 
-  return {
+  const merged = {
     ...defaultAppSettings,
     ...Object.fromEntries(
       (settings.results ?? []).map((setting) => [setting.key, setting.value])
     ),
   };
+  // Boards created before the rename still store the old default title.
+  return { ...merged, boardTitle: displayBoardTitle(merged.boardTitle) };
 }
 
 // Saved display order for 대분류(그룹) sections (a preference list of names).
@@ -1721,6 +1812,147 @@ function daysFromKstToday(dateIso: string) {
   return Math.round((toUtcMs(dateIso) - toUtcMs(today)) / 86_400_000);
 }
 
+// ---------------------------------------------------------------- access
+// Who may change what on the board. This mirrors the dispatch order of
+// POST/PATCH/DELETE below exactly, so every branch is covered:
+// - board-wide settings, templates, groups, full reorder, alerts: 부서장
+// - an item and its steps/checklists: the item's assignee or 부서장
+// - reassigning an item to someone else: 부서장
+
+const MANAGER_ONLY_ACTIONS = new Set([
+  "update-workspace",
+  "save-group-order",
+  "delete-group",
+  "rename-group",
+  "merge-group",
+  "save-template",
+  "delete-template",
+  "save-webhook",
+  "update-settings",
+  "send-deadline-alerts",
+]);
+
+const MANAGER_ONLY = "부서장만 할 수 있는 작업입니다.";
+
+type MutationPayload = {
+  action?: string;
+  itemId?: unknown;
+  stepId?: unknown;
+  subtaskId?: unknown;
+  order?: unknown;
+  assignee?: unknown;
+};
+
+async function itemEditDenied(access: BoardAccess, itemId: number, nextAssignee?: unknown) {
+  if (access.isManager) {
+    return null;
+  }
+
+  const row = await getD1()
+    .prepare("SELECT assignee FROM workflow_items WHERE id = ? AND workspace_id = ?")
+    .bind(itemId, access.workspace.id)
+    .first<{ assignee: string }>();
+
+  if (!row) {
+    return null; // the handler answers 404
+  }
+
+  if (!sameMemberName(row.assignee, access.actor)) {
+    return forbidden(
+      `'${row.assignee.trim() || "미지정"}' 담당 업무는 담당자 본인 또는 부서장만 수정할 수 있습니다.`
+    );
+  }
+
+  if (
+    typeof nextAssignee === "string" &&
+    !sameMemberName(nextAssignee.trim() || "미지정", row.assignee)
+  ) {
+    return forbidden("담당자 변경은 부서장만 할 수 있습니다.");
+  }
+
+  return null;
+}
+
+async function parentItemId(table: "workflow_steps" | "workflow_subtasks", id: number, workspaceId: string) {
+  const row = await getD1()
+    .prepare(
+      `SELECT x.item_id FROM ${table} x JOIN workflow_items i ON i.id = x.item_id
+       WHERE x.id = ? AND i.workspace_id = ?`
+    )
+    .bind(id, workspaceId)
+    .first<{ item_id: number }>();
+  return row?.item_id ?? null;
+}
+
+async function authorizeTaskMutation(
+  access: BoardAccess,
+  method: "POST" | "PATCH" | "DELETE",
+  payload: MutationPayload
+): Promise<Response | null> {
+  const action = typeof payload.action === "string" ? payload.action : "";
+  const workspaceId = access.workspace.id;
+
+  if (MANAGER_ONLY_ACTIONS.has(action) && method !== "DELETE") {
+    return access.isManager ? null : forbidden(MANAGER_ONLY);
+  }
+
+  if (method === "POST") {
+    if (action === "create-subtask") {
+      return itemEditDenied(access, Number(payload.itemId));
+    }
+    // Everything else creates a work item (new or duplicated).
+    if (!access.isManager && !(await getTeamPolicy(workspaceId)).memberCanCreateItems) {
+      return forbidden("이 보드는 부서장만 새 업무를 등록할 수 있습니다.");
+    }
+    if (action === "duplicate-item") {
+      return itemEditDenied(access, Number(payload.itemId));
+    }
+    return null; // new items are assigned to the creator (see below)
+  }
+
+  if (method === "PATCH") {
+    if (action === "move-item" || action === "set-item-template") {
+      return itemEditDenied(access, Number(payload.itemId));
+    }
+    if (Array.isArray(payload.order)) {
+      return access.isManager ? null : forbidden(MANAGER_ONLY);
+    }
+    if (action === "set-assignee-color") {
+      return access.isManager ||
+        (typeof payload.assignee === "string" && sameMemberName(payload.assignee, access.actor))
+        ? null
+        : forbidden("다른 담당자의 색상은 부서장만 바꿀 수 있습니다.");
+    }
+  }
+
+  if (Number.isFinite(Number(payload.subtaskId))) {
+    const itemId = await parentItemId("workflow_subtasks", Number(payload.subtaskId), workspaceId);
+    return itemId === null ? null : itemEditDenied(access, itemId);
+  }
+
+  if (method === "PATCH" && Number.isFinite(Number(payload.stepId))) {
+    const itemId = await parentItemId("workflow_steps", Number(payload.stepId), workspaceId);
+    return itemId === null ? null : itemEditDenied(access, itemId);
+  }
+
+  if (Number.isFinite(Number(payload.itemId))) {
+    if (
+      method === "DELETE" &&
+      !access.isManager &&
+      !(await getTeamPolicy(workspaceId)).memberCanDeleteItems
+    ) {
+      return forbidden("이 보드는 부서장만 업무를 삭제할 수 있습니다.");
+    }
+    return itemEditDenied(
+      access,
+      Number(payload.itemId),
+      method === "PATCH" ? payload.assignee : undefined
+    );
+  }
+
+  return null;
+}
+
 export async function GET(request: Request) {
   try {
     await prepareWorkflow();
@@ -1753,7 +1985,8 @@ export async function GET(request: Request) {
       workspace: access.summary,
       workspaces: await listWorkspaces(),
       defaultWorkspaceId: DEFAULT_WORKSPACE_ID,
-      viewer: getActor(request),
+      viewer: access.actor,
+      me: viewerOf(access),
     });
   } catch (error) {
     return Response.json(
@@ -1797,10 +2030,19 @@ export async function POST(request: Request) {
       keepSchedule?: boolean;
       stepId?: number;
     };
-    const actor = getActor(request, payload.actor);
     const d1 = getD1();
 
     if (payload.action === "create-workspace") {
+      const creator = await getSessionUser(request);
+
+      if (!creator) {
+        return Response.json(
+          { error: "로그인이 필요합니다.", requiresLogin: true },
+          { status: 401 }
+        );
+      }
+
+      const actor = creator.name;
       const departmentName = normalizeText(payload.departmentName, 80);
       const teamName = normalizeText(payload.teamName, 80);
       const password =
@@ -1915,6 +2157,9 @@ export async function POST(request: Request) {
         await ensureDefaultItem(workspaceId);
       }
 
+      // The creator runs the new board as its 부서장.
+      await ensureCreatorIsManager(workspaceId, creator.id, creator.name);
+
       await ensureDefaultSettings(workspaceId);
 
       await logHistory({
@@ -1927,10 +2172,7 @@ export async function POST(request: Request) {
         actor,
       });
 
-      const workspace = await requireWorkspaceAccess(request, {
-        workspaceId,
-        workspacePassword: password,
-      });
+      const workspace = await requireWorkspaceAccess(request, { workspaceId });
 
       if ("response" in workspace) {
         return workspace.response;
@@ -1955,6 +2197,11 @@ export async function POST(request: Request) {
       return access.response;
     }
     const workspaceId = access.workspace.id;
+    const actor = access.actor;
+    const denied = await authorizeTaskMutation(access, "POST", payload);
+    if (denied) {
+      return denied;
+    }
 
     if (payload.action === "send-deadline-alerts") {
       const webhook = await getWebhookSettings(workspaceId);
@@ -2311,7 +2558,10 @@ export async function POST(request: Request) {
     }
 
     const title = payload.title?.trim().slice(0, 120) ?? "";
-    const assignee = payload.assignee?.trim().slice(0, 80) ?? "";
+    // Members can only create work for themselves; 부서장 assign anyone.
+    const assignee = access.isManager
+      ? payload.assignee?.trim().slice(0, 80) ?? ""
+      : access.actor;
     const memo = payload.memo?.trim().slice(0, 1000) ?? "";
     const allocatedBudget = normalizeBudget(payload.allocatedBudget);
     const requiredBudget = normalizeBudget(payload.requiredBudget);
@@ -2431,13 +2681,17 @@ export async function PATCH(request: Request) {
       groupOrder?: string[];
     };
     const now = new Date().toISOString();
-    const actor = getActor(request, payload.actor);
     const d1 = getD1();
     const access = await requireWorkspaceAccess(request, payload);
     if ("response" in access) {
       return access.response;
     }
     const workspaceId = access.workspace.id;
+    const actor = access.actor;
+    const denied = await authorizeTaskMutation(access, "PATCH", payload);
+    if (denied) {
+      return denied;
+    }
 
     if (payload.action === "update-workspace") {
       const departmentName = normalizeText(payload.departmentName, 80);
@@ -2505,10 +2759,7 @@ export async function PATCH(request: Request) {
         actor,
       });
 
-      const workspace = await requireWorkspaceAccess(request, {
-        workspaceId,
-        workspacePassword: newPassword || payload.workspacePassword,
-      });
+      const workspace = await requireWorkspaceAccess(request, { workspaceId });
 
       if ("response" in workspace) {
         return workspace.response;
@@ -3567,13 +3818,17 @@ export async function DELETE(request: Request) {
       itemId?: number;
       subtaskId?: number;
     };
-    const actor = getActor(request, payload.actor);
     const d1 = getD1();
     const access = await requireWorkspaceAccess(request, payload);
     if ("response" in access) {
       return access.response;
     }
     const workspaceId = access.workspace.id;
+    const actor = access.actor;
+    const denied = await authorizeTaskMutation(access, "DELETE", payload);
+    if (denied) {
+      return denied;
+    }
 
     // Delete a single checklist item.
     if (Number.isFinite(Number(payload.subtaskId))) {
