@@ -313,3 +313,75 @@ export const workspaceJoinRequests = sqliteTable(
     uniqueIndex("workspace_join_requests_user_idx").on(table.workspaceId, table.userId),
   ]
 );
+
+// 업무일정: one calendar shared by everyone on a board.
+export const calendarEvents = sqliteTable(
+  "calendar_events",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    workspaceId: text("workspace_id").notNull(),
+    title: text("title").notNull(),
+    category: text("category").notNull().default("etc"),
+    startDate: text("start_date").notNull(),
+    endDate: text("end_date").notNull(),
+    allDay: integer("all_day").notNull().default(1),
+    startTime: text("start_time"),
+    endTime: text("end_time"),
+    location: text("location").notNull().default(""),
+    description: text("description").notNull().default(""),
+    attendeeIds: text("attendee_ids").notNull().default("[]"),
+    reminderMinutes: integer("reminder_minutes"),
+    createdByMemberId: integer("created_by_member_id").notNull(),
+    createdByName: text("created_by_name").notNull(),
+    updatedBy: text("updated_by").notNull().default(""),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (table) => [
+    index("calendar_events_range_idx").on(table.workspaceId, table.startDate, table.endDate),
+    index("calendar_events_updated_idx").on(table.workspaceId, table.updatedAt),
+  ]
+);
+
+// 회의록, shared with the board.
+export const meetingMinutes = sqliteTable(
+  "meeting_minutes",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    workspaceId: text("workspace_id").notNull(),
+    title: text("title").notNull(),
+    meetingDate: text("meeting_date").notNull(),
+    startTime: text("start_time"),
+    endTime: text("end_time"),
+    location: text("location").notNull().default(""),
+    attendeeIds: text("attendee_ids").notNull().default("[]"),
+    guests: text("guests").notNull().default(""),
+    agenda: text("agenda").notNull().default(""),
+    content: text("content").notNull().default(""),
+    decisions: text("decisions").notNull().default(""),
+    actionItems: text("action_items").notNull().default("[]"),
+    eventId: integer("event_id"),
+    authorMemberId: integer("author_member_id").notNull(),
+    authorName: text("author_name").notNull(),
+    updatedBy: text("updated_by").notNull().default(""),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (table) => [index("meeting_minutes_date_idx").on(table.workspaceId, table.meetingDate)]
+);
+
+// Members who missed a meeting confirm here that they read the minutes.
+export const meetingMinutesReads = sqliteTable(
+  "meeting_minutes_reads",
+  {
+    minutesId: integer("minutes_id").notNull(),
+    workspaceId: text("workspace_id").notNull(),
+    memberId: integer("member_id").notNull(),
+    memberName: text("member_name").notNull(),
+    acknowledgedAt: text("acknowledged_at").notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.minutesId, table.memberId] }),
+    index("meeting_minutes_reads_workspace_idx").on(table.workspaceId),
+  ]
+);

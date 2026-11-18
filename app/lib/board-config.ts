@@ -43,6 +43,7 @@ export const defaultSettings: AppSettings = {
 
 export const DASHBOARD_WIDGETS: Array<{ key: string; label: string }> = [
   { key: "kpi", label: "KPI 카드" },
+  { key: "schedule", label: "다가오는 일정·회의록" },
   { key: "status", label: "상태 분포" },
   { key: "workload", label: "담당자 워크로드" },
   { key: "types", label: "유형별 업무" },

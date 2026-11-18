@@ -5,6 +5,7 @@ type Board = {
   webhook?: { url: string; enabled: number };
   items: Array<{ id: number; title: string; assignee: string; due_date: string | null }>;
   steps: Array<{ item_id: number; title: string; status: string; due_date: string | null; position: number }>;
+  events?: Array<Record<string, unknown>>;
 };
 const boards = new Map<string, Board>();
 const history: Array<{ workspaceId: string; action: string; summary: string; actor: string }> = [];
@@ -26,6 +27,9 @@ function statement(sql: string, args: unknown[] = []) {
       }
       if (sql.includes("FROM workflow_steps")) {
         return { results: boards.get(workspaceId)?.steps ?? [] };
+      }
+      if (sql.includes("FROM calendar_events")) {
+        return { results: boards.get(workspaceId)?.events ?? [] };
       }
       throw new Error(`unexpected all(): ${sql}`);
     },
@@ -118,5 +122,68 @@ describe("deadline alerts", () => {
     expect(JSON.parse(discord?.[1].body)).toHaveProperty("content");
     expect(history.every((entry) => entry.actor === "자동 알림")).toBe(true);
     expect(history[0].summary).toBe("평일 자동 발송: 마감 알림 1건을 웹훅으로 보냄");
+  });
+});
+
+describe("morning digest with today's schedule", () => {
+  const fetchMock = vi.fn();
+  beforeEach(() => {
+    boards.clear();
+    history.length = 0;
+    fetchMock.mockReset();
+    vi.stubGlobal("fetch", fetchMock);
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  const event = (overrides: Record<string, unknown>) => ({
+    id: 1,
+    workspace_id: "a",
+    title: "주간 회의",
+    category: "meeting",
+    start_date: "2026-11-18",
+    end_date: "2026-11-18",
+    all_day: 0,
+    start_time: "10:00",
+    end_time: "11:00",
+    location: "3층 회의실",
+    description: "",
+    attendee_ids: "[]",
+    reminder_minutes: 10,
+    created_by_member_id: 1,
+    created_by_name: "최부장",
+    updated_by: "최부장",
+    created_at: "",
+    updated_at: "",
+    ...overrides,
+  });
+
+  it("sends today's events even when nothing is due", async () => {
+    boards.set("a", {
+      webhook: { url: "https://hooks.slack.com/x", enabled: 1 },
+      items: [],
+      steps: [],
+      events: [event({})],
+    });
+    fetchMock.mockResolvedValue(new Response("ok", { status: 200 }));
+
+    expect(await sendDeadlineAlerts("a", AUTO_ALERT_ACTOR, "2026-11-18")).toEqual({ status: "sent", sent: 1 });
+    const text = JSON.parse(fetchMock.mock.calls[0][1].body).text as string;
+    expect(text.split("\n")).toEqual([
+      "📋 [습지복원팀] 오늘의 알림 (2026-11-18)",
+      "",
+      "📅 오늘 일정 1건",
+      "  · [회의] 10:00~11:00 주간 회의 @3층 회의실",
+    ]);
+  });
+
+  it("appends the schedule under the deadline list", async () => {
+    boards.set("a", { ...overdueBoard("https://hooks.slack.com/x"), events: [event({ all_day: 1, start_time: null, end_time: null, title: "현장 점검", category: "field", location: "" })] });
+    fetchMock.mockResolvedValue(new Response("ok", { status: 200 }));
+
+    expect(await sendDeadlineAlerts("a", "최부장", "2026-11-18")).toEqual({ status: "sent", sent: 2 });
+    const text = JSON.parse(fetchMock.mock.calls[0][1].body).text as string;
+    expect(text).toContain("🔴 D+1 습지 조사 — 최종 마감");
+    expect(text).toContain("  · [현장] 종일 현장 점검");
+    expect(history[0].summary).toBe("최부장님이 마감 알림 1건·오늘 일정 1건을 웹훅으로 발송함");
   });
 });
