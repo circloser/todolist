@@ -234,6 +234,13 @@ export async function POST(request: Request) {
                WHERE id = ?`
             )
             .bind(joinRequest.user_id, accessRole, now, target.id),
+          // Joining as 부서장: their earlier logs no longer wait for approval.
+          d1
+            .prepare(
+              `UPDATE work_logs SET status = 'recorded'
+               WHERE workspace_id = ? AND member_id = ? AND status = 'submitted' AND ? = 'manager'`
+            )
+            .bind(workspaceId, target.id, accessRole),
           dropRequest,
         ]);
       } else {
@@ -548,6 +555,17 @@ export async function PATCH(request: Request) {
       upsertAssigneeColor(workspaceId, name, color, now),
     ];
     let renamedItems = 0;
+
+    if (accessRole === "manager" && current.access_role !== "manager") {
+      // A new 부서장's own logs no longer wait for approval.
+      statements.push(
+        d1
+          .prepare(
+            "UPDATE work_logs SET status = 'recorded' WHERE workspace_id = ? AND member_id = ? AND status = 'submitted'"
+          )
+          .bind(workspaceId, current.id)
+      );
+    }
 
     if (renamed) {
       // Logs keep a name snapshot for display; keep it current.

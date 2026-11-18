@@ -26,7 +26,11 @@ export type TeamMember = {
   updatedAt: string;
 };
 
-export type WorkLogStatus = "submitted" | "approved" | "rejected";
+/**
+ * submitted → approved / rejected is the review flow for members' logs.
+ * "recorded" is a 부서장's own log: it needs no approval.
+ */
+export type WorkLogStatus = "submitted" | "approved" | "rejected" | "recorded";
 
 export type WorkLog = {
   id: number;
@@ -161,10 +165,16 @@ export const WORK_LOG_STATUS_LABEL: Record<WorkLogStatus, string> = {
   submitted: "승인 대기",
   approved: "승인",
   rejected: "반려",
+  recorded: "제출",
 };
 
 export function normalizeLogStatus(value: unknown): WorkLogStatus {
-  return value === "approved" || value === "rejected" ? value : "submitted";
+  return value === "approved" || value === "rejected" || value === "recorded" ? value : "submitted";
+}
+
+/** Status a log gets when its author saves it: a 부서장's own log skips approval. */
+export function savedLogStatus(accessRole: AccessRole): WorkLogStatus {
+  return accessRole === "manager" ? "recorded" : "submitted";
 }
 
 // Who may do what with a log. Authors edit their own until it is approved;
@@ -183,8 +193,11 @@ export function workLogPermissions(
   return {
     canEdit: own && !locked,
     canDelete: own && Boolean(log) && !locked,
-    canReview: Boolean(policy.logApproval && manager && log && !own),
-    canReopen: Boolean(policy.logApproval && manager && log && !own && status !== "submitted"),
+    // A 부서장's own log ("recorded") is never reviewed.
+    canReview: Boolean(policy.logApproval && manager && log && !own && status !== "recorded"),
+    canReopen: Boolean(
+      policy.logApproval && manager && log && !own && status !== "submitted" && status !== "recorded"
+    ),
   };
 }
 

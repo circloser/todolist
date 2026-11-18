@@ -64,7 +64,8 @@ export type MemberSummary = {
   missing: string[];
   writtenWeekdays: number;
   rate: number;
-  status: { submitted: number; approved: number; rejected: number };
+  /** recorded = 부서장 본인 일지 (no approval). */
+  status: { submitted: number; approved: number; rejected: number; recorded: number };
   items: Array<ReportItemInfo & { id: number; days: number; firstDate: string; lastDate: string }>;
   issues: Array<{ date: string; text: string }>;
 };
@@ -82,7 +83,8 @@ export function summarizeMember(
         log.memberId === member.id &&
         log.logDate >= context.from &&
         log.logDate <= context.to &&
-        (!approvedOnly || log.status === "approved")
+        // 부서장 본인 일지 needs no approval, so it counts as final.
+        (!approvedOnly || log.status === "approved" || log.status === "recorded")
     )
     .sort((first, second) => first.logDate.localeCompare(second.logDate));
   const lastCounted = context.to < context.today ? context.to : context.today;
@@ -113,6 +115,7 @@ export function summarizeMember(
       submitted: logs.filter((log) => log.status === "submitted").length,
       approved: logs.filter((log) => log.status === "approved").length,
       rejected: logs.filter((log) => log.status === "rejected").length,
+      recorded: logs.filter((log) => log.status === "recorded").length,
     },
     items: [...mentions.entries()]
       .map(([id, mention]) => ({
@@ -157,7 +160,7 @@ function periodText(context: ReportContext) {
 }
 
 function statusText(log: WorkLog, approval: boolean) {
-  if (!approval) {
+  if (!approval || log.status === "recorded") {
     return "제출";
   }
   if (log.status === "approved") {
@@ -230,6 +233,19 @@ function signatureBox(summary: MemberSummary, context: ReportContext) {
   return `<table class="sign" aria-label="결재"><tr><th>작성자</th><th>부서장</th></tr><tr><td>${esc(
     summary.member.name
   )}</td><td>${context.approval && summary.logs.length && summary.status.approved === summary.logs.length ? "전체 승인" : ""}</td></tr></table>`;
+}
+
+/** Only 부서장 본인 일지 (nothing to approve). */
+function approvalFree(summary: MemberSummary) {
+  return summary.logs.length > 0 && summary.status.recorded === summary.logs.length;
+}
+
+function approvalStat(summary: MemberSummary) {
+  return approvalFree(summary)
+    ? `<div class="stat"><b>승인 불필요</b><span>부서장 본인 일지</span></div>`
+    : `<div class="stat"><b>${summary.status.approved}</b><span>승인 · 대기 ${summary.status.submitted} · 반려 ${summary.status.rejected}${
+        summary.status.recorded ? ` · 승인 불필요 ${summary.status.recorded}` : ""
+      }</span></div>`;
 }
 
 function headerBlock(title: string, summary: MemberSummary, context: ReportContext, options: ReportOptions) {
@@ -310,9 +326,7 @@ function personalSection(summary: MemberSummary, context: ReportContext, options
   ];
 
   if (options.summary) {
-    const approvalStats = context.approval
-      ? `<div class="stat"><b>${summary.status.approved}</b><span>승인 · 대기 ${summary.status.submitted} · 반려 ${summary.status.rejected}</span></div>`
-      : "";
+    const approvalStats = context.approval ? approvalStat(summary) : "";
     parts.push(`<h2>요약</h2><div class="stats">
       <div class="stat"><b>${summary.logs.length}건</b><span>작성한 일지</span></div>
       <div class="stat"><b>${summary.rate}%</b><span>평일 작성률 (${summary.writtenWeekdays}/${summary.workdays.length}일)</span></div>
@@ -380,7 +394,9 @@ export function renderTeamSummary(
           summary.logs.length
         }</td><td class="num">${summary.rate}% <small>(${summary.writtenWeekdays}/${summary.workdays.length})</small></td>${
           context.approval
-            ? `<td class="num">${summary.status.approved}</td><td class="num">${summary.status.submitted}</td><td class="num">${summary.status.rejected}</td>`
+            ? approvalFree(summary)
+              ? '<td class="num" colspan="3"><small>승인 불필요</small></td>'
+              : `<td class="num">${summary.status.approved}</td><td class="num">${summary.status.submitted}</td><td class="num">${summary.status.rejected}</td>`
             : ""
         }<td>${summary.missing.length ? summary.missing.map(shortDay).join(", ") : '<span class="muted">없음</span>'}</td><td>${summary.items
           .slice(0, 3)
@@ -400,7 +416,9 @@ export function renderTeamSummary(
             const log = byDate.get(day);
             const color = !log
               ? ""
-              : !context.approval || log.status === "submitted"
+              : log.status === "recorded" && context.approval
+                ? "#2f8f55"
+                : !context.approval || log.status === "submitted" || log.status === "recorded"
                 ? "#b66d12"
                 : log.status === "approved"
                   ? "#2563eb"
@@ -410,7 +428,7 @@ export function renderTeamSummary(
           .join("")}</tr>`;
       })
       .join("")}</tbody></table><p class="sub">● ${
-      context.approval ? "파랑=승인, 주황=승인 대기, 빨강=반려" : "작성"
+      context.approval ? "파랑=승인, 주황=승인 대기, 빨강=반려, 초록=부서장 제출(승인 불필요)" : "작성"
     } · 점(·)=미작성 평일</p>`);
   }
 
@@ -528,11 +546,7 @@ function annualSection(
   parts.push(`<h2>연간 요약</h2><div class="stats five">
     <div class="stat"><b>${summary.logs.length}건</b><span>작성한 일지</span></div>
     <div class="stat"><b>${summary.rate}%</b><span>평일 작성률 (${summary.writtenWeekdays}/${summary.workdays.length}일)</span></div>
-    ${
-      context.approval
-        ? `<div class="stat"><b>${summary.status.approved}</b><span>승인 · 대기 ${summary.status.submitted} · 반려 ${summary.status.rejected}</span></div>`
-        : ""
-    }
+    ${context.approval ? approvalStat(summary) : ""}
     <div class="stat"><b>${summary.items.length}건</b><span>관련 업무</span></div>
     <div class="stat"><b>${summary.issues.length}건</b><span>특이사항</span></div>
   </div>`);
@@ -610,7 +624,9 @@ function annualTeamPage(summaries: MemberSummary[], year: number, context: Repor
           summary.logs.length
         }</td><td class="num">${summary.rate}% <small>(${summary.writtenWeekdays}/${summary.workdays.length})</small></td>${
           context.approval
-            ? `<td class="num">${summary.status.approved}</td><td class="num">${summary.status.rejected}</td>`
+            ? approvalFree(summary)
+              ? '<td class="num" colspan="2"><small>승인 불필요</small></td>'
+              : `<td class="num">${summary.status.approved}</td><td class="num">${summary.status.rejected}</td>`
             : ""
         }<td class="num">${summary.issues.length}</td><td>${summary.items
           .slice(0, 3)

@@ -29,6 +29,8 @@ import {
   shiftDate,
   unregisteredAssignees,
   workLogPermissions,
+  normalizeLogStatus,
+  savedLogStatus,
   workLogsToCsv,
   WORK_LOG_ITEM_MAX,
   type TeamMember,
@@ -295,6 +297,18 @@ describe("permissions", () => {
     });
     expect(workLogPermissions(manager, approved, 2).canReopen).toBe(true);
     expect(workLogPermissions(manager, { memberId: 1, status: "submitted" }, 1).canReview).toBe(false);
+  });
+
+  it("records a 부서장's own log without approval", () => {
+    expect(savedLogStatus("manager")).toBe("recorded");
+    expect(savedLogStatus("member")).toBe("submitted");
+    expect(normalizeLogStatus("recorded")).toBe("recorded");
+    expect(normalizeLogStatus("other")).toBe("submitted");
+    const recorded = { memberId: 1, status: "recorded" as const };
+    // The author can always edit it; nobody reviews or reopens it.
+    expect(workLogPermissions(manager, recorded, 1)).toMatchObject({ canEdit: true, canReview: false, canReopen: false });
+    const otherManager = { ...manager, memberId: 9 };
+    expect(workLogPermissions(otherManager, recorded, 1)).toMatchObject({ canReview: false, canReopen: false });
   });
 });
 

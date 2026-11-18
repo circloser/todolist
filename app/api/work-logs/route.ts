@@ -9,6 +9,7 @@ import {
   normalizeLogDate,
   normalizeLogRange,
   normalizeLogText,
+  savedLogStatus,
   WORK_LOG_STATUS_LABEL,
   type TeamPolicy,
 } from "../../lib/team";
@@ -208,20 +209,22 @@ export async function PUT(request: Request) {
       );
     }
 
-    // Saving (re)submits the log for review.
+    // Saving (re)submits a member's log for review; a 부서장's own log is
+    // recorded without approval.
+    const status = savedLogStatus(access.accessRole);
     const row = await getD1()
       .prepare(
         `INSERT INTO work_logs
            (workspace_id, member_id, member_name, log_date, content, plan, issues, item_ids,
             status, reviewer_name, reviewed_at, review_comment, updated_by, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'submitted', '', NULL, '', ?, ?, ?)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, '', NULL, '', ?, ?, ?)
          ON CONFLICT(workspace_id, member_id, log_date) DO UPDATE SET
            member_name = excluded.member_name,
            content = excluded.content,
            plan = excluded.plan,
            issues = excluded.issues,
            item_ids = excluded.item_ids,
-           status = 'submitted',
+           status = excluded.status,
            reviewer_name = '',
            reviewed_at = NULL,
            review_comment = '',
@@ -238,6 +241,7 @@ export async function PUT(request: Request) {
         draft.plan,
         draft.issues,
         JSON.stringify(draft.itemIds),
+        status,
         access.actor,
         now,
         now
@@ -305,12 +309,22 @@ export async function PATCH(request: Request) {
       return forbidden("본인의 업무일지는 직접 승인할 수 없습니다.");
     }
 
-    const targets = logs.filter((log) =>
-      decision === "reopen" ? log.status !== "submitted" : log.status !== "approved" || decision === "reject"
+    // 부서장이 직접 쓴 일지("recorded")는 승인 절차가 없다.
+    const targets = logs.filter(
+      (log) =>
+        log.status !== "recorded" &&
+        (decision === "reopen" ? log.status !== "submitted" : log.status !== "approved" || decision === "reject")
     );
 
     if (!targets.length) {
-      return Response.json({ error: "검토할 수 있는 업무일지가 없습니다." }, { status: 400 });
+      return Response.json(
+        {
+          error: logs.some((log) => log.status === "recorded")
+            ? "부서장이 작성한 업무일지는 승인 절차가 없습니다."
+            : "검토할 수 있는 업무일지가 없습니다.",
+        },
+        { status: 400 }
+      );
     }
 
     const now = new Date().toISOString();
