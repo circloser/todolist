@@ -46,6 +46,7 @@ import MembersPanel from "./members-panel";
 import MinutesView from "./minutes-view";
 import { useScheduleFeed } from "./schedule-feed";
 import { ScheduleNotices, ScheduleToasts } from "./schedule-notices";
+import SearchPalette from "./search-palette";
 import WorkLogPanel from "./work-log-panel";
 import type { CalendarEvent } from "./lib/schedule";
 import {
@@ -383,6 +384,14 @@ export default function TaskBoard() {
   const [focusEventId, setFocusEventId] = useState<number | null>(null);
   const [focusMinutesId, setFocusMinutesId] = useState<number | null>(null);
   const [minutesSeed, setMinutesSeed] = useState<CalendarEvent | null>(null);
+  // 통합 검색 and where its results lead.
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [minutesHighlight, setMinutesHighlight] = useState<string[]>([]);
+  const [workLogFocus, setWorkLogFocus] = useState<{
+    key: number;
+    memberId: number;
+    logDate: string;
+  } | null>(null);
   const [showFilters, setShowFilters] = useState(false);
   const [templateEditorOpen, setTemplateEditorOpen] = useState(false);
   const [templateDraft, setTemplateDraft] = useState<{
@@ -565,6 +574,30 @@ export default function TaskBoard() {
   const clearFocusEvent = useCallback(() => setFocusEventId(null), []);
   const clearFocusMinutes = useCallback(() => setFocusMinutesId(null), []);
   const clearMinutesSeed = useCallback(() => setMinutesSeed(null), []);
+
+  // 통합 검색 shortcuts: Ctrl/⌘+K anywhere, "/" when not typing in a field.
+  useEffect(() => {
+    if (landingOpen || !me) {
+      return;
+    }
+    const onKey = (event: KeyboardEvent) => {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") {
+        event.preventDefault();
+        setSearchOpen(true);
+        return;
+      }
+      const target = event.target as HTMLElement | null;
+      const typing =
+        target?.isContentEditable ||
+        ["INPUT", "TEXTAREA", "SELECT"].includes(target?.tagName ?? "");
+      if (event.key === "/" && !typing && !event.ctrlKey && !event.metaKey && !event.altKey) {
+        event.preventDefault();
+        setSearchOpen(true);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [landingOpen, me]);
 
   async function loadMembers(workspaceIdOverride?: string) {
     try {
@@ -3545,8 +3578,21 @@ export default function TaskBoard() {
   }
 
   function openMinutes(id: number) {
+    setMinutesHighlight([]);
     setFocusMinutesId(id);
     openView("minutes");
+  }
+
+  function openWorkLog(memberId: number, logDate: string) {
+    setWorkLogFocus({ key: Date.now(), memberId, logDate });
+    openView("worklog");
+  }
+
+  function openManualSection(sectionId: string) {
+    setManualOpen(true);
+    window.setTimeout(() => {
+      document.getElementById(sectionId)?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }, 80);
   }
 
   function openItem(id: number) {
@@ -3947,6 +3993,30 @@ export default function TaskBoard() {
               </div>
             </div>
             <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setSearchOpen(true)}
+                className="tb-btn tb-search-trigger"
+                title="업무·일정·회의록·업무일지·구성원·양식·매뉴얼 통합 검색 (Ctrl+K 또는 /)"
+                aria-label="통합 검색"
+              >
+                <svg
+                  width="15"
+                  height="15"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  aria-hidden="true"
+                >
+                  <circle cx="11" cy="11" r="8" />
+                  <path d="m21 21-4.3-4.3" />
+                </svg>
+                통합 검색
+                <kbd className="tb-kbd hidden md:inline-flex">Ctrl K</kbd>
+              </button>
               {me ? (
                 <span className="flex items-center gap-1.5 text-sm" title={`@${me.loginId}`}>
                   <span className="font-semibold">{me.name}</span>
@@ -4436,10 +4506,12 @@ export default function TaskBoard() {
             seed={minutesSeed}
             onSeedHandled={clearMinutesSeed}
             onOpenEvent={openEvent}
+            highlight={minutesHighlight}
           />
         ) : viewMode === "worklog" ? (
           <WorkLogPanel
             inline
+            focus={workLogFocus}
             viewer={me}
             members={members}
             items={items}
@@ -9222,6 +9294,25 @@ export default function TaskBoard() {
         />
       ) : null}
 
+
+      {searchOpen ? (
+        <SearchPalette
+          request={apiRequest}
+          items={items}
+          members={members}
+          onClose={() => setSearchOpen(false)}
+          onOpenItem={openItem}
+          onOpenEvent={openEvent}
+          onOpenMinutes={(id, terms) => {
+            openMinutes(id);
+            setMinutesHighlight(terms);
+          }}
+          onOpenWorkLog={openWorkLog}
+          onOpenMembers={() => setMembersOpen(true)}
+          onOpenDocuments={() => void openDocuments()}
+          onOpenManual={openManualSection}
+        />
+      ) : null}
 
       <ScheduleToasts
         feed={scheduleFeed}

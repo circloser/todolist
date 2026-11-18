@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
   formatLogDate,
@@ -56,6 +56,8 @@ type WorkLogBoardProps = {
   fetchLogs: FetchLogs;
   review: ReviewFn;
   onOpenOwn: (date: string) => void;
+  /** Open on this person's log for this day (from 통합 검색). */
+  initialFocus?: { memberId: number; logDate: string } | null;
 };
 
 function shortDate(iso: string) {
@@ -78,10 +80,12 @@ export default function WorkLogBoard({
   fetchLogs,
   review,
   onOpenOwn,
+  initialFocus = null,
 }: WorkLogBoardProps) {
   const today = kstToday();
-  const [layout, setLayout] = useState<Layout>("week");
-  const [anchor, setAnchor] = useState(today);
+  const [layout, setLayout] = useState<Layout>(initialFocus ? "day" : "week");
+  const [anchor, setAnchor] = useState(initialFocus?.logDate ?? today);
+  const pendingFocus = useRef(initialFocus);
   const [weekend, setWeekend] = useState(false);
   const [picked, setPicked] = useState<number[]>([]);
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
@@ -109,7 +113,16 @@ export default function WorkLogBoard({
     setLoading(true);
     setError("");
     try {
-      setLogs(await fetchLogs(`from=${range.from}&to=${range.to}`));
+      const loaded = await fetchLogs(`from=${range.from}&to=${range.to}`);
+      setLogs(loaded);
+      const focus = pendingFocus.current;
+      if (focus) {
+        pendingFocus.current = null;
+        const found = loaded.find((log) => log.memberId === focus.memberId && log.logDate === focus.logDate);
+        if (found) {
+          setDetail(found);
+        }
+      }
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : "업무일지를 불러오지 못했습니다.");
     } finally {
@@ -563,14 +576,14 @@ export default function WorkLogBoard({
 
       {detail ? (
         <div
-          className="fixed inset-0 z-[60] flex items-start justify-center overflow-auto bg-black/30 p-4"
+          className="fixed inset-0 z-[60] flex items-start justify-center overflow-auto bg-black/40 p-4 backdrop-blur-sm"
           onClick={() => setDetail(null)}
         >
           <div
             role="dialog"
             aria-modal="true"
             aria-label={`${detail.memberName} ${formatLogDate(detail.logDate)} 업무일지`}
-            className="tb-card my-10 w-full max-w-[560px] p-4 shadow-[var(--shadow-lg)]"
+            className="tb-card my-10 w-full max-w-[560px] !bg-[var(--surface)] p-4 shadow-[var(--shadow-lg)]"
             onClick={(event) => event.stopPropagation()}
           >
             <header className="mb-3 flex flex-wrap items-center gap-2">
