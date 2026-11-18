@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   DASHBOARD_WIDGETS,
+  arrangeCategoryGroups,
+  categoryAncestors,
   categoryDepth,
   categoryKey,
   categoryLeaf,
@@ -11,6 +13,7 @@ import {
   escapeHtml,
   isoDate,
   periodRange,
+  summarizeBranch,
 } from "./board-config";
 
 describe("board config helpers", () => {
@@ -73,5 +76,64 @@ describe("periodRange", () => {
       start: "2026-07-01",
       end: "2026-07-31",
     });
+  });
+});
+
+describe("list hierarchy", () => {
+  const group = (name: string, items: number[] = [1]) => ({ name, items });
+  const arrange = (names: Array<ReturnType<typeof group>>) =>
+    arrangeCategoryGroups(names, (name) => group(name, [])).map((entry) => `${entry.name}${entry.items.length ? "" : " (빈 헤더)"}`);
+
+  it("lists ancestors outermost first", () => {
+    expect(categoryAncestors("복원사업 > 현장조사 > 식생")).toEqual(["복원사업", "복원사업 > 현장조사"]);
+    expect(categoryAncestors("행정")).toEqual([]);
+  });
+
+  it("keeps each 대분류 with its branch and adds missing parent headers", () => {
+    expect(
+      arrange([
+        group("행정"),
+        group("복원사업 > 현장조사 > 식생"),
+        group("기타"),
+        group("복원사업 > 설계"),
+        group("행정 > 예산"),
+      ])
+    ).toEqual([
+      "행정",
+      "행정 > 예산",
+      "복원사업 (빈 헤더)",
+      "복원사업 > 현장조사 (빈 헤더)",
+      "복원사업 > 현장조사 > 식생",
+      "복원사업 > 설계",
+      "기타",
+    ]);
+  });
+
+  it("orders a branch by its 대분류's own saved position", () => {
+    // 'A > x' was saved first, but A itself sits after B: the whole A branch follows B.
+    expect(arrange([group("A > x"), group("B"), group("A")])).toEqual(["B", "A", "A > x"]);
+  });
+
+  it("summarizes assignees and budgets for a branch", () => {
+    const items = [
+      { assignee: "김민지", allocatedBudget: 1_000_000, requiredBudget: 800_000, progress: 100 },
+      { assignee: "박서준", allocatedBudget: null, requiredBudget: 200_000, progress: 50 },
+      { assignee: "김민지", allocatedBudget: 500_000, requiredBudget: null, progress: 0 },
+      { assignee: " ", allocatedBudget: null, requiredBudget: null, progress: 0 },
+    ];
+    const summary = summarizeBranch(items, (item) => item.progress, (item) => item.progress === 100);
+    expect(summary).toEqual({
+      total: 4,
+      done: 1,
+      progress: 38,
+      assignees: [
+        { name: "김민지", count: 2 },
+        { name: "미지정", count: 1 },
+        { name: "박서준", count: 1 },
+      ],
+      allocated: 1_500_000,
+      required: 1_000_000,
+    });
+    expect(summarizeBranch([], () => 0, () => false)).toMatchObject({ total: 0, progress: 0, assignees: [] });
   });
 });

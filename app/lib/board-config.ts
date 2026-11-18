@@ -90,6 +90,100 @@ export function categoryLevelLabel(depth: number) {
   return HIERARCHY_LABELS[depth] ?? `${depth + 1}단계`;
 }
 
+/** Keys of every ancestor of a category, outermost first ("A", "A > B" for "A > B > C"). */
+export function categoryAncestors(value: string) {
+  const parts = categoryPath(value);
+  return parts.slice(0, -1).map((_, index) => parts.slice(0, index + 1).join(" > "));
+}
+
+/** The 대분류 a category belongs to. */
+export function categoryRoot(value: string) {
+  return categoryPath(value)[0];
+}
+
+/**
+ * Orders list groups as a tree: every 대분류 is followed by its 중분류/소분류,
+ * and a missing parent gets an empty header so each branch can be folded.
+ * Siblings keep the saved order (a parent's own position wins, otherwise its
+ * first child's), so moving a 대분류 moves its whole branch.
+ */
+export function arrangeCategoryGroups<T extends { name: string }>(
+  groups: T[],
+  makeEmpty: (name: string) => T
+): T[] {
+  type Node = { name: string; first: number; own: number | null; group: T | null; children: Map<string, Node> };
+  const top = new Map<string, Node>();
+
+  groups.forEach((group, index) => {
+    const parts = categoryPath(group.name);
+    let level = top;
+    parts.forEach((_, depth) => {
+      const name = parts.slice(0, depth + 1).join(" > ");
+      let node = level.get(name);
+      if (!node) {
+        node = { name, first: index, own: null, group: null, children: new Map() };
+        level.set(name, node);
+      }
+      if (depth === parts.length - 1) {
+        node.own = node.own ?? index;
+        node.group = node.group ?? group;
+      }
+      level = node.children;
+    });
+  });
+
+  const result: T[] = [];
+  const visit = (level: Map<string, Node>) => {
+    [...level.values()]
+      .sort((first, second) => (first.own ?? first.first) - (second.own ?? second.first))
+      .forEach((node) => {
+        result.push(node.group ?? makeEmpty(node.name));
+        visit(node.children);
+      });
+  };
+  visit(top);
+  return result;
+}
+
+export type BranchSummary = {
+  total: number;
+  done: number;
+  progress: number;
+  /** Assignees by number of items, most first. */
+  assignees: Array<{ name: string; count: number }>;
+  allocated: number;
+  required: number;
+};
+
+/** Totals for a branch of the list (a group and everything under it). */
+export function summarizeBranch<
+  T extends { assignee: string; allocatedBudget: number | null; requiredBudget: number | null },
+>(items: T[], progressOf: (item: T) => number, isDone: (item: T) => boolean): BranchSummary {
+  const counts = new Map<string, number>();
+  let allocated = 0;
+  let required = 0;
+  let progressSum = 0;
+  let done = 0;
+  for (const item of items) {
+    const name = item.assignee.trim() || "미지정";
+    counts.set(name, (counts.get(name) ?? 0) + 1);
+    allocated += item.allocatedBudget ?? 0;
+    required += item.requiredBudget ?? 0;
+    progressSum += progressOf(item);
+    done += isDone(item) ? 1 : 0;
+  }
+  return {
+    total: items.length,
+    done,
+    progress: items.length ? Math.round(progressSum / items.length) : 0,
+    assignees: [...counts.entries()]
+      .map(([name, count]) => ({ name, count }))
+      .sort((first, second) => second.count - first.count || first.name.localeCompare(second.name, "ko-KR")),
+    allocated,
+    required,
+  };
+}
+
 // User text is interpolated into Leaflet popup HTML strings.
 export function escapeHtml(value: string) {
   return value

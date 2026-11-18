@@ -17,6 +17,8 @@ import "leaflet/dist/leaflet.css";
 
 import {
   DASHBOARD_WIDGETS,
+  arrangeCategoryGroups,
+  categoryAncestors,
   categoryDepth,
   categoryKey,
   categoryLeaf,
@@ -31,7 +33,9 @@ import {
   filters,
   isoDate,
   periodRange,
+  categoryRoot,
   sortOptions,
+  summarizeBranch,
 } from "./lib/board-config";
 import { WETLAND_PRESETS } from "./lib/wetlands";
 import ManualContent from "./manual-content";
@@ -491,6 +495,8 @@ export default function TaskBoard() {
   const [newCategoryName, setNewCategoryName] = useState("");
   const [activeAddGroup, setActiveAddGroup] = useState<string | null>(null);
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
+  // The board whose 대분류 were folded on first load (see loadTasks).
+  const foldedForBoard = useRef<string | null>(null);
   const [groupOrder, setGroupOrder] = useState<string[]>([]);
   const [draggedGroup, setDraggedGroup] = useState<string | null>(null);
   const [dropIndicator, setDropIndicator] = useState<DropIndicator | null>(null);
@@ -683,6 +689,17 @@ export default function TaskBoard() {
       setWebhookUrl(data.webhook?.url ?? "");
       setWebhookEnabled(data.webhook?.enabled ?? false);
       setGroupOrder(data.groupOrder ?? []);
+      if (foldedForBoard.current !== targetWorkspaceId) {
+        foldedForBoard.current = targetWorkspaceId;
+        setCollapsedGroups(
+          new Set(
+            [
+              ...(data.groupOrder ?? []),
+              ...(data.items ?? []).map((item) => item.category),
+            ].map((name) => categoryRoot(name))
+          )
+        );
+      }
       void loadMembers(targetWorkspaceId);
       if (data.me?.accessRole === "manager") {
         void loadPendingReview(targetWorkspaceId);
@@ -1066,7 +1083,8 @@ export default function TaskBoard() {
         (orderIndex.get(second.name) ?? Infinity)
     );
 
-    return groups;
+    // Each 대분류 is followed by its 중분류/소분류 so the list folds by 대분류.
+    return arrangeCategoryGroups(groups, (name) => ({ name, items: [] }));
   }, [
     assigneeFilter,
     categoryFilter,
@@ -1078,6 +1096,69 @@ export default function TaskBoard() {
     templateFilter,
     visibleItems,
   ]);
+
+  // Totals for each group including everything under it (shown on headers,
+  // so a folded 대분류 still tells how its branch is doing).
+  const branchSummaries = useMemo(() => {
+    const branchItems = new Map<string, WorkflowItem[]>();
+    for (const group of listGroups) {
+      for (const key of [...categoryAncestors(group.name), group.name]) {
+        branchItems.set(key, [...(branchItems.get(key) ?? []), ...group.items]);
+      }
+    }
+    return new Map(
+      [...branchItems].map(([name, branch]) => [
+        name,
+        summarizeBranch(branch, itemProgress, isItemDone),
+      ])
+    );
+  }, [listGroups]);
+
+  const listRootNames = useMemo(
+    () =>
+      listGroups
+        .filter((group) => categoryDepth(group.name) === 0)
+        .map((group) => group.name),
+    [listGroups]
+  );
+
+  // 목록 opens with every 대분류 folded. Searching or filtering unfolds the
+  // list so matches are visible; clearing it folds the 대분류 again.
+  const listFiltering =
+    categoryFilter !== "all" ||
+    templateFilter !== "all" ||
+    assigneeFilter !== "all" ||
+    stageFilter !== "all" ||
+    dueFilter !== "all" ||
+    filter !== "all" ||
+    Boolean(keyword.trim());
+  const [listFilteringBefore, setListFilteringBefore] = useState(false);
+  if (listFiltering !== listFilteringBefore) {
+    setListFilteringBefore(listFiltering);
+    setCollapsedGroups(listFiltering ? new Set() : new Set(listRootNames));
+  }
+
+  function toggleGroup(name: string) {
+    setCollapsedGroups((current) => {
+      const next = new Set(current);
+      if (next.has(name)) {
+        next.delete(name);
+      } else {
+        next.add(name);
+      }
+      return next;
+    });
+  }
+
+  /** Unfolds a group and every group above it. */
+  function revealGroup(name: string) {
+    const keys = [...categoryAncestors(name), categoryKey(name)];
+    setCollapsedGroups((current) =>
+      keys.some((key) => current.has(key))
+        ? new Set([...current].filter((key) => !keys.includes(key)))
+        : current
+    );
+  }
 
   const stages =
     selectedTemplate?.stages.map((stage) => ({
@@ -2187,6 +2268,7 @@ export default function TaskBoard() {
       }
 
       setItems((current) => [...current, data.item!]);
+      revealGroup(groupName(data.item));
       setNewTitle("");
       setNewAssignee("");
       setNewMemo("");
@@ -2199,11 +2281,6 @@ export default function TaskBoard() {
         const nextGroup = groupName(data.item);
         setActiveAddGroup(nextGroup);
         setNewGroup(nextGroup === categoryKey("") ? "" : nextGroup);
-        setCollapsedGroups((current) => {
-          const nextSet = new Set(current);
-          nextSet.delete(nextGroup);
-          return nextSet;
-        });
         window.setTimeout(() => {
           const titleInput = document.getElementById("new-task-title");
           titleInput?.focus();
@@ -3095,11 +3172,7 @@ export default function TaskBoard() {
     setActiveAddGroup(name);
     setNewGroup(name === categoryKey("") ? "" : name);
     setSortMode("manual");
-    setCollapsedGroups((current) => {
-      const nextSet = new Set(current);
-      nextSet.delete(name);
-      return nextSet;
-    });
+    revealGroup(name);
 
     window.setTimeout(() => {
       const titleInput = document.getElementById("new-task-title");
@@ -3477,6 +3550,10 @@ export default function TaskBoard() {
   }
 
   function openItem(id: number) {
+    const target = items.find((item) => item.id === id);
+    if (target) {
+      revealGroup(groupName(target));
+    }
     setViewMode("list");
     setExpandedIds((current) => new Set(current).add(id));
     setFocusItemId(id);
@@ -4931,24 +5008,50 @@ export default function TaskBoard() {
               </div>
             ) : null}
 
+            {!loading && listRootNames.length > 1 ? (
+              <div className="tb-list-fold flex items-center gap-2 px-1 pb-1 text-xs text-[var(--text-muted)]">
+                <span>
+                  대분류 {listRootNames.length}개
+                  {listRootNames.some((name) => collapsedGroups.has(name))
+                    ? ` · 접힘 ${listRootNames.filter((name) => collapsedGroups.has(name)).length}`
+                    : ""}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setCollapsedGroups(new Set())}
+                  className="tb-btn ml-auto !px-2.5 !py-1 text-xs"
+                >
+                  모두 펼치기
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setCollapsedGroups(new Set(listRootNames))}
+                  className="tb-btn !px-2.5 !py-1 text-xs"
+                >
+                  모두 접기
+                </button>
+              </div>
+            ) : null}
+
             {!loading &&
               listGroups.map((group) => {
+                // A folded 대분류 (or 중분류) hides its whole branch.
+                if (
+                  categoryAncestors(group.name).some((key) =>
+                    collapsedGroups.has(key)
+                  )
+                ) {
+                  return null;
+                }
                 const groupCollapsed = collapsedGroups.has(group.name);
                 const depth = categoryDepth(group.name);
                 const trail = categoryTrail(group.name);
                 const indent = Math.min(depth, 4) * 18;
                 const itemIndent = Math.min(depth + 1, 5) * 14;
-                const groupProgress = group.items.length
-                  ? Math.round(
-                      group.items.reduce(
-                        (sum, current) => sum + itemProgress(current),
-                        0
-                      ) / group.items.length
-                    )
-                  : 0;
-                const groupDone = group.items.filter((current) =>
-                  isItemDone(current)
-                ).length;
+                const branch = branchSummaries.get(group.name);
+                const groupProgress = branch?.progress ?? 0;
+                const groupDone = branch?.done ?? 0;
+                const groupTotal = branch?.total ?? group.items.length;
                 const categoryTone = categoryVisual(group.name);
                 const categoryStyle = {
                   "--category-color": categoryTone.color,
@@ -5015,19 +5118,11 @@ export default function TaskBoard() {
                       ) : null}
                       <button
                         type="button"
-                        onClick={() =>
-                          setCollapsedGroups((current) => {
-                            const nextSet = new Set(current);
-                            if (nextSet.has(group.name)) {
-                              nextSet.delete(group.name);
-                            } else {
-                              nextSet.add(group.name);
-                            }
-                            return nextSet;
-                          })
-                        }
+                        onClick={() => toggleGroup(group.name)}
                         className="tb-iconbtn h-6 w-6 shrink-0"
                         title={groupCollapsed ? "펼치기" : "접기"}
+                        aria-expanded={!groupCollapsed}
+                        aria-label={`${categoryLeaf(group.name)} ${groupCollapsed ? "펼치기" : "접기"}`}
                       >
                         {groupCollapsed ? "▸" : "▾"}
                       </button>
@@ -5068,13 +5163,82 @@ export default function TaskBoard() {
                             </button>
                           </form>
                         ) : (
-                          <div className="truncate text-sm font-semibold">
+                          <button
+                            type="button"
+                            onClick={() => toggleGroup(group.name)}
+                            className="block max-w-full truncate text-left text-sm font-semibold hover:text-[var(--accent)]"
+                            title={groupCollapsed ? "눌러서 펼치기" : "눌러서 접기"}
+                          >
                             {categoryLeaf(group.name)}
-                          </div>
+                          </button>
                         )}
                         {trail && editingGroup !== group.name ? (
                           <div className="truncate text-[11px] text-[var(--text-faint)]">
                             {trail}
+                          </div>
+                        ) : null}
+                        {depth === 0 &&
+                        branch &&
+                        branch.total > 0 &&
+                        editingGroup !== group.name ? (
+                          <div
+                            className="tb-group-summary mt-0.5 flex min-w-0 flex-wrap items-center gap-x-3 gap-y-0.5 text-[11px] text-[var(--text-muted)]"
+                            data-testid="group-summary"
+                          >
+                            <span
+                              className="flex min-w-0 items-center gap-1.5"
+                              title={`담당자: ${branch.assignees
+                                .map((entry) => `${entry.name} ${entry.count}건`)
+                                .join(", ")}`}
+                            >
+                              <span className="text-[var(--text-faint)]">담당</span>
+                              {branch.assignees.slice(0, 3).map((entry) => {
+                                const color = rowAccentColor(
+                                  assigneeSettings[entry.name]
+                                );
+                                return (
+                                  <span
+                                    key={entry.name}
+                                    className="inline-flex min-w-0 items-center gap-1"
+                                  >
+                                    <span
+                                      className="h-2 w-2 shrink-0 rounded-full border border-[var(--border-strong)]"
+                                      style={{
+                                        backgroundColor:
+                                          color === "#ffffff"
+                                            ? "var(--surface-3)"
+                                            : color,
+                                      }}
+                                    />
+                                    <span className="truncate">{entry.name}</span>
+                                  </span>
+                                );
+                              })}
+                              {branch.assignees.length > 3 ? (
+                                <span className="shrink-0 text-[var(--text-faint)]">
+                                  외 {branch.assignees.length - 3}명
+                                </span>
+                              ) : null}
+                            </span>
+                            <span
+                              className="shrink-0"
+                              title={`편성 예산 ${formatBudget(branch.allocated) || 0}원 · 소요 예산 ${
+                                formatBudget(branch.required) || 0
+                              }원`}
+                            >
+                              <span className="text-[var(--text-faint)]">총 예산</span>{" "}
+                              <strong className="font-semibold text-[var(--text)]">
+                                {branch.allocated
+                                  ? `${formatBudget(branch.allocated)}원`
+                                  : "-"}
+                              </strong>
+                              {branch.required ? (
+                                <span className="text-[var(--text-faint)]">
+                                  {" "}
+                                  (소요 {formatBudget(branch.required)}원)
+                                </span>
+                              ) : null}
+                            </span>
                           </div>
                         ) : null}
                         {editingGroup === group.name ? (
@@ -5096,8 +5260,15 @@ export default function TaskBoard() {
                         ✎
                       </button>
                       ) : null}
-                      <span className="tb-badge tb-badge-muted shrink-0">
-                        {groupDone}/{group.items.length}
+                      <span
+                        className="tb-badge tb-badge-muted shrink-0"
+                        title={
+                          groupTotal !== group.items.length
+                            ? "하위 분류를 포함한 완료/전체 업무"
+                            : "완료/전체 업무"
+                        }
+                      >
+                        {groupDone}/{groupTotal}
                       </span>
                       <div className="hidden min-w-0 max-w-[220px] flex-1 items-center gap-2 sm:flex">
                         <div className="tb-progress flex-1">
@@ -6372,7 +6543,7 @@ export default function TaskBoard() {
                     ) : null}
 
                     {!groupCollapsed &&
-                    !group.items.length &&
+                    !groupTotal &&
                     activeAddGroup !== group.name ? (
                       <div
                         className="tb-list-empty-group text-sm text-[var(--text-faint)]"
