@@ -211,3 +211,48 @@ export const workflowTasks = sqliteTable("workflow_tasks", {
   updatedAt: text("updated_at").notNull(),
   createdAt: text("created_at").notNull(),
 });
+
+export const workspaceMembers = sqliteTable(
+  "workspace_members",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    workspaceId: text("workspace_id").notNull(),
+    name: text("name").notNull(),
+    role: text("role").notNull().default(""),
+    color: text("color").notNull().default("#e6f4ef"),
+    active: integer("active").notNull().default(1),
+    position: integer("position").notNull().default(0),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (table) => [
+    uniqueIndex("workspace_members_name_idx").on(table.workspaceId, table.name),
+    index("workspace_members_position_idx").on(table.workspaceId, table.position),
+  ]
+);
+
+export const workLogs = sqliteTable(
+  "work_logs",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    workspaceId: text("workspace_id").notNull(),
+    memberId: integer("member_id").notNull(),
+    memberName: text("member_name").notNull(),
+    logDate: text("log_date").notNull(),
+    content: text("content").notNull().default(""),
+    plan: text("plan").notNull().default(""),
+    issues: text("issues").notNull().default(""),
+    itemIds: text("item_ids").notNull().default("[]"),
+    updatedBy: text("updated_by").notNull().default(""),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (table) => [
+    uniqueIndex("work_logs_member_date_idx").on(
+      table.workspaceId,
+      table.memberId,
+      table.logDate
+    ),
+    index("work_logs_workspace_date_idx").on(table.workspaceId, table.logDate),
+  ]
+);

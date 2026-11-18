@@ -57,6 +57,13 @@
       "when": 1786417258995,
       "tag": "0007_grey_sunspot",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "6",
+      "when": 1794978671677,
+      "tag": "0008_team_members_work_logs",
+      "breakpoints": true
     }
   ]
 }

@@ -6,6 +6,7 @@ import {
   FormEvent,
   Fragment,
   PointerEvent as ReactPointerEvent,
+  useCallback,
   useEffect,
   useMemo,
   useRef,
@@ -34,6 +35,9 @@ import {
 } from "./lib/board-config";
 import { WETLAND_PRESETS } from "./lib/wetlands";
 import ManualContent from "./manual-content";
+import MembersPanel from "./members-panel";
+import WorkLogPanel from "./work-log-panel";
+import type { MembersResponse, TeamMember } from "./lib/team";
 
 import {
   assigneeName,
@@ -471,6 +475,9 @@ export default function TaskBoard() {
   const [reportOpen, setReportOpen] = useState(false);
   const [docsOpen, setDocsOpen] = useState(false);
   const [manualOpen, setManualOpen] = useState(false);
+  const [members, setMembers] = useState<TeamMember[]>([]);
+  const [membersOpen, setMembersOpen] = useState(false);
+  const [workLogOpen, setWorkLogOpen] = useState(false);
   const [documents, setDocuments] = useState<DocumentTemplate[]>([]);
   const [docsLoading, setDocsLoading] = useState(false);
   const [uploadingDoc, setUploadingDoc] = useState(false);
@@ -579,6 +586,44 @@ export default function TaskBoard() {
     });
   }
 
+  // Stable identity so panels can use it as an effect dependency.
+  const apiRequest = useCallback(
+    (path: string, init?: RequestInit) => {
+      const headers = new Headers(init?.headers);
+      headers.set("X-Workspace-Id", activeWorkspaceId);
+      if (workspacePassword) {
+        headers.set("X-Workspace-Password", workspacePassword);
+      }
+      return fetch(path, { ...init, headers });
+    },
+    [activeWorkspaceId, workspacePassword]
+  );
+
+  async function loadMembers(passwordOverride?: string, workspaceIdOverride?: string) {
+    try {
+      const response = await fetch("/api/members", {
+        cache: "no-store",
+        headers: workspaceHeaders(undefined, passwordOverride, workspaceIdOverride),
+      });
+      const data = (await response.json()) as MembersResponse;
+
+      if (response.ok) {
+        setMembers(data.members ?? []);
+      }
+    } catch {
+      // The roster is optional; the board works without it.
+    }
+  }
+
+  function applyMembersResponse(data: MembersResponse) {
+    if (data.members) {
+      setMembers(data.members);
+    }
+    if (data.assigneeSettings) {
+      setAssigneeSettings(data.assigneeSettings);
+    }
+  }
+
   function rememberWorkspacePassword(id: string, password: string) {
     setWorkspacePassword(password);
     if (password) {
@@ -635,6 +680,7 @@ export default function TaskBoard() {
           setWorkspaceLocked(true);
           setItems([]);
           setHistory([]);
+          setMembers([]);
           setWorkspacePasswordInput("");
           setActiveWorkspace(data.workspace ?? null);
           return false;
@@ -660,6 +706,10 @@ export default function TaskBoard() {
       setWebhookUrl(data.webhook?.url ?? "");
       setWebhookEnabled(data.webhook?.enabled ?? false);
       setGroupOrder(data.groupOrder ?? []);
+      void loadMembers(
+        passwordOverride !== undefined ? submittedPassword : undefined,
+        targetWorkspaceId
+      );
 
       const storedUserName = window.localStorage
         .getItem("team-progress-user-name")
@@ -765,6 +815,7 @@ export default function TaskBoard() {
       );
       setBoardTitle(data.settings?.boardTitle ?? defaultSettings.boardTitle);
       setGroupOrder(data.groupOrder ?? []);
+      setMembers([]);
       setNewWorkspaceDepartment("");
       setNewWorkspaceTeam("");
       setNewWorkspacePassword("");
@@ -4284,6 +4335,59 @@ export default function TaskBoard() {
 
               <button
                 type="button"
+                onClick={() => setWorkLogOpen(true)}
+                className="tb-btn"
+                title="구성원 업무일지 작성·조회"
+              >
+                <svg
+                  width="15"
+                  height="15"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                >
+                  <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" />
+                  <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z" />
+                  <path d="M9 7h7" />
+                  <path d="M9 11h5" />
+                </svg>
+                업무일지
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setMembersOpen(true)}
+                className="tb-btn hidden md:inline-flex"
+                title="구성원 등록·관리"
+              >
+                <svg
+                  width="15"
+                  height="15"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                >
+                  <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
+                  <circle cx="9" cy="7" r="4" />
+                  <path d="M22 21v-2a4 4 0 0 0-3-3.87" />
+                  <path d="M16 3.13a4 4 0 0 1 0 7.75" />
+                </svg>
+                구성원
+                {members.length ? (
+                  <span className="tb-badge tb-badge-muted">
+                    {members.filter((member) => member.active).length}
+                  </span>
+                ) : null}
+              </button>
+
+              <button
+                type="button"
                 onClick={() => setReportOpen(true)}
                 className="tb-btn hidden md:inline-flex"
                 title="월간 보고서 (CSV/인쇄)"
@@ -5417,6 +5521,7 @@ export default function TaskBoard() {
                                 <span className="tb-label">담당자</span>
                                 <input
                                   value={item.assignee}
+                                  list="member-list"
                                   onChange={(event) =>
                                     updateLocalItem(item.id, {
                                       assignee: event.target.value,
@@ -5974,6 +6079,7 @@ export default function TaskBoard() {
                                 <div className="flex items-center gap-2">
                                   <input
                                     value={item.assignee}
+                                    list="member-list"
                                     onChange={(event) =>
                                       updateLocalItem(item.id, {
                                         assignee: event.target.value,
@@ -6377,6 +6483,7 @@ export default function TaskBoard() {
                           />
                           <input
                             value={newAssignee}
+                            list="member-list"
                             onChange={(event) => setNewAssignee(event.target.value)}
                             className="tb-field"
                             placeholder="담당자"
@@ -6858,6 +6965,7 @@ export default function TaskBoard() {
                             <td className="px-2 py-2.5 align-top">
                               <input
                                 value={item.assignee}
+                                list="member-list"
                                 onChange={(event) =>
                                   updateLocalItem(item.id, {
                                     assignee: event.target.value,
@@ -7299,6 +7407,7 @@ export default function TaskBoard() {
                 />
                 <input
                   value={newAssignee}
+                  list="member-list"
                   onChange={(event) => setNewAssignee(event.target.value)}
                   className="tb-field"
                   placeholder="담당자"
@@ -7611,6 +7720,7 @@ export default function TaskBoard() {
                 <span className="tb-label">사용자명</span>
                 <input
                   value={userName}
+                  list="member-list"
                   onChange={(event) => setUserName(event.target.value)}
                   onBlur={(event) => saveUserName(event.target.value)}
                   className="tb-field"
@@ -7680,6 +7790,20 @@ export default function TaskBoard() {
               className="hover:text-[var(--text-muted)] hover:underline"
             >
               📄 월간 보고서
+            </button>
+            <button
+              type="button"
+              onClick={() => setWorkLogOpen(true)}
+              className="hover:text-[var(--text-muted)] hover:underline"
+            >
+              📝 업무일지
+            </button>
+            <button
+              type="button"
+              onClick={() => setMembersOpen(true)}
+              className="hover:text-[var(--text-muted)] hover:underline"
+            >
+              👥 구성원 관리
             </button>
           </div>
         </div>
@@ -8278,6 +8402,7 @@ export default function TaskBoard() {
                   <span className="tb-label">담당자</span>
                   <input
                     value={mapNewAssignee}
+                    list="member-list"
                     onChange={(event) => setMapNewAssignee(event.target.value)}
                     className="tb-field"
                     placeholder="담당자"
@@ -9015,6 +9140,48 @@ export default function TaskBoard() {
           </div>
         </div>
       ) : null}
+
+      {membersOpen ? (
+        <MembersPanel
+          members={members}
+          boardAssignees={assignees}
+          currentActor={currentActor}
+          request={apiRequest}
+          onMembersChange={applyMembersResponse}
+          onAssignmentsRenamed={() => void loadTasks(workspacePassword)}
+          onSetMe={(name) => saveUserName(name)}
+          onOpenWorkLog={() => {
+            setMembersOpen(false);
+            setWorkLogOpen(true);
+          }}
+          onClose={() => setMembersOpen(false)}
+        />
+      ) : null}
+
+      {workLogOpen ? (
+        <WorkLogPanel
+          members={members}
+          items={items}
+          currentActor={currentActor}
+          organizationName={organizationName}
+          request={apiRequest}
+          onOpenMembers={() => {
+            setWorkLogOpen(false);
+            setMembersOpen(true);
+          }}
+          onClose={() => setWorkLogOpen(false)}
+        />
+      ) : null}
+
+      <datalist id="member-list">
+        {members
+          .filter((member) => member.active)
+          .map((member) => (
+            <option key={member.id} value={member.name}>
+              {member.role}
+            </option>
+          ))}
+      </datalist>
 
       <datalist id="wetland-presets">
         {WETLAND_PRESETS.map((preset) => (

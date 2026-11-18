@@ -9,6 +9,7 @@ import {
   type WorkspaceRow,
   workspaceLabel,
 } from "../workspace-auth";
+import { prepareTeamTables } from "../team-store";
 
 type StepStatus = "todo" | "done";
 
@@ -1210,6 +1211,32 @@ async function copyWorkspaceData({
       .bind(targetWorkspaceId, setting.assignee, setting.color, now)
   );
 
+  // The team roster carries over to the new year; 업무일지 stay with the
+  // year they were written in.
+  await prepareTeamTables();
+  const sourceMembers = await d1
+    .prepare(
+      "SELECT name, role, color, active, position FROM workspace_members WHERE workspace_id = ? ORDER BY position, id"
+    )
+    .bind(sourceWorkspaceId)
+    .all<{ name: string; role: string; color: string; active: number; position: number }>();
+  const memberStatements = (sourceMembers.results ?? []).map((member) =>
+    d1
+      .prepare(`INSERT OR IGNORE INTO workspace_members (
+        workspace_id, name, role, color, active, position, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
+      .bind(
+        targetWorkspaceId,
+        member.name,
+        member.role,
+        member.color,
+        member.active,
+        member.position,
+        now,
+        now
+      )
+  );
+
   const settings = await d1
     .prepare(
       "SELECT key, value, updated_at FROM workspace_settings WHERE workspace_id = ?"
@@ -1229,6 +1256,7 @@ async function copyWorkspaceData({
   const statements = [
     ...subtaskStatements,
     ...assigneeStatements,
+    ...memberStatements,
     ...settingStatements,
     d1
       .prepare(`INSERT INTO workspace_settings (workspace_id, key, value, updated_at)
