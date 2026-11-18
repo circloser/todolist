@@ -3,7 +3,7 @@
 export const BRAND = {
   name: "업무나침반",
   english: "Work Compass",
-  tagline: "팀 업무 진행 · 업무일지 · 보고서를 한 곳에서",
+  tagline: "팀 업무 진행 · 일정 · 회의록 · 업무일지를 한 곳에서",
 } as const;
 
 /**

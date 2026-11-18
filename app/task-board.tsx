@@ -37,8 +37,13 @@ import { WETLAND_PRESETS } from "./lib/wetlands";
 import ManualContent from "./manual-content";
 import AuthScreen from "./auth-screen";
 import { BRAND, CompassMark } from "./brand";
+import CalendarView, { EventList } from "./calendar-view";
 import MembersPanel from "./members-panel";
+import MinutesView from "./minutes-view";
+import { useScheduleFeed } from "./schedule-feed";
+import { ScheduleNotices, ScheduleToasts } from "./schedule-notices";
 import WorkLogPanel from "./work-log-panel";
+import type { CalendarEvent } from "./lib/schedule";
 import {
   canEditItem,
   type AuthResponse,
@@ -87,6 +92,17 @@ import {
 } from "./lib/workflow";
 
 const COMPLETE_COLOR = "#2563eb";
+
+// Board screens in the order the team uses them.
+const VIEW_TABS: Array<[ViewMode, string]> = [
+  ["dashboard", "대시보드"],
+  ["list", "목록"],
+  ["calendar", "업무일정"],
+  ["minutes", "회의록"],
+  ["worklog", "업무일지"],
+  ["map", "지도"],
+  ["gantt", "간트"],
+];
 
 type ReportSortKey =
   | "category"
@@ -358,7 +374,11 @@ export default function TaskBoard() {
   const [filter, setFilter] = useState<TaskFilter>("all");
   const [dueFilter, setDueFilter] = useState<DueFilter>("all");
   const [sortMode, setSortMode] = useState<SortMode>("manual");
-  const [viewMode, setViewMode] = useState<ViewMode>("list");
+  // 첫 화면은 대시보드.
+  const [viewMode, setViewMode] = useState<ViewMode>("dashboard");
+  const [focusEventId, setFocusEventId] = useState<number | null>(null);
+  const [focusMinutesId, setFocusMinutesId] = useState<number | null>(null);
+  const [minutesSeed, setMinutesSeed] = useState<CalendarEvent | null>(null);
   const [showFilters, setShowFilters] = useState(false);
   const [templateEditorOpen, setTemplateEditorOpen] = useState(false);
   const [templateDraft, setTemplateDraft] = useState<{
@@ -428,7 +448,6 @@ export default function TaskBoard() {
   const [pendingReview, setPendingReview] = useState(0);
   const [policy, setPolicy] = useState<TeamPolicy>(DEFAULT_POLICY);
   const [membersOpen, setMembersOpen] = useState(false);
-  const [workLogOpen, setWorkLogOpen] = useState(false);
   const [documents, setDocuments] = useState<DocumentTemplate[]>([]);
   const [docsLoading, setDocsLoading] = useState(false);
   const [uploadingDoc, setUploadingDoc] = useState(false);
@@ -528,6 +547,18 @@ export default function TaskBoard() {
     },
     [activeWorkspaceId]
   );
+
+  // Shared 업무일정·회의록 feed: polled, with reminders and "new" notices.
+  const scheduleFeed = useScheduleFeed({
+    request: apiRequest,
+    workspaceId: activeWorkspaceId,
+    viewer: me,
+    members,
+    enabled: Boolean(me && activeWorkspaceId) && !landingOpen,
+  });
+  const clearFocusEvent = useCallback(() => setFocusEventId(null), []);
+  const clearFocusMinutes = useCallback(() => setFocusMinutesId(null), []);
+  const clearMinutesSeed = useCallback(() => setMinutesSeed(null), []);
 
   async function loadMembers(workspaceIdOverride?: string) {
     try {
@@ -3423,6 +3454,28 @@ export default function TaskBoard() {
 
   // Jump from a dashboard widget straight to a task: switch to the list,
   // expand it, and scroll it into view with a brief highlight.
+  const isItemView =
+    viewMode === "dashboard" ||
+    viewMode === "list" ||
+    viewMode === "map" ||
+    viewMode === "gantt" ||
+    viewMode === "grid";
+
+  function openView(mode: ViewMode) {
+    setViewMode(mode);
+    window.scrollTo({ top: 0 });
+  }
+
+  function openEvent(id: number) {
+    setFocusEventId(id);
+    openView("calendar");
+  }
+
+  function openMinutes(id: number) {
+    setFocusMinutesId(id);
+    openView("minutes");
+  }
+
   function openItem(id: number) {
     setViewMode("list");
     setExpandedIds((current) => new Set(current).add(id));
@@ -3844,7 +3897,50 @@ export default function TaskBoard() {
           </div>
 
           <div className="flex flex-col gap-3">
+            <nav className="tb-viewnav" aria-label="화면 전환">
+              {VIEW_TABS.map(([mode, label]) => {
+                const badge =
+                  mode === "calendar"
+                    ? scheduleFeed.summary.today.length + scheduleFeed.fresh.length
+                    : mode === "minutes"
+                      ? scheduleFeed.summary.unreadMinutes.length
+                      : mode === "worklog" && isManager && policy.logApproval
+                        ? pendingReview
+                        : 0;
+                return (
+                  <button
+                    key={mode}
+                    type="button"
+                    onClick={() => openView(mode)}
+                    data-active={viewMode === mode}
+                    aria-current={viewMode === mode ? "page" : undefined}
+                    className="tb-viewnav-btn"
+                  >
+                    {label}
+                    {badge ? (
+                      <span
+                        className={`tb-viewnav-badge ${
+                          mode === "calendar" ? "" : "tb-viewnav-badge-warn"
+                        }`}
+                        title={
+                          mode === "calendar"
+                            ? "오늘 일정·새 일정"
+                            : mode === "minutes"
+                              ? "확인하지 않은 회의록"
+                              : "승인 대기 업무일지"
+                        }
+                      >
+                        {badge}
+                      </span>
+                    ) : null}
+                  </button>
+                );
+              })}
+            </nav>
+
             <div className="flex flex-wrap items-center gap-2">
+              {isItemView ? (
+              <>
               <div className="relative min-w-[220px] flex-1">
                 <svg
                   className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[var(--text-faint)]"
@@ -3942,12 +4038,22 @@ export default function TaskBoard() {
                   ) : null;
                 })()}
               </button>
+              </>
+              ) : (
+                <span className="mr-auto min-w-0 truncate text-xs text-[var(--text-muted)]">
+                  {viewMode === "calendar"
+                    ? "모든 구성원이 함께 보는 일정입니다. 시작 전에 알림이 뜹니다."
+                    : viewMode === "minutes"
+                      ? "참석자를 기록하고, 참석하지 못한 구성원은 읽은 뒤 확인합니다."
+                      : "하루 업무를 기록하고 함께 봅니다."}
+                </span>
+              )}
 
               <button
                 type="button"
                 onClick={() => setNotifOpen(true)}
                 className="tb-btn relative"
-                title="담당자별 마감 알림"
+                title="일정·회의록·마감 알림"
               >
                 <svg
                   width="15"
@@ -3963,9 +4069,9 @@ export default function TaskBoard() {
                   <path d="M10.3 21a1.94 1.94 0 0 0 3.4 0" />
                 </svg>
                 알림
-                {notifications.total ? (
+                {notifications.total + scheduleFeed.count ? (
                   <span className="ml-0.5 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-[var(--danger)] px-1 text-[10px] font-bold text-white">
-                    {notifications.total}
+                    {notifications.total + scheduleFeed.count}
                   </span>
                 ) : null}
               </button>
@@ -3989,38 +4095,6 @@ export default function TaskBoard() {
                   <path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48" />
                 </svg>
                 양식
-              </button>
-
-              <button
-                type="button"
-                onClick={() => setWorkLogOpen(true)}
-                className="tb-btn"
-                title="구성원 업무일지 작성·조회"
-              >
-                <svg
-                  width="15"
-                  height="15"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                >
-                  <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" />
-                  <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z" />
-                  <path d="M9 7h7" />
-                  <path d="M9 11h5" />
-                </svg>
-                업무일지
-                {isManager && policy.logApproval && pendingReview ? (
-                  <span
-                    className="ml-0.5 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-[var(--warning)] px-1 text-[10px] font-bold text-white"
-                    title="승인 대기 업무일지"
-                  >
-                    {pendingReview}
-                  </span>
-                ) : null}
               </button>
 
               <button
@@ -4107,30 +4181,9 @@ export default function TaskBoard() {
               </button>
               ) : null}
 
-              <div className="tb-seg ml-auto">
-                {(["list", "dashboard", "map", "gantt"] as const).map(
-                  (mode) => (
-                    <button
-                      key={mode}
-                      type="button"
-                      onClick={() => setViewMode(mode)}
-                      data-active={viewMode === mode}
-                      className="tb-seg-btn"
-                    >
-                      {mode === "list"
-                        ? "목록"
-                        : mode === "dashboard"
-                          ? "대시보드"
-                          : mode === "map"
-                            ? "지도"
-                            : "간트"}
-                    </button>
-                  )
-                )}
-              </div>
             </div>
 
-            {showFilters ? (
+            {showFilters && isItemView ? (
               <div className="tb-filter-strip hidden flex-wrap items-center gap-2 md:flex">
                 <select
                   value={templateFilter}
@@ -4209,7 +4262,7 @@ export default function TaskBoard() {
               </div>
             ) : null}
 
-            {bottlenecks.length || assigneeStats.length ? (
+            {isItemView && (bottlenecks.length || assigneeStats.length) ? (
               <div className="hidden flex-wrap items-center gap-2 md:flex">
                 {savingOrder ? (
                   <span className="text-xs font-medium text-[var(--accent)]">
@@ -4269,7 +4322,59 @@ export default function TaskBoard() {
           </div>
         ) : null}
 
-        {viewMode === "dashboard" ? (
+        {viewMode === "calendar" ? (
+          <CalendarView
+            viewer={me}
+            isManager={isManager}
+            members={members}
+            items={items}
+            minutes={scheduleFeed.minutes}
+            upcoming={scheduleFeed.summary.upcoming}
+            request={apiRequest}
+            refreshKey={scheduleFeed.version}
+            focusEventId={focusEventId}
+            onFocusHandled={clearFocusEvent}
+            onChanged={() => void scheduleFeed.refresh()}
+            onSeen={scheduleFeed.markEventsSeen}
+            onOpenItem={openItem}
+            onWriteMinutes={(event) => {
+              setMinutesSeed(event);
+              openView("minutes");
+            }}
+            onOpenMinutes={openMinutes}
+          />
+        ) : viewMode === "minutes" ? (
+          <MinutesView
+            viewer={me}
+            isManager={isManager}
+            members={members}
+            minutes={scheduleFeed.minutes}
+            loaded={scheduleFeed.loaded}
+            organizationName={organizationName}
+            boardTitle={boardTitle}
+            request={apiRequest}
+            onChanged={() => void scheduleFeed.refresh()}
+            focusMinutesId={focusMinutesId}
+            onFocusHandled={clearFocusMinutes}
+            seed={minutesSeed}
+            onSeedHandled={clearMinutesSeed}
+            onOpenEvent={openEvent}
+          />
+        ) : viewMode === "worklog" ? (
+          <WorkLogPanel
+            inline
+            viewer={me}
+            members={members}
+            items={items}
+            organizationName={organizationName}
+            request={apiRequest}
+            onPendingReviewChange={setPendingReview}
+            policy={policy}
+            boardTitle={boardTitle}
+            onOpenMembers={() => setMembersOpen(true)}
+            onClose={() => openView("dashboard")}
+          />
+        ) : viewMode === "dashboard" ? (
           <div className="space-y-4">
             {loading ? (
               <div className="tb-card px-4 py-16 text-center text-sm text-[var(--text-muted)]">
@@ -4358,6 +4463,101 @@ export default function TaskBoard() {
                 <div className="tb-stat-label">지연</div>
                 <div className="tb-stat-value text-[var(--danger)]">
                   {dashboard.overdue}
+                </div>
+              </div>
+            </div>
+            ) : null}
+
+            {widgetPrefs.schedule !== false ? (
+            <div className="grid gap-4 lg:grid-cols-[1.4fr_1fr]">
+              <div className="tb-card tb-section p-5" data-testid="dashboard-schedule">
+                <div className="mb-3 flex items-center gap-2">
+                  <h2 className="text-sm font-semibold">다가오는 일정</h2>
+                  <span className="text-[11px] text-[var(--text-faint)]">
+                    오늘 {scheduleFeed.summary.today.length}건 · 2주{" "}
+                    {scheduleFeed.summary.upcoming.length}건
+                  </span>
+                  <button
+                    type="button"
+                    className="tb-btn ml-auto"
+                    onClick={() => openView("calendar")}
+                  >
+                    업무일정 열기
+                  </button>
+                </div>
+                <EventList
+                  events={scheduleFeed.summary.upcoming.slice(0, 6)}
+                  members={members}
+                  onOpen={(event) => openEvent(event.id)}
+                  empty="2주 안에 예정된 일정이 없습니다."
+                />
+              </div>
+              <div className="tb-card tb-section p-5">
+                <div className="mb-3 flex items-center gap-2">
+                  <h2 className="text-sm font-semibold">회의록</h2>
+                  {scheduleFeed.summary.unreadMinutes.length ? (
+                    <span className="tb-badge tb-badge-warning">
+                      확인 필요 {scheduleFeed.summary.unreadMinutes.length}
+                    </span>
+                  ) : null}
+                  <button
+                    type="button"
+                    className="tb-btn ml-auto"
+                    onClick={() => openView("minutes")}
+                  >
+                    회의록 열기
+                  </button>
+                </div>
+                <div className="space-y-1.5">
+                  {(scheduleFeed.summary.unreadMinutes.length
+                    ? scheduleFeed.summary.unreadMinutes
+                    : scheduleFeed.minutes
+                  )
+                    .slice(0, 5)
+                    .map((minute) => {
+                      const unread = scheduleFeed.summary.unreadMinutes.includes(minute);
+                      return (
+                        <button
+                          key={minute.id}
+                          type="button"
+                          onClick={() => openMinutes(minute.id)}
+                          className="flex w-full items-center gap-2 rounded-[var(--radius)] border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-left transition hover:border-[var(--accent)] hover:bg-[var(--surface-3)]"
+                        >
+                          <span className="min-w-0 flex-1">
+                            <span className="block truncate text-sm font-medium">
+                              {minute.title}
+                            </span>
+                            <span className="block text-[11px] text-[var(--text-faint)]">
+                              {formatDay(minute.meetingDate)} · {minute.authorName}
+                            </span>
+                          </span>
+                          {unread ? (
+                            <span className="tb-badge tb-badge-warning">확인 필요</span>
+                          ) : null}
+                        </button>
+                      );
+                    })}
+                  {!scheduleFeed.minutes.length ? (
+                    <div className="py-3 text-sm text-[var(--text-faint)]">
+                      아직 회의록이 없습니다.
+                    </div>
+                  ) : null}
+                  {scheduleFeed.summary.myActions.length ? (
+                    <div className="mt-2 rounded-[var(--radius)] border border-[var(--warning-border)] bg-[var(--warning-soft)] px-3 py-2 text-xs">
+                      <div className="mb-1 font-semibold">내 후속 조치 (3일 이내)</div>
+                      {scheduleFeed.summary.myActions.slice(0, 3).map((action, index) => (
+                        <button
+                          key={`${action.minutesId}-${index}`}
+                          type="button"
+                          onClick={() => openMinutes(action.minutesId)}
+                          className="block w-full truncate text-left hover:underline"
+                        >
+                          · {action.text}
+                          {action.dueDate ? ` (~${formatDay(action.dueDate)})` : ""}
+                        </button>
+                      ))}
+                    </div>
+                  ) : null}
                 </div>
               </div>
             </div>
@@ -7302,6 +7502,7 @@ export default function TaskBoard() {
           </div>
         )}
 
+        {isItemView ? (
         <div className="mt-5 grid gap-4 lg:grid-cols-[1fr_360px]">
           <section className="tb-card tb-section p-5">
             <h2 className="text-base font-semibold">변경 이력</h2>
@@ -7419,14 +7620,15 @@ export default function TaskBoard() {
                 </label>
                 <p className="mt-1.5 text-[11px] leading-4 text-[var(--text-faint)]">
                   알림(🔔) 패널의 &lsquo;웹훅으로 발송&rsquo; 버튼으로 즉시 보낼
-                  수 있고, 활성화 상태면 평일 오전 9시에 임박·지연 목록이 자동
-                  발송됩니다.
+                  수 있고, 활성화 상태면 평일 오전 9시에 임박·지연 목록과 오늘의
+                  업무일정이 자동 발송됩니다.
                 </p>
               </div>
             </div>
           </section>
           ) : null}
         </div>
+        ) : null}
       </section>
 
       <footer className="border-t border-[var(--border)] bg-[var(--surface)]">
@@ -7458,7 +7660,7 @@ export default function TaskBoard() {
             </button>
             <button
               type="button"
-              onClick={() => setWorkLogOpen(true)}
+              onClick={() => openView("worklog")}
               className="hover:text-[var(--text-muted)] hover:underline"
             >
               📝 업무일지
@@ -7782,10 +7984,10 @@ export default function TaskBoard() {
           >
             <div className="flex items-center justify-between border-b border-[var(--border)] px-5 py-3.5">
               <h2 className="flex items-center gap-2 text-base font-semibold">
-                마감 알림
-                {notifications.total ? (
+                알림
+                {notifications.total + scheduleFeed.count ? (
                   <span className="tb-badge tb-badge-danger">
-                    {notifications.total}
+                    {notifications.total + scheduleFeed.count}
                   </span>
                 ) : null}
               </h2>
@@ -7799,6 +8001,26 @@ export default function TaskBoard() {
             </div>
 
             <div className="max-h-[70vh] space-y-4 overflow-auto p-5">
+              <ScheduleNotices
+                feed={scheduleFeed}
+                members={members}
+                onOpenEvent={(id) => {
+                  setNotifOpen(false);
+                  openEvent(id);
+                }}
+                onOpenMinutes={(id) => {
+                  setNotifOpen(false);
+                  openMinutes(id);
+                }}
+              />
+              <h3 className="flex items-center gap-2 border-t border-[var(--border)] pt-3 text-sm font-semibold">
+                업무 마감 임박·지연
+                {notifications.total ? (
+                  <span className="tb-badge tb-badge-danger">
+                    {notifications.total}
+                  </span>
+                ) : null}
+              </h3>
               {notifications.list.length ? (
                 notifications.list.map((group) => (
                   <div key={group.assignee}>
@@ -7851,7 +8073,7 @@ export default function TaskBoard() {
                   </div>
                 ))
               ) : (
-                <div className="py-10 text-center text-sm text-[var(--text-muted)]">
+                <div className="py-4 text-center text-sm text-[var(--text-muted)]">
                   마감 임박·지연 항목이 없습니다. 👍
                 </div>
               )}
@@ -8823,29 +9045,19 @@ export default function TaskBoard() {
           onAssignmentsRenamed={() => void loadTasks()}
           onOpenWorkLog={() => {
             setMembersOpen(false);
-            setWorkLogOpen(true);
+            openView("worklog");
           }}
           onClose={() => setMembersOpen(false)}
         />
       ) : null}
 
-      {workLogOpen ? (
-        <WorkLogPanel
-          viewer={me}
-          members={members}
-          items={items}
-          organizationName={organizationName}
-          request={apiRequest}
-          onPendingReviewChange={setPendingReview}
-          policy={policy}
-          boardTitle={boardTitle}
-          onOpenMembers={() => {
-            setWorkLogOpen(false);
-            setMembersOpen(true);
-          }}
-          onClose={() => setWorkLogOpen(false)}
-        />
-      ) : null}
+
+      <ScheduleToasts
+        feed={scheduleFeed}
+        onOpenEvent={openEvent}
+        onOpenMinutes={openMinutes}
+        onOpenCalendar={() => openView("calendar")}
+      />
 
       <datalist id="member-list">
         {members

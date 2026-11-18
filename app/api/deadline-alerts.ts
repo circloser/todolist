@@ -4,7 +4,9 @@ import {
   webhookBody,
   type AlertItem,
 } from "../lib/deadline-alerts";
+import { scheduleDigestLines } from "../lib/schedule";
 import { kstToday } from "../lib/team";
+import { eventsBetween } from "./schedule-store";
 
 // Sends the 마감 알림 digest for a board. Used by the 🔔 panel's
 // "웹훅으로 발송" button and by the weekday cron (worker/index.ts), which
@@ -102,15 +104,19 @@ export async function sendDeadlineAlerts(
     return { status: "disabled" };
   }
 
-  const digest = buildDeadlineDigest(
-    await loadAlertItems(workspaceId),
-    await organizationName(workspaceId),
-    today
-  );
+  const org = await organizationName(workspaceId);
+  const digest = buildDeadlineDigest(await loadAlertItems(workspaceId), org, today);
+  // Today's shared 업무일정 rides along in the same morning message.
+  const schedule = scheduleDigestLines(await eventsBetween(workspaceId, today, today), today);
 
-  if (!digest.total) {
+  if (!digest.total && !schedule.length) {
     return { status: "nothing" };
   }
+
+  const text = digest.total
+    ? [digest.text, ...(schedule.length ? ["", ...schedule] : [])].join("\n")
+    : [`📋 [${org}] 오늘의 알림 (${today})`, "", ...schedule].join("\n");
+  const count = digest.total + Math.max(0, schedule.length - 1);
 
   const prefix = actor === AUTO_ALERT_ACTOR ? "평일 자동 발송: " : `${actor}님이 `;
 
@@ -118,7 +124,7 @@ export async function sendDeadlineAlerts(
     const response = await fetch(webhook.url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(webhookBody(webhook.url, digest.text)),
+      body: JSON.stringify(webhookBody(webhook.url, text)),
     });
 
     if (!response.ok) {
@@ -135,12 +141,12 @@ export async function sendDeadlineAlerts(
   await logAlertHistory(
     workspaceId,
     actor === AUTO_ALERT_ACTOR
-      ? `평일 자동 발송: 마감 알림 ${digest.total}건을 웹훅으로 보냄`
-      : `${actor}님이 마감 알림 ${digest.total}건을 웹훅으로 발송함`,
+      ? `평일 자동 발송: 마감 알림 ${digest.total}건${schedule.length ? `·오늘 일정 ${schedule.length - 1}건` : ""}을 웹훅으로 보냄`
+      : `${actor}님이 마감 알림 ${digest.total}건${schedule.length ? `·오늘 일정 ${schedule.length - 1}건` : ""}을 웹훅으로 발송함`,
     actor,
     "send"
   );
-  return { status: "sent", sent: digest.total };
+  return { status: "sent", sent: count };
 }
 
 /** Cron entry point: every board whose webhook is switched on. */

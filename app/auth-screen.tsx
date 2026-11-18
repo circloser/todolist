@@ -254,13 +254,13 @@ export default function AuthScreen({ auth, message, onAuth, onEnter, onBack }: A
 
           <div className="relative z-10">
             <p className="text-[12px] font-semibold tracking-[0.18em] text-[#a7f0e0]">
-              진행 · 일지 · 결재 · 보고서
+              진행 · 일정 · 회의록 · 일지 · 보고서
             </p>
             <h1 className="mt-2 text-[28px] font-bold leading-[1.18] tracking-tight sm:text-[36px] lg:text-[44px]">
               팀의 방향을, 한눈에.
             </h1>
             <p className="mt-3 max-w-[460px] text-[14px] leading-6 text-white/70 sm:text-[15px]">
-              업무 진행부터 업무일지·결재·보고서까지, {BRAND.name} 하나로.
+              업무 진행부터 일정·회의록·업무일지·보고서까지, {BRAND.name} 하나로.
             </p>
           </div>
         </div>

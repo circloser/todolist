@@ -10,10 +10,12 @@ export const MANUAL_SECTIONS = [
   { id: "manual-steps", icon: "✅", title: "진행 단계와 체크리스트" },
   { id: "manual-templates", icon: "🧩", title: "업무 유형·단계 관리" },
   { id: "manual-dashboard", icon: "📊", title: "대시보드" },
+  { id: "manual-calendar", icon: "🗓", title: "업무일정 (두 달 보기)" },
+  { id: "manual-minutes", icon: "🗒", title: "회의록과 미참석자 확인" },
   { id: "manual-map", icon: "🗺", title: "지도" },
   { id: "manual-gantt", icon: "📅", title: "간트" },
   { id: "manual-filter", icon: "🔎", title: "필터·검색·정렬" },
-  { id: "manual-alerts", icon: "🔔", title: "마감 알림" },
+  { id: "manual-alerts", icon: "🔔", title: "알림 (일정·회의록·마감)" },
   { id: "manual-monthly", icon: "📄", title: "월간 보고서" },
   { id: "manual-members", icon: "👥", title: "구성원 관리" },
   { id: "manual-worklog", icon: "📝", title: "업무일지와 승인" },
@@ -170,9 +172,16 @@ export default function ManualContent() {
       <Section id="manual-screen">
         <p>
           상단에는 보드 제목과 전체 진행률, 내 이름과 권한(구성원/부서장),{" "}
-          <Key>보드 전환·계정</Key> <Key>로그아웃</Key> 버튼이 있습니다. <Key>목록</Key>{" "}
-          <Key>대시보드</Key> <Key>지도</Key> <Key>간트</Key>로 보기를 바꾸며, 일상 입력은{" "}
-          <strong>목록</strong>에서 하는 것이 가장 편합니다.
+          <Key>보드 전환·계정</Key> <Key>로그아웃</Key> 버튼이 있습니다. 그 아래 탭으로 화면을
+          바꿉니다: <Key>대시보드</Key> <Key>목록</Key> <Key>업무일정</Key> <Key>회의록</Key>{" "}
+          <Key>업무일지</Key> <Key>지도</Key> <Key>간트</Key>. 보드에 들어오면{" "}
+          <strong>대시보드</strong>가 첫 화면이고, 업무 입력은 <strong>목록</strong>에서 하는
+          것이 가장 편합니다.
+        </p>
+        <p>
+          탭 옆 숫자는 확인할 것이 있다는 뜻입니다: 업무일정은 오늘 일정과 다른 구성원이 새로
+          올린 일정, 회의록은 내가 아직 확인하지 않은 회의록, 업무일지는 승인 대기(부서장) 건수.
+          검색·필터는 업무 화면(대시보드·목록·지도·간트)에서만 보입니다.
         </p>
         <p>
           변경 이력의 작성자는 로그인한 구성원 이름으로 자동 기록됩니다. 보드 제목·조직명·
@@ -252,6 +261,51 @@ export default function ManualContent() {
         </p>
       </Section>
 
+      <Section id="manual-calendar">
+        <p>
+          <Key>업무일정</Key>은 보드의 모든 구성원이 함께 보는 달력입니다. 기본은{" "}
+          <strong>두 달을 나란히</strong> 보여 주고(휴대폰에서는 위아래), <Key>한 달</Key>로
+          크게 볼 수도 있습니다. <Key>‹</Key> <Key>›</Key>로 달을 넘기고 <Key>오늘</Key>로
+          돌아옵니다. 일요일·공휴일은 빨강, 토요일은 파랑입니다.
+        </p>
+        <p>
+          <Key>+ 일정 추가</Key>를 누르거나 날짜를 <strong>두 번 클릭</strong>하면 새 일정을
+          만듭니다. 분류(회의·현장·출장·교육·휴가·마감·기타), 종일 또는 시간, 장소, 참석
+          구성원, 알림 시점(시작할 때·10분·30분·1시간·하루 전), 메모를 적습니다. 참석
+          구성원을 고르지 않으면 팀 전체 일정입니다. 누구나 일정을 올릴 수 있고,{" "}
+          <strong>수정·삭제는 등록한 사람과 부서장</strong>만 합니다.
+        </p>
+        <p>
+          위쪽 분류 칩으로 원하는 일정만 보이게 하고, <Key>업무 마감 표시</Key>를 켜 두면
+          업무의 다음 단계 마감과 최종 마감이 ⚑ 표시로 함께 나옵니다(누르면 그 업무로 이동).
+          아래에는 고른 날의 일정과 앞으로 2주의 일정이 정리됩니다. 회의 일정에서{" "}
+          <Key>📝 회의록 작성</Key>을 누르면 제목·날짜·시간·장소·참석자가 채워진 회의록을
+          바로 쓸 수 있습니다.
+        </p>
+      </Section>
+
+      <Section id="manual-minutes">
+        <p>
+          <Key>회의록</Key>에서 <Key>+ 새 회의록</Key>으로 작성합니다. 회의명, 날짜·시간,
+          장소, <strong>참석자(구성원 중 한 명 이상 필수)</strong>, 외부 참석자, 안건, 회의
+          내용, 결정 사항, 후속 조치(담당·기한)를 적습니다. 저장하면 보드의 모든 구성원이 볼 수
+          있고, 수정·삭제는 작성자와 부서장만 합니다.
+        </p>
+        <p>
+          참석자로 고르지 않은 구성원은 <strong>미참석자</strong>가 됩니다. 미참석자에게는
+          알림과 &lsquo;확인 필요&rsquo; 표시가 뜨고, 회의록을 읽은 뒤{" "}
+          <Key>✓ 회의 내용을 확인했습니다</Key>를 누르면 확인 시각이 기록됩니다(잘못 눌렀다면{" "}
+          <Key>확인 취소</Key>). 회의록 화면의 <strong>미참석자 확인</strong> 칸에서 누가
+          언제 확인했는지 모두 볼 수 있습니다. 회의록이 쓰인 뒤에 가입한 구성원에게는 확인을
+          요청하지 않습니다.
+        </p>
+        <p>
+          후속 조치는 담당자·작성자·부서장이 완료 체크합니다. 목록의 <Key>확인 필요</Key>{" "}
+          <Key>내 회의</Key> <Key>내 할 일</Key>로 걸러 보고, <Key>인쇄</Key>로 결재란과
+          미참석자 확인 표가 들어간 A4 회의록을 출력하거나 PDF로 저장합니다.
+        </p>
+      </Section>
+
       <Section id="manual-map">
         <p>
           위치가 있는 업무는 지도에 핀으로 표시됩니다(<strong>파랑=완료</strong>,{" "}
@@ -282,14 +336,23 @@ export default function ManualContent() {
 
       <Section id="manual-alerts">
         <p>
-          상단 <Key>알림</Key>에 지연·임박(D-3 이내) 건수가 표시되고, 열면 담당자별 목록에서
-          업무로 바로 이동합니다.
+          상단 <Key>알림</Key>을 열면 <strong>오늘·내일 일정</strong>, 다른 구성원이{" "}
+          <strong>새로 올리거나 바꾼 일정</strong>, <strong>확인할 회의록</strong>,{" "}
+          <strong>내 후속 조치</strong>(3일 이내·지연), 그리고 담당자별 업무 마감 임박(D-3)·지연
+          목록이 한곳에 모입니다. 항목을 누르면 해당 화면으로 바로 이동합니다.
+        </p>
+        <p>
+          보드를 열어 둔 동안에는 화면 오른쪽 아래에 알림 창이 뜹니다: 그날 처음 들어오면 오늘
+          일정 요약, 일정 시작 전(일정에 정한 알림 시점, 종일 일정은 오전 9시 기준), 다른
+          구성원의 새 일정과 새 회의록. 일정은 몇 분마다 자동으로 새로 고쳐집니다. 알림 패널의{" "}
+          <Key>알림 켜기</Key>로 브라우저 알림을 허용하면 다른 창을 보고 있을 때도 알려 줍니다.
+          참석 구성원을 정한 일정은 그 사람들에게만, 정하지 않은 일정은 모두에게 알립니다.
         </p>
         <p>
           부서장이 하단 <strong>보드 설정</strong>에 Slack 또는 Discord 웹훅 주소를 저장하고{" "}
           <Key>발송 활성화</Key>를 켜면, <strong>평일 오전 9시</strong>에 지연·임박 업무가
-          담당자별로 정리되어 자동 발송됩니다. 웹훅을 켠 모든 보드가 대상이며, 보낼 업무가
-          없는 날은 보내지 않습니다. 알림 패널의 <Key>웹훅으로 발송</Key>으로 바로 보낼
+          담당자별로 정리되고, 그날의 <strong>업무일정</strong>도 함께 자동 발송됩니다. 웹훅을 켠
+          모든 보드가 대상이며, 보낼 업무와 일정이 없는 날은 보내지 않습니다. 알림 패널의 <Key>웹훅으로 발송</Key>으로 바로 보낼
           수도 있습니다.
           <Who manager />
         </p>
@@ -325,7 +388,7 @@ export default function ManualContent() {
 
       <Section id="manual-worklog">
         <p>
-          <Key>업무일지</Key> → <Key>내 일지</Key>에서 하루에 한 건씩{" "}
+          <Key>업무일지</Key> 탭(화면 전체) → <Key>내 일지</Key>에서 하루에 한 건씩{" "}
           <strong>오늘 한 일 · 관련 업무 · 다음 계획 · 특이사항</strong>을 써서 제출합니다(한국
           시간 기준). <Key>↻ 보드 활동 불러오기</Key>는 그날 내가 완료한 단계·체크리스트를
           채워 주고, 관련 업무는 내 담당 업무가 먼저 제안됩니다.
@@ -421,6 +484,17 @@ export default function ManualContent() {
           <strong className="text-[var(--text)]">Q. 승인된 일지를 고치고 싶어요.</strong>
           <br />부서장에게 <Key>승인 취소</Key>를 요청하거나, 운영 옵션의 &lsquo;승인된 일지
           잠금&rsquo;을 끄면 고칠 수 있습니다.
+        </p>
+        <p>
+          <strong className="text-[var(--text)]">Q. 일정 알림 창이 뜨지 않아요.</strong>
+          <br />알림 창은 보드를 열어 둔 동안에만 뜹니다. 일정에 알림 시점을 정했는지, 참석
+          구성원에 내가 들어 있는지(비워 두면 모두) 확인하세요. 다른 창을 볼 때도 받으려면 알림
+          패널에서 <Key>알림 켜기</Key>로 브라우저 알림을 허용하세요.
+        </p>
+        <p>
+          <strong className="text-[var(--text)]">Q. 회의에 참석했는데 &lsquo;확인 필요&rsquo;가 떠요.</strong>
+          <br />회의록 작성자가 나를 참석자로 고르지 않은 경우입니다. 작성자(또는 부서장)에게
+          참석자 수정을 요청하거나, 내용을 읽고 <Key>✓ 회의 내용을 확인했습니다</Key>를 누르세요.
         </p>
         <p>
           <strong className="text-[var(--text)]">Q. 자동 마감 알림이 오지 않아요.</strong>

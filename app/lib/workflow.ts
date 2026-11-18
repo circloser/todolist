@@ -5,7 +5,15 @@
 export type StepStatus = "todo" | "done";
 export type TaskFilter = "all" | "open" | "done";
 export type SortMode = "manual" | "assignee" | "progress" | "updated";
-export type ViewMode = "dashboard" | "list" | "map" | "grid" | "gantt";
+export type ViewMode =
+  | "dashboard"
+  | "list"
+  | "calendar"
+  | "minutes"
+  | "worklog"
+  | "map"
+  | "grid"
+  | "gantt";
 export type DueFilter = "all" | "urgent" | "overdue" | "week" | "month";
 export type Urgency = "none" | "overdue" | "danger" | "warning" | "normal";
 

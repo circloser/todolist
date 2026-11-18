@@ -152,6 +152,67 @@ export async function prepareTeamTables() {
     d1.prepare(
       "CREATE UNIQUE INDEX IF NOT EXISTS workspace_join_requests_user_idx ON workspace_join_requests (workspace_id, user_id)"
     ),
+    d1.prepare(`CREATE TABLE IF NOT EXISTS calendar_events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      workspace_id TEXT NOT NULL,
+      title TEXT NOT NULL,
+      category TEXT NOT NULL DEFAULT 'etc',
+      start_date TEXT NOT NULL,
+      end_date TEXT NOT NULL,
+      all_day INTEGER NOT NULL DEFAULT 1,
+      start_time TEXT,
+      end_time TEXT,
+      location TEXT NOT NULL DEFAULT '',
+      description TEXT NOT NULL DEFAULT '',
+      attendee_ids TEXT NOT NULL DEFAULT '[]',
+      reminder_minutes INTEGER,
+      created_by_member_id INTEGER NOT NULL,
+      created_by_name TEXT NOT NULL,
+      updated_by TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    )`),
+    d1.prepare(
+      "CREATE INDEX IF NOT EXISTS calendar_events_range_idx ON calendar_events (workspace_id, start_date, end_date)"
+    ),
+    d1.prepare(
+      "CREATE INDEX IF NOT EXISTS calendar_events_updated_idx ON calendar_events (workspace_id, updated_at)"
+    ),
+    d1.prepare(`CREATE TABLE IF NOT EXISTS meeting_minutes (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      workspace_id TEXT NOT NULL,
+      title TEXT NOT NULL,
+      meeting_date TEXT NOT NULL,
+      start_time TEXT,
+      end_time TEXT,
+      location TEXT NOT NULL DEFAULT '',
+      attendee_ids TEXT NOT NULL DEFAULT '[]',
+      guests TEXT NOT NULL DEFAULT '',
+      agenda TEXT NOT NULL DEFAULT '',
+      content TEXT NOT NULL DEFAULT '',
+      decisions TEXT NOT NULL DEFAULT '',
+      action_items TEXT NOT NULL DEFAULT '[]',
+      event_id INTEGER,
+      author_member_id INTEGER NOT NULL,
+      author_name TEXT NOT NULL,
+      updated_by TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    )`),
+    d1.prepare(
+      "CREATE INDEX IF NOT EXISTS meeting_minutes_date_idx ON meeting_minutes (workspace_id, meeting_date)"
+    ),
+    d1.prepare(`CREATE TABLE IF NOT EXISTS meeting_minutes_reads (
+      minutes_id INTEGER NOT NULL,
+      workspace_id TEXT NOT NULL,
+      member_id INTEGER NOT NULL,
+      member_name TEXT NOT NULL,
+      acknowledged_at TEXT NOT NULL,
+      PRIMARY KEY (minutes_id, member_id)
+    )`),
+    d1.prepare(
+      "CREATE INDEX IF NOT EXISTS meeting_minutes_reads_workspace_idx ON meeting_minutes_reads (workspace_id)"
+    ),
   ]);
 
   // Columns added after the first release of these tables.
@@ -267,7 +328,7 @@ export async function logTeamHistory({
   actor,
 }: {
   workspaceId: string;
-  entityType: "member" | "worklog";
+  entityType: "member" | "worklog" | "event" | "minutes";
   entityId: number | null;
   action: string;
   summary: string;

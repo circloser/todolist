@@ -51,6 +51,8 @@ type WorkLogPanelProps = {
   onPendingReviewChange?: (count: number) => void;
   onOpenMembers: () => void;
   onClose: () => void;
+  /** Render as a full-width board view instead of a modal. */
+  inline?: boolean;
 };
 
 function draftFrom(log: WorkLog | null): Draft {
@@ -79,6 +81,7 @@ export default function WorkLogPanel({
   onPendingReviewChange,
   onOpenMembers,
   onClose,
+  inline = false,
 }: WorkLogPanelProps) {
   const isManager = viewer?.accessRole === "manager";
   const myId = viewer?.memberId ?? null;
@@ -411,22 +414,36 @@ export default function WorkLogPanel({
     </div>
   );
 
-  return (
-    <div
-      className="fixed inset-0 z-50 flex items-start justify-center overflow-auto bg-black/40 p-4 backdrop-blur-sm"
-      onClick={() => {
-        if (confirmDiscard()) {
-          onClose();
-        }
-      }}
-    >
+  // A plain wrapper function (not a component), so the editor keeps its
+  // identity and focus across renders.
+  const wrap = (children: React.ReactNode) =>
+    inline ? (
+      <section className="tb-card w-full" aria-labelledby="worklog-title">
+        {children}
+      </section>
+    ) : (
       <div
-        className={`tb-card my-6 w-full shadow-[var(--shadow-lg)] ${wide ? "max-w-[1280px]" : "max-w-[920px]"}`}
-        onClick={(event) => event.stopPropagation()}
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="worklog-title"
+        className="fixed inset-0 z-50 flex items-start justify-center overflow-auto bg-black/40 p-4 backdrop-blur-sm"
+        onClick={() => {
+          if (confirmDiscard()) {
+            onClose();
+          }
+        }}
       >
+        <div
+          className={`tb-card my-6 w-full shadow-[var(--shadow-lg)] ${wide ? "max-w-[1280px]" : "max-w-[920px]"}`}
+          onClick={(event) => event.stopPropagation()}
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="worklog-title"
+        >
+          {children}
+        </div>
+      </div>
+    );
+
+  return wrap(
+    <>
         <div className="flex flex-wrap items-center gap-2 border-b border-[var(--border)] px-5 py-3.5">
           <h2 id="worklog-title" className="mr-2 text-base font-semibold">
             📝 업무일지
@@ -450,18 +467,20 @@ export default function WorkLogPanel({
             <button type="button" onClick={onOpenMembers} className="tb-btn text-sm">
               👥 구성원
             </button>
-            <button
-              type="button"
-              onClick={() => {
-                if (confirmDiscard()) {
-                  onClose();
-                }
-              }}
-              className="tb-iconbtn h-8 w-8"
-              aria-label="닫기"
-            >
-              ×
-            </button>
+            {inline ? null : (
+              <button
+                type="button"
+                onClick={() => {
+                  if (confirmDiscard()) {
+                    onClose();
+                  }
+                }}
+                className="tb-iconbtn h-8 w-8"
+                aria-label="닫기"
+              >
+                ×
+              </button>
+            )}
           </div>
         </div>
 
@@ -764,7 +783,6 @@ export default function WorkLogPanel({
             />
           )}
         </div>
-      </div>
-    </div>
+    </>
   );
 }
