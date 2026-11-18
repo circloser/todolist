@@ -6,31 +6,34 @@ import {
   normalizeLogDate,
   normalizeLogRange,
   normalizeLogText,
+  WORK_LOG_STATUS_LABEL,
 } from "../../lib/team";
+import { forbidden, requireWorkspaceAccess, type BoardAccess } from "../auth-store";
 import {
-  actorFrom,
-  getMember,
   logTeamHistory,
   prepareTeamTables,
   routeError,
   toWorkLog,
   type WorkLogRow,
 } from "../team-store";
-import { requireWorkspaceAccess } from "../workspace-auth";
 
-// 업무일지: one log per member per calendar day (KST), upserted on save.
+// 업무일지: one log per member per calendar day (KST).
+// - Members write, edit and delete only their own logs, until approved.
+// - 부서장 read everyone's logs and approve / return (반려) / reopen them,
+//   but never edit someone else's content.
 
 type WorkLogPayload = {
-  actor?: string;
   workspaceId?: string;
-  workspacePassword?: string;
   id?: number;
+  ids?: unknown[];
   memberId?: number;
   logDate?: string;
   content?: string;
   plan?: string;
   issues?: string;
   itemIds?: unknown[];
+  decision?: "approve" | "reject" | "reopen";
+  comment?: string;
 };
 
 async function readPayload(request: Request) {
@@ -59,6 +62,23 @@ async function existingItemIds(workspaceId: string, ids: number[]) {
   }
 }
 
+// Other members' logs waiting for this manager's review.
+async function pendingReviewCount(access: BoardAccess) {
+  if (!access.isManager) {
+    return 0;
+  }
+
+  const row = await getD1()
+    .prepare(
+      `SELECT COUNT(*) AS count FROM work_logs
+       WHERE workspace_id = ? AND status = 'submitted' AND member_id <> ?`
+    )
+    .bind(access.workspace.id, access.member.id)
+    .first<{ count: number }>();
+
+  return row?.count ?? 0;
+}
+
 export async function GET(request: Request) {
   try {
     await prepareTeamTables();
@@ -68,33 +88,50 @@ export async function GET(request: Request) {
     }
 
     const url = new URL(request.url);
-    const range = normalizeLogRange(
-      url.searchParams.get("from") ?? url.searchParams.get("date"),
-      url.searchParams.get("to") ?? url.searchParams.get("date")
-    );
+    const onlyPending = url.searchParams.get("status") === "submitted";
+    const range = onlyPending
+      ? ({ from: "0000-01-01", to: "9999-12-31" } as const)
+      : normalizeLogRange(
+          url.searchParams.get("from") ?? url.searchParams.get("date"),
+          url.searchParams.get("to") ?? url.searchParams.get("date")
+        );
 
     if ("error" in range) {
       return Response.json({ error: range.error }, { status: 400 });
     }
 
-    const memberId = Number(url.searchParams.get("memberId"));
-    const byMember = Number.isInteger(memberId) && memberId > 0;
+    // Members only ever see their own logs, whatever they ask for.
+    const requested = Number(url.searchParams.get("memberId"));
+    const memberId = access.isManager
+      ? Number.isInteger(requested) && requested > 0
+        ? requested
+        : null
+      : access.member.id;
+    const conditions = ["workspace_id = ?", "log_date BETWEEN ? AND ?"];
+    const binds: Array<string | number> = [access.workspace.id, range.from, range.to];
+
+    if (memberId !== null) {
+      conditions.push("member_id = ?");
+      binds.push(memberId);
+    }
+
+    if (onlyPending) {
+      conditions.push("status = 'submitted'", "member_id <> ?");
+      binds.push(access.member.id);
+    }
+
     const rows = await getD1()
       .prepare(
-        `SELECT * FROM work_logs
-         WHERE workspace_id = ? AND log_date BETWEEN ? AND ?
-         ${byMember ? "AND member_id = ?" : ""}
-         ORDER BY log_date DESC, member_name`
+        `SELECT * FROM work_logs WHERE ${conditions.join(" AND ")}
+         ORDER BY log_date DESC, member_name LIMIT 500`
       )
-      .bind(
-        access.workspace.id,
-        range.from,
-        range.to,
-        ...(byMember ? [memberId] : [])
-      )
+      .bind(...binds)
       .all<WorkLogRow>();
 
-    return Response.json({ logs: (rows.results ?? []).map(toWorkLog) });
+    return Response.json({
+      logs: (rows.results ?? []).map(toWorkLog),
+      pendingReview: await pendingReviewCount(access),
+    });
   } catch (error) {
     return routeError(error);
   }
@@ -110,17 +147,10 @@ export async function PUT(request: Request) {
     }
 
     const workspaceId = access.workspace.id;
-    const actor = actorFrom(request, payload.actor);
-    const memberId = Number(payload.memberId);
-    const member = Number.isInteger(memberId)
-      ? await getMember(workspaceId, memberId)
-      : null;
+    const member = access.member;
 
-    if (!member) {
-      return Response.json(
-        { error: "업무일지를 작성할 구성원을 선택해 주세요." },
-        { status: 400 }
-      );
+    if (payload.memberId !== undefined && Number(payload.memberId) !== member.id) {
+      return forbidden("다른 구성원의 업무일지는 작성하거나 수정할 수 없습니다.");
     }
 
     const logDate = normalizeLogDate(payload.logDate);
@@ -149,21 +179,35 @@ export async function PUT(request: Request) {
     const now = new Date().toISOString();
     const existed = await getD1()
       .prepare(
-        "SELECT id FROM work_logs WHERE workspace_id = ? AND member_id = ? AND log_date = ?"
+        "SELECT id, status FROM work_logs WHERE workspace_id = ? AND member_id = ? AND log_date = ?"
       )
       .bind(workspaceId, member.id, logDate)
-      .first<{ id: number }>();
+      .first<{ id: number; status: string }>();
+
+    if (existed?.status === "approved") {
+      return Response.json(
+        { error: "승인된 업무일지는 수정할 수 없습니다. 부서장에게 승인 취소를 요청해 주세요." },
+        { status: 409 }
+      );
+    }
+
+    // Saving (re)submits the log for review.
     const row = await getD1()
       .prepare(
         `INSERT INTO work_logs
-           (workspace_id, member_id, member_name, log_date, content, plan, issues, item_ids, updated_by, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           (workspace_id, member_id, member_name, log_date, content, plan, issues, item_ids,
+            status, reviewer_name, reviewed_at, review_comment, updated_by, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'submitted', '', NULL, '', ?, ?, ?)
          ON CONFLICT(workspace_id, member_id, log_date) DO UPDATE SET
            member_name = excluded.member_name,
            content = excluded.content,
            plan = excluded.plan,
            issues = excluded.issues,
            item_ids = excluded.item_ids,
+           status = 'submitted',
+           reviewer_name = '',
+           reviewed_at = NULL,
+           review_comment = '',
            updated_by = excluded.updated_by,
            updated_at = excluded.updated_at
          RETURNING *`
@@ -177,7 +221,7 @@ export async function PUT(request: Request) {
         draft.plan,
         draft.issues,
         JSON.stringify(draft.itemIds),
-        actor,
+        access.actor,
         now,
         now
       )
@@ -188,16 +232,117 @@ export async function PUT(request: Request) {
       entityType: "worklog",
       entityId: row?.id ?? null,
       action: existed ? "update" : "create",
-      summary: `${actor}님이 ${member.name}님의 ${formatLogDate(logDate)} 업무일지를 ${
-        existed ? "수정함" : "작성함"
+      summary: `${access.actor}님이 ${formatLogDate(logDate)} 업무일지를 ${
+        existed ? (existed.status === "rejected" ? "보완해 다시 제출함" : "수정함") : "제출함"
       }`,
-      actor,
+      actor: access.actor,
     });
 
     return Response.json(
       { log: row ? toWorkLog(row) : null },
       { status: existed ? 200 : 201 }
     );
+  } catch (error) {
+    return routeError(error);
+  }
+}
+
+// 부서장 review: approve, return with a reason (반려), or reopen (승인 취소).
+export async function PATCH(request: Request) {
+  try {
+    await prepareTeamTables();
+    const payload = await readPayload(request);
+    const access = await requireWorkspaceAccess(request, payload);
+    if ("response" in access) {
+      return access.response;
+    }
+    if (!access.isManager) {
+      return forbidden("업무일지 승인은 부서장만 할 수 있습니다.");
+    }
+
+    const decision = payload.decision;
+    if (decision !== "approve" && decision !== "reject" && decision !== "reopen") {
+      return Response.json({ error: "승인, 반려, 승인 취소 중 하나를 선택해 주세요." }, { status: 400 });
+    }
+
+    const comment = normalizeLogText(payload.comment).slice(0, 500);
+    if (decision === "reject" && !comment) {
+      return Response.json({ error: "반려 사유를 입력해 주세요." }, { status: 400 });
+    }
+
+    const ids = normalizeItemIds(Array.isArray(payload.ids) ? payload.ids : [payload.id]);
+    if (!ids.length) {
+      return Response.json({ error: "검토할 업무일지를 선택해 주세요." }, { status: 400 });
+    }
+
+    const workspaceId = access.workspace.id;
+    const rows = await getD1()
+      .prepare(
+        `SELECT * FROM work_logs WHERE workspace_id = ? AND id IN (${ids.map(() => "?").join(", ")})`
+      )
+      .bind(workspaceId, ...ids)
+      .all<WorkLogRow>();
+    const logs = rows.results ?? [];
+
+    if (logs.some((log) => log.member_id === access.member.id)) {
+      return forbidden("본인의 업무일지는 직접 승인할 수 없습니다.");
+    }
+
+    const targets = logs.filter((log) =>
+      decision === "reopen" ? log.status !== "submitted" : log.status !== "approved" || decision === "reject"
+    );
+
+    if (!targets.length) {
+      return Response.json({ error: "검토할 수 있는 업무일지가 없습니다." }, { status: 400 });
+    }
+
+    const now = new Date().toISOString();
+    const status = decision === "approve" ? "approved" : decision === "reject" ? "rejected" : "submitted";
+    const d1 = getD1();
+
+    await d1.batch(
+      targets.map((log) =>
+        d1
+          .prepare(
+            `UPDATE work_logs
+             SET status = ?, reviewer_name = ?, reviewed_at = ?, review_comment = ?
+             WHERE id = ?`
+          )
+          .bind(
+            status,
+            decision === "reopen" ? "" : access.actor,
+            decision === "reopen" ? null : now,
+            decision === "reopen" ? "" : comment,
+            log.id
+          )
+      )
+    );
+
+    const label = decision === "reopen" ? "승인 취소" : WORK_LOG_STATUS_LABEL[status];
+    await logTeamHistory({
+      workspaceId,
+      entityType: "worklog",
+      entityId: targets.length === 1 ? targets[0].id : null,
+      action: decision,
+      summary:
+        targets.length === 1
+          ? `${access.actor}님이 ${targets[0].member_name}님의 ${formatLogDate(targets[0].log_date)} 업무일지를 ${label}함`
+          : `${access.actor}님이 업무일지 ${targets.length}건을 ${label}함`,
+      actor: access.actor,
+    });
+
+    const updated = await d1
+      .prepare(
+        `SELECT * FROM work_logs WHERE id IN (${targets.map(() => "?").join(", ")})`
+      )
+      .bind(...targets.map((log) => log.id))
+      .all<WorkLogRow>();
+
+    return Response.json({
+      logs: (updated.results ?? []).map(toWorkLog),
+      reviewed: targets.length,
+      pendingReview: await pendingReviewCount(access),
+    });
   } catch (error) {
     return routeError(error);
   }
@@ -213,7 +358,6 @@ export async function DELETE(request: Request) {
     }
 
     const workspaceId = access.workspace.id;
-    const actor = actorFrom(request, payload.actor);
     const id = Number(payload.id);
     const row = Number.isInteger(id)
       ? await getD1()
@@ -226,6 +370,17 @@ export async function DELETE(request: Request) {
       return Response.json({ error: "업무일지를 찾을 수 없습니다." }, { status: 404 });
     }
 
+    if (row.member_id !== access.member.id) {
+      return forbidden("다른 구성원의 업무일지는 삭제할 수 없습니다.");
+    }
+
+    if (row.status === "approved") {
+      return Response.json(
+        { error: "승인된 업무일지는 삭제할 수 없습니다." },
+        { status: 409 }
+      );
+    }
+
     await getD1()
       .prepare("DELETE FROM work_logs WHERE workspace_id = ? AND id = ?")
       .bind(workspaceId, row.id)
@@ -235,8 +390,8 @@ export async function DELETE(request: Request) {
       entityType: "worklog",
       entityId: row.id,
       action: "delete",
-      summary: `${actor}님이 ${row.member_name}님의 ${formatLogDate(row.log_date)} 업무일지를 삭제함`,
-      actor,
+      summary: `${access.actor}님이 ${formatLogDate(row.log_date)} 업무일지를 삭제함`,
+      actor: access.actor,
     });
 
     return Response.json({ log: null });

@@ -71,12 +71,16 @@ body {
   text-rendering: optimizeLegibility;
 }
 
-button,
-input,
-textarea,
-select {
-  font: inherit;
-  color: inherit;
+/* In the base layer so component classes (.tb-btn-primary) and Tailwind
+   text-color utilities can override it; unlayered, it beat them all. */
+@layer base {
+  button,
+  input,
+  textarea,
+  select {
+    font: inherit;
+    color: inherit;
+  }
 }
 
 ::selection {
@@ -824,6 +828,13 @@ select {
     border-color: var(--accent);
     background: var(--surface);
     box-shadow: inset 0 -2px 0 var(--accent);
+  }
+  /* Read-only (someone else's work, or an approved log). */
+  .tb-field:disabled {
+    background-color: var(--surface-2);
+    border-bottom-style: dashed;
+    color: var(--text-muted);
+    cursor: not-allowed;
   }
   select.tb-field {
     appearance: none;

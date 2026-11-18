@@ -4,16 +4,27 @@
 
 import type { WorkflowItem } from "./workflow";
 
+// 부서장(manager) manages every work process and approves 업무일지;
+// 구성원(member) can only change their own.
+export type AccessRole = "manager" | "member";
+
 export type TeamMember = {
   id: number;
   name: string;
+  /** Job title (역할·직급), free text. Not a permission. */
   role: string;
   color: string;
   active: boolean;
   position: number;
+  accessRole: AccessRole;
+  hasAccount: boolean;
+  /** Only sent to managers. */
+  loginId?: string;
   createdAt: string;
   updatedAt: string;
 };
+
+export type WorkLogStatus = "submitted" | "approved" | "rejected";
 
 export type WorkLog = {
   id: number;
@@ -24,15 +35,30 @@ export type WorkLog = {
   plan: string;
   issues: string;
   itemIds: number[];
+  status: WorkLogStatus;
+  reviewerName: string;
+  reviewedAt: string | null;
+  reviewComment: string;
   updatedBy: string;
   createdAt: string;
   updatedAt: string;
+};
+
+export type JoinRequest = {
+  id: number;
+  userId: number;
+  loginId: string;
+  name: string;
+  createdAt: string;
+  /** Unlinked roster entry with the same name, suggested for linking. */
+  suggestedMemberId: number | null;
 };
 
 export type MembersResponse = {
   members?: TeamMember[];
   member?: TeamMember;
   assigneeSettings?: Record<string, string>;
+  requests?: JoinRequest[];
   imported?: number;
   renamedItems?: number;
   error?: string;
@@ -41,8 +67,120 @@ export type MembersResponse = {
 export type WorkLogsResponse = {
   logs?: WorkLog[];
   log?: WorkLog | null;
+  reviewed?: number;
+  pendingReview?: number;
   error?: string;
 };
+
+// ---------------------------------------------------------------- accounts
+
+export type Viewer = {
+  userId: number;
+  loginId: string;
+  memberId: number;
+  name: string;
+  accessRole: AccessRole;
+};
+
+export type BoardMembership = {
+  workspaceId: string;
+  label: string;
+  departmentName: string;
+  teamName: string;
+  memberId: number;
+  memberName: string;
+  accessRole: AccessRole;
+  active: boolean;
+};
+
+export type AuthResponse = {
+  user?: { id: number; loginId: string; name: string } | null;
+  boards?: BoardMembership[];
+  pending?: Array<{ workspaceId: string; label: string; name: string; createdAt: string }>;
+  joined?: boolean;
+  becameManager?: boolean;
+  requested?: boolean;
+  error?: string;
+};
+
+export const LOGIN_ID_PATTERN = /^[a-z0-9][a-z0-9._-]{2,31}$/;
+export const PASSWORD_MIN = 8;
+export const PASSWORD_MAX = 128;
+
+export function normalizeLoginId(value: unknown) {
+  return typeof value === "string" ? value.trim().toLowerCase() : "";
+}
+
+export function loginIdError(loginId: string) {
+  return LOGIN_ID_PATTERN.test(loginId)
+    ? null
+    : "아이디는 영문 소문자·숫자·._- 조합 3~32자로 입력해 주세요.";
+}
+
+export function passwordError(password: unknown, loginId = "") {
+  if (typeof password !== "string" || password.length < PASSWORD_MIN) {
+    return `비밀번호는 ${PASSWORD_MIN}자 이상으로 입력해 주세요.`;
+  }
+
+  if (password.length > PASSWORD_MAX) {
+    return `비밀번호는 ${PASSWORD_MAX}자 이하로 입력해 주세요.`;
+  }
+
+  if (loginId && password.toLowerCase().includes(loginId)) {
+    return "비밀번호에 아이디를 포함할 수 없습니다.";
+  }
+
+  return null;
+}
+
+// ------------------------------------------------------------- permissions
+
+// Work items are owned by name (workflow_items.assignee), matching how the
+// board already assigns work; renames cascade so names stay in sync.
+export function sameMemberName(first: string | null | undefined, second: string | null | undefined) {
+  const left = normalizeMemberName(first ?? "");
+  return Boolean(left) && left === normalizeMemberName(second ?? "");
+}
+
+export function canEditItem(
+  viewer: Pick<Viewer, "name" | "accessRole"> | null,
+  item: { assignee: string }
+) {
+  if (!viewer) {
+    return false;
+  }
+
+  return viewer.accessRole === "manager" || sameMemberName(viewer.name, item.assignee);
+}
+
+export const WORK_LOG_STATUS_LABEL: Record<WorkLogStatus, string> = {
+  submitted: "승인 대기",
+  approved: "승인",
+  rejected: "반려",
+};
+
+export function normalizeLogStatus(value: unknown): WorkLogStatus {
+  return value === "approved" || value === "rejected" ? value : "submitted";
+}
+
+// Who may do what with a log. Authors edit their own until it is approved;
+// managers review other people's logs but never edit their content.
+export function workLogPermissions(
+  viewer: Pick<Viewer, "memberId" | "accessRole"> | null,
+  log: Pick<WorkLog, "memberId" | "status"> | null,
+  memberId: number | null
+) {
+  const own = Boolean(viewer && memberId !== null && viewer.memberId === memberId);
+  const manager = viewer?.accessRole === "manager";
+  const status = log?.status ?? null;
+
+  return {
+    canEdit: own && status !== "approved",
+    canDelete: own && Boolean(log) && status !== "approved",
+    canReview: Boolean(manager && log && !own),
+    canReopen: Boolean(manager && log && !own && status !== "submitted"),
+  };
+}
 
 export const MEMBER_NAME_MAX = 40;
 export const MEMBER_ROLE_MAX = 40;

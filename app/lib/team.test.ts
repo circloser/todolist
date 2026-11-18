@@ -1,20 +1,26 @@
 import { describe, expect, it } from "vitest";
 import {
+  canEditItem,
   dailyActivityLines,
   dailyStatus,
   formatLogDate,
   hasLogContent,
   isWeekend,
   kstDate,
+  loginIdError,
   monthRange,
   normalizeColor,
   normalizeItemIds,
   normalizeLogDate,
   normalizeLogRange,
   normalizeMemberName,
+  normalizeLoginId,
   parseItemIds,
+  passwordError,
+  sameMemberName,
   shiftDate,
   unregisteredAssignees,
+  workLogPermissions,
   workLogsToCsv,
   WORK_LOG_ITEM_MAX,
   type TeamMember,
@@ -30,6 +36,8 @@ function member(id: number, name: string, active = true): TeamMember {
     color: "#e6f4ef",
     active,
     position: id,
+    accessRole: "member",
+    hasAccount: true,
     createdAt: "",
     updatedAt: "",
   };
@@ -45,6 +53,10 @@ function log(overrides: Partial<WorkLog>): WorkLog {
     plan: "",
     issues: "",
     itemIds: [],
+    status: "submitted",
+    reviewerName: "",
+    reviewedAt: null,
+    reviewComment: "",
     updatedBy: "김철수",
     createdAt: "",
     updatedAt: "",
@@ -218,5 +230,61 @@ describe("csv export", () => {
     expect(lines[1]).toBe('2026-11-18,수,김철수,"조사 ""1차""');
     expect(lines[2]).toBe('정리","습지 조사, #9",,,김철수,');
     expect(lines[3]).toBe("2026-11-19,목,김철수,b,,,,김철수,");
+  });
+});
+
+describe("accounts", () => {
+  it("normalizes and validates login ids", () => {
+    expect(normalizeLoginId("  Kim.MinJi ")).toBe("kim.minji");
+    expect(loginIdError("kim.minji")).toBeNull();
+    expect(loginIdError("ab")).not.toBeNull();
+    expect(loginIdError("김민지")).not.toBeNull();
+    expect(loginIdError("-start")).not.toBeNull();
+  });
+
+  it("enforces a minimal password policy", () => {
+    expect(passwordError("short")).not.toBeNull();
+    expect(passwordError(undefined)).not.toBeNull();
+    expect(passwordError("x".repeat(129))).not.toBeNull();
+    expect(passwordError("minji-2026!", "minji")).not.toBeNull();
+    expect(passwordError("wetland-2026!", "minji")).toBeNull();
+  });
+});
+
+describe("permissions", () => {
+  const manager = { name: "최부장", accessRole: "manager" as const, memberId: 1 };
+  const minji = { name: "김민지", accessRole: "member" as const, memberId: 2 };
+
+  it("lets members edit only items assigned to them", () => {
+    expect(canEditItem(minji, { assignee: " 김민지 " })).toBe(true);
+    expect(canEditItem(minji, { assignee: "박서준" })).toBe(false);
+    expect(canEditItem(minji, { assignee: "" })).toBe(false);
+    expect(canEditItem(manager, { assignee: "박서준" })).toBe(true);
+    expect(canEditItem(null, { assignee: "김민지" })).toBe(false);
+    expect(sameMemberName("", "")).toBe(false);
+  });
+
+  it("locks approved logs and keeps managers out of others' content", () => {
+    const submitted = { memberId: 2, status: "submitted" as const };
+    const approved = { memberId: 2, status: "approved" as const };
+
+    expect(workLogPermissions(minji, submitted, 2)).toEqual({
+      canEdit: true,
+      canDelete: true,
+      canReview: false,
+      canReopen: false,
+    });
+    expect(workLogPermissions(minji, approved, 2).canEdit).toBe(false);
+    expect(workLogPermissions(minji, approved, 2).canDelete).toBe(false);
+    expect(workLogPermissions(minji, null, 2)).toMatchObject({ canEdit: true, canDelete: false });
+    expect(workLogPermissions(minji, submitted, 3).canEdit).toBe(false);
+    expect(workLogPermissions(manager, submitted, 2)).toEqual({
+      canEdit: false,
+      canDelete: false,
+      canReview: true,
+      canReopen: false,
+    });
+    expect(workLogPermissions(manager, approved, 2).canReopen).toBe(true);
+    expect(workLogPermissions(manager, { memberId: 1, status: "submitted" }, 1).canReview).toBe(false);
   });
 });

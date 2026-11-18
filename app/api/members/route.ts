@@ -6,9 +6,16 @@ import {
   normalizeMemberRole,
   pickMemberColor,
   unregisteredAssignees,
+  type AccessRole,
+  type JoinRequest,
 } from "../../lib/team";
 import {
-  actorFrom,
+  forbidden,
+  requireWorkspaceAccess,
+  viewerOf,
+  type BoardAccess,
+} from "../auth-store";
+import {
   getAssigneeColors,
   getMember,
   listMembers,
@@ -18,32 +25,64 @@ import {
   toMember,
   type MemberRow,
 } from "../team-store";
-import { requireWorkspaceAccess } from "../workspace-auth";
 
 // 구성원 관리: a per-board roster. Members double as the board's assignee
 // list (names and row colors stay in sync with workspace_assignee_settings)
-// and as the authors of 업무일지.
+// and as the authors of 업무일지. Everyone on the board can see the roster;
+// only 부서장 can change it, approve join requests or grant roles.
 
 type MemberPayload = {
   action?: string;
-  actor?: string;
   workspaceId?: string;
-  workspacePassword?: string;
   id?: number;
+  requestId?: number;
+  memberId?: number | null;
   name?: string;
   role?: string;
   color?: string;
   active?: boolean;
+  accessRole?: AccessRole;
   renameAssignments?: boolean;
   order?: number[];
 };
 
-async function membersResponse(workspaceId: string, extra: object = {}, status = 200) {
+const MANAGER_ONLY = "구성원 관리는 부서장만 할 수 있습니다.";
+
+async function joinRequests(workspaceId: string): Promise<JoinRequest[]> {
+  const [rows, roster] = await Promise.all([
+    getD1()
+      .prepare(
+        `SELECT r.id, r.user_id, r.name, r.created_at, u.login_id
+         FROM workspace_join_requests r JOIN users u ON u.id = r.user_id
+         WHERE r.workspace_id = ? ORDER BY r.created_at`
+      )
+      .bind(workspaceId)
+      .all<{ id: number; user_id: number; name: string; created_at: string; login_id: string }>(),
+    listMembers(workspaceId),
+  ]);
+
+  return (rows.results ?? []).map((row) => ({
+    id: row.id,
+    userId: row.user_id,
+    loginId: row.login_id,
+    name: row.name,
+    createdAt: row.created_at,
+    suggestedMemberId:
+      roster.find(
+        (member) => !member.hasAccount && memberNameKey(member.name) === memberNameKey(row.name)
+      )?.id ?? null,
+  }));
+}
+
+async function membersResponse(access: BoardAccess, extra: object = {}, status = 200) {
+  const workspaceId = access.workspace.id;
   return Response.json(
     {
       ...extra,
-      members: await listMembers(workspaceId),
+      members: await listMembers(workspaceId, access.isManager),
       assigneeSettings: await getAssigneeColors(workspaceId),
+      requests: access.isManager ? await joinRequests(workspaceId) : [],
+      viewer: viewerOf(access),
     },
     { status }
   );
@@ -108,7 +147,7 @@ export async function GET(request: Request) {
       return access.response;
     }
 
-    return await membersResponse(access.workspace.id);
+    return await membersResponse(access);
   } catch (error) {
     return routeError(error);
   }
@@ -122,13 +161,117 @@ export async function POST(request: Request) {
     if ("response" in access) {
       return access.response;
     }
+    if (!access.isManager) {
+      return forbidden(MANAGER_ONLY);
+    }
 
     const workspaceId = access.workspace.id;
-    const actor = actorFrom(request, payload.actor);
+    const actor = access.actor;
     const d1 = getD1();
     const now = new Date().toISOString();
     const members = await listMembers(workspaceId);
     const colors = await getAssigneeColors(workspaceId);
+
+    if (payload.action === "approve-join" || payload.action === "reject-join") {
+      const joinRequest = await d1
+        .prepare("SELECT * FROM workspace_join_requests WHERE workspace_id = ? AND id = ?")
+        .bind(workspaceId, Number(payload.requestId))
+        .first<{ id: number; user_id: number; name: string }>();
+
+      if (!joinRequest) {
+        return Response.json({ error: "가입 신청을 찾을 수 없습니다." }, { status: 404 });
+      }
+
+      const dropRequest = d1
+        .prepare("DELETE FROM workspace_join_requests WHERE id = ?")
+        .bind(joinRequest.id);
+
+      if (payload.action === "reject-join") {
+        await dropRequest.run();
+        await logTeamHistory({
+          workspaceId,
+          entityType: "member",
+          entityId: null,
+          action: "reject",
+          summary: `${actor}님이 '${joinRequest.name}'의 가입 신청을 거절함`,
+          actor,
+        });
+        return await membersResponse(access);
+      }
+
+      const accessRole: AccessRole = payload.accessRole === "manager" ? "manager" : "member";
+      const linkId = Number(payload.memberId);
+      let memberName = joinRequest.name;
+
+      if (Number.isInteger(linkId) && linkId > 0) {
+        // Link the account to an existing roster entry (their past items/logs).
+        const target = await getMember(workspaceId, linkId);
+
+        if (!target) {
+          return Response.json({ error: "연결할 구성원을 찾을 수 없습니다." }, { status: 404 });
+        }
+        if (target.user_id !== null) {
+          return Response.json(
+            { error: `'${target.name}' 구성원은 이미 다른 계정과 연결되어 있습니다.` },
+            { status: 409 }
+          );
+        }
+
+        memberName = target.name;
+        await d1.batch([
+          d1
+            .prepare(
+              `UPDATE workspace_members
+               SET user_id = ?, access_role = ?, active = 1, updated_at = ?
+               WHERE id = ?`
+            )
+            .bind(joinRequest.user_id, accessRole, now, target.id),
+          dropRequest,
+        ]);
+      } else {
+        if (findByName(members, joinRequest.name)) {
+          return Response.json(
+            {
+              error: `'${joinRequest.name}' 이름의 구성원이 이미 있습니다. 그 구성원에 연결하거나 신청을 거절해 주세요.`,
+            },
+            { status: 409 }
+          );
+        }
+
+        const color = colors[joinRequest.name] ?? pickMemberColor(members.length);
+        await d1.batch([
+          d1
+            .prepare(
+              `INSERT INTO workspace_members
+                 (workspace_id, name, role, color, active, position, user_id, access_role, created_at, updated_at)
+               VALUES (?, ?, '', ?, 1, ?, ?, ?, ?, ?)`
+            )
+            .bind(
+              workspaceId,
+              joinRequest.name,
+              color,
+              await nextPosition(workspaceId),
+              joinRequest.user_id,
+              accessRole,
+              now,
+              now
+            ),
+          upsertAssigneeColor(workspaceId, joinRequest.name, color, now),
+          dropRequest,
+        ]);
+      }
+
+      await logTeamHistory({
+        workspaceId,
+        entityType: "member",
+        entityId: null,
+        action: "approve",
+        summary: `${actor}님이 '${memberName}'의 가입을 승인함 (${accessRole === "manager" ? "부서장" : "구성원"})`,
+        actor,
+      });
+
+      return await membersResponse(access);
+    }
 
     // Register every assignee name already used on the board in one go.
     if (payload.action === "import-assignees") {
@@ -164,7 +307,7 @@ export async function POST(request: Request) {
         });
       }
 
-      return await membersResponse(workspaceId, { imported: names.length });
+      return await membersResponse(access, { imported: names.length });
     }
 
     const name = normalizeMemberName(payload.name);
@@ -210,7 +353,7 @@ export async function POST(request: Request) {
     });
 
     return await membersResponse(
-      workspaceId,
+      access,
       { member: result ? toMember(result) : undefined },
       201
     );
@@ -227,9 +370,12 @@ export async function PATCH(request: Request) {
     if ("response" in access) {
       return access.response;
     }
+    if (!access.isManager) {
+      return forbidden(MANAGER_ONLY);
+    }
 
     const workspaceId = access.workspace.id;
-    const actor = actorFrom(request, payload.actor);
+    const actor = access.actor;
     const d1 = getD1();
     const now = new Date().toISOString();
 
@@ -253,7 +399,7 @@ export async function PATCH(request: Request) {
         await d1.batch(statements);
       }
 
-      return await membersResponse(workspaceId);
+      return await membersResponse(access);
     }
 
     const id = Number(payload.id);
@@ -261,6 +407,30 @@ export async function PATCH(request: Request) {
 
     if (!current) {
       return Response.json({ error: "구성원을 찾을 수 없습니다." }, { status: 404 });
+    }
+
+    const isSelf = current.id === access.member.id;
+
+    // Account recovery: detach a lost account so a new one can be linked.
+    if (payload.action === "unlink-account") {
+      if (isSelf) {
+        return forbidden("본인 계정 연결은 해제할 수 없습니다.");
+      }
+      await d1
+        .prepare(
+          "UPDATE workspace_members SET user_id = NULL, access_role = 'member', updated_at = ? WHERE id = ?"
+        )
+        .bind(now, current.id)
+        .run();
+      await logTeamHistory({
+        workspaceId,
+        entityType: "member",
+        entityId: current.id,
+        action: "unlink",
+        summary: `${actor}님이 '${current.name}' 구성원의 계정 연결을 해제함`,
+        actor,
+      });
+      return await membersResponse(access);
     }
 
     const name =
@@ -271,6 +441,12 @@ export async function PATCH(request: Request) {
       payload.color === undefined ? current.color : normalizeColor(payload.color);
     const active =
       typeof payload.active === "boolean" ? payload.active : current.active === 1;
+    const accessRole: AccessRole =
+      payload.accessRole === "manager" || payload.accessRole === "member"
+        ? payload.accessRole
+        : current.access_role === "manager"
+          ? "manager"
+          : "member";
 
     if (!name) {
       return Response.json({ error: "구성원 이름을 입력해 주세요." }, { status: 400 });
@@ -278,6 +454,19 @@ export async function PATCH(request: Request) {
 
     if (!color) {
       return Response.json({ error: "색상값이 올바르지 않습니다." }, { status: 400 });
+    }
+
+    // A manager can't lock themselves out (which also guarantees the board
+    // always keeps at least one 부서장).
+    if (isSelf && (!active || accessRole !== "manager")) {
+      return forbidden("본인을 비활성화하거나 부서장 권한을 해제할 수 없습니다.");
+    }
+
+    if (accessRole === "manager" && current.user_id === null) {
+      return Response.json(
+        { error: "계정이 연결된 구성원만 부서장으로 지정할 수 있습니다." },
+        { status: 400 }
+      );
     }
 
     const renamed = name !== current.name;
@@ -293,10 +482,10 @@ export async function PATCH(request: Request) {
       d1
         .prepare(
           `UPDATE workspace_members
-           SET name = ?, role = ?, color = ?, active = ?, updated_at = ?
+           SET name = ?, role = ?, color = ?, active = ?, access_role = ?, updated_at = ?
            WHERE workspace_id = ? AND id = ?`
         )
-        .bind(name, role, color, active ? 1 : 0, now, workspaceId, current.id),
+        .bind(name, role, color, active ? 1 : 0, accessRole, now, workspaceId, current.id),
       upsertAssigneeColor(workspaceId, name, color, now),
     ];
     let renamedItems = 0;
@@ -319,6 +508,8 @@ export async function PATCH(request: Request) {
 
     await d1.batch(statements);
 
+    // Item ownership follows the assignee name, so a rename must carry the
+    // member's items along with it.
     if (renamed && payload.renameAssignments !== false) {
       try {
         const result = await d1
@@ -339,6 +530,7 @@ export async function PATCH(request: Request) {
       role !== current.role ? `역할 '${role || "없음"}'` : "",
       color !== current.color ? "색상" : "",
       active !== (current.active === 1) ? (active ? "활성화" : "비활성화") : "",
+      accessRole !== current.access_role ? (accessRole === "manager" ? "부서장 지정" : "부서장 해제") : "",
     ].filter(Boolean);
 
     if (changes.length) {
@@ -354,7 +546,7 @@ export async function PATCH(request: Request) {
       });
     }
 
-    return await membersResponse(workspaceId, { renamedItems });
+    return await membersResponse(access, { renamedItems });
   } catch (error) {
     return routeError(error);
   }
@@ -368,14 +560,21 @@ export async function DELETE(request: Request) {
     if ("response" in access) {
       return access.response;
     }
+    if (!access.isManager) {
+      return forbidden(MANAGER_ONLY);
+    }
 
     const workspaceId = access.workspace.id;
-    const actor = actorFrom(request, payload.actor);
+    const actor = access.actor;
     const id = Number(payload.id);
     const current = Number.isInteger(id) ? await getMember(workspaceId, id) : null;
 
     if (!current) {
       return Response.json({ error: "구성원을 찾을 수 없습니다." }, { status: 404 });
+    }
+
+    if (current.id === access.member.id) {
+      return forbidden("본인은 삭제할 수 없습니다.");
     }
 
     const logs = await getD1()
@@ -407,7 +606,7 @@ export async function DELETE(request: Request) {
       actor,
     });
 
-    return await membersResponse(workspaceId);
+    return await membersResponse(access);
   } catch (error) {
     return routeError(error);
   }
