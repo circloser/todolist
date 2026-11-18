@@ -49,6 +49,15 @@ import { ScheduleNotices, ScheduleToasts } from "./schedule-notices";
 import SearchPalette from "./search-palette";
 import HeaderMenu, { MenuItem } from "./header-menu";
 import HistoryPanel from "./history-panel";
+import {
+  PlaceEditor,
+  PlacesCard,
+  draftFromPlace,
+  newPlaceDraft,
+  placePinHtml,
+  type PlaceDraft,
+} from "./map-places";
+import { placeKindOf, type MapPlace, type PlacesResponse } from "./lib/places";
 import SettingsPanel, { type SettingsTab } from "./settings-panel";
 import WorkLogPanel from "./work-log-panel";
 import type { CalendarEvent } from "./lib/schedule";
@@ -423,6 +432,22 @@ export default function TaskBoard() {
     () => {}
   );
   const [placingItemId, setPlacingItemId] = useState<number | null>(null);
+  // 지도 장소 (사무실·현장·회의 장소…): pins that are not work items.
+  const [mapPlaces, setMapPlaces] = useState<MapPlace[]>([]);
+  const [placeDraft, setPlaceDraft] = useState<PlaceDraft | null>(null);
+  const [placeError, setPlaceError] = useState("");
+  const [savingPlace, setSavingPlace] = useState(false);
+  const [addingPlace, setAddingPlace] = useState(false);
+  const [hiddenPlaceKinds, setHiddenPlaceKinds] = useState<Set<string>>(new Set());
+  const [focusPlaceId, setFocusPlaceId] = useState<number | null>(null);
+  const placeLayerRef = useRef<LeafletNS.LayerGroup | null>(null);
+  const placeMarkersRef = useRef<Map<number, LeafletNS.Marker>>(new Map());
+  const addingPlaceRef = useRef(false);
+  const repickDraftRef = useRef<PlaceDraft | null>(null);
+  const placeAtRef = useRef<(lat: number, lng: number) => void>(() => {});
+  const movePlaceRef = useRef<(id: number, lat: number, lng: number) => void>(() => {});
+  const editPlaceRef = useRef<(id: number) => void>(() => {});
+  const deletePlaceRef = useRef<(id: number) => void>(() => {});
   const placingItemIdRef = useRef<number | null>(null);
   const placeItemAtRef = useRef<(id: number, lat: number, lng: number) => void>(
     () => {}
@@ -623,6 +648,90 @@ export default function TaskBoard() {
     }
   }
 
+  async function loadMapPlaces(workspaceIdOverride?: string) {
+    try {
+      const response = await fetch("/api/places", {
+        cache: "no-store",
+        headers: workspaceHeaders(undefined, workspaceIdOverride),
+      });
+      const data = (await response.json()) as PlacesResponse;
+      setMapPlaces(response.ok ? (data.places ?? []) : []);
+    } catch {
+      // Places are optional; the map works without them.
+    }
+  }
+
+  function canEditPlace(place: Pick<MapPlace, "createdByMemberId">) {
+    return isManager || (me !== null && place.createdByMemberId === me.memberId);
+  }
+
+  async function placeRequest(method: "POST" | "PATCH" | "DELETE", body: Record<string, unknown>) {
+    const response = await apiRequest("/api/places", {
+      method,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const data = (await response.json().catch(() => ({}))) as PlacesResponse;
+    if (!response.ok) {
+      throw new Error(data.error ?? "장소를 저장하지 못했습니다.");
+    }
+    return data;
+  }
+
+  async function savePlace() {
+    if (!placeDraft) {
+      return;
+    }
+    setSavingPlace(true);
+    setPlaceError("");
+    try {
+      const data = await placeRequest(placeDraft.id ? "PATCH" : "POST", { ...placeDraft });
+      const saved = data.place;
+      if (saved) {
+        setMapPlaces((current) => [...current.filter((place) => place.id !== saved.id), saved]);
+        setFocusPlaceId(saved.id);
+      }
+      setPlaceDraft(null);
+    } catch (saveError) {
+      setPlaceError(saveError instanceof Error ? saveError.message : "장소를 저장하지 못했습니다.");
+    } finally {
+      setSavingPlace(false);
+    }
+  }
+
+  async function deletePlace(id: number) {
+    const place = mapPlaces.find((entry) => entry.id === id);
+    if (!place || !window.confirm(`'${place.name}' 장소를 지도에서 삭제할까요?`)) {
+      return;
+    }
+    try {
+      await placeRequest("DELETE", { id });
+      setMapPlaces((current) => current.filter((entry) => entry.id !== id));
+      setPlaceDraft((current) => (current?.id === id ? null : current));
+    } catch (deleteError) {
+      setError(deleteError instanceof Error ? deleteError.message : "장소를 삭제하지 못했습니다.");
+    }
+  }
+
+  async function movePlace(id: number, lat: number, lng: number) {
+    const previous = mapPlaces;
+    const nextLat = Number(lat.toFixed(5));
+    const nextLng = Number(lng.toFixed(5));
+    setMapPlaces((current) =>
+      current.map((place) => (place.id === id ? { ...place, lat: nextLat, lng: nextLng } : place))
+    );
+    try {
+      const data = await placeRequest("PATCH", { id, lat: nextLat, lng: nextLng });
+      if (data.place) {
+        const saved = data.place;
+        setMapPlaces((current) => current.map((place) => (place.id === id ? saved : place)));
+      }
+    } catch (moveError) {
+      setMapPlaces(previous);
+      setError(moveError instanceof Error ? moveError.message : "장소 위치를 바꾸지 못했습니다.");
+    }
+  }
+
   // Badge count of other members' logs waiting for this 부서장.
   async function loadPendingReview(workspaceIdOverride?: string) {
     try {
@@ -740,6 +849,7 @@ export default function TaskBoard() {
         );
       }
       void loadMembers(targetWorkspaceId);
+      void loadMapPlaces(targetWorkspaceId);
       if (data.me?.accessRole === "manager") {
         void loadPendingReview(targetWorkspaceId);
       } else {
@@ -3666,6 +3776,26 @@ export default function TaskBoard() {
   // Keep the latest callbacks/state reachable from Leaflet event handlers
   // without re-creating the map on every render.
   useEffect(() => {
+    addingPlaceRef.current = addingPlace;
+    placeAtRef.current = (lat: number, lng: number) => {
+      const base = repickDraftRef.current;
+      repickDraftRef.current = null;
+      const point = { lat: Number(lat.toFixed(5)), lng: Number(lng.toFixed(5)) };
+      setAddingPlace(false);
+      setPlaceError("");
+      setPlaceDraft(base ? { ...base, ...point } : newPlaceDraft(point.lat, point.lng));
+    };
+    movePlaceRef.current = (id: number, lat: number, lng: number) => {
+      void movePlace(id, lat, lng);
+    };
+    editPlaceRef.current = (id: number) => {
+      const place = mapPlaces.find((entry) => entry.id === id);
+      if (place) {
+        setPlaceError("");
+        setPlaceDraft(draftFromPlace(place));
+      }
+    };
+    deletePlaceRef.current = (id: number) => void deletePlace(id);
     openItemRef.current = openItem;
     clearMapPinRef.current = (id: number) => {
       const item = items.find((candidate) => candidate.id === id);
@@ -3721,6 +3851,17 @@ export default function TaskBoard() {
       const target = (event.target as HTMLElement).closest("[data-open-item]");
       if (target) {
         openItemRef.current(Number(target.getAttribute("data-open-item")));
+        return;
+      }
+
+      const editPlace = (event.target as HTMLElement).closest("[data-edit-place]");
+      if (editPlace) {
+        editPlaceRef.current(Number(editPlace.getAttribute("data-edit-place")));
+        return;
+      }
+      const removePlace = (event.target as HTMLElement).closest("[data-delete-place]");
+      if (removePlace) {
+        deletePlaceRef.current(Number(removePlace.getAttribute("data-delete-place")));
       }
     };
     container?.addEventListener("click", handlePopupClick);
@@ -3736,6 +3877,7 @@ export default function TaskBoard() {
       leafletLibRef.current = L;
       const map = L.map(mapContainerRef.current).setView([36.2, 127.9], 7);
       markerLayerRef.current = L.layerGroup().addTo(map);
+      placeLayerRef.current = L.layerGroup().addTo(map);
       leafletMapRef.current = map;
 
       // Placement mode: clicking the map assigns coordinates to the task
@@ -3744,6 +3886,10 @@ export default function TaskBoard() {
         const id = placingItemIdRef.current;
         if (id !== null) {
           placeItemAtRef.current(id, event.latlng.lat, event.latlng.lng);
+          return;
+        }
+        if (addingPlaceRef.current) {
+          placeAtRef.current(event.latlng.lat, event.latlng.lng);
           return;
         }
         if (creatingOnMapRef.current) {
@@ -3767,9 +3913,12 @@ export default function TaskBoard() {
       leafletMapRef.current?.remove();
       leafletMapRef.current = null;
       markerLayerRef.current = null;
+      placeLayerRef.current = null;
+      placeMarkersRef.current = new Map();
       tileLayerRef.current = null;
       setPlacingItemId(null);
       setCreatingOnMap(false);
+      setAddingPlace(false);
     };
   }, [viewMode]);
 
@@ -3859,6 +4008,85 @@ export default function TaskBoard() {
       );
     }
   }, [viewMode, visibleItems, mapReady, me]);
+
+  // 지도 장소 markers (typed icons), drawn above the work-item pins.
+  useEffect(() => {
+    const L = leafletLibRef.current;
+    const layer = placeLayerRef.current;
+
+    if (viewMode !== "map" || !L || !layer || !leafletMapRef.current) {
+      return;
+    }
+
+    layer.clearLayers();
+    const markers = new Map<number, LeafletNS.Marker>();
+
+    for (const place of mapPlaces) {
+      const kind = placeKindOf(place);
+      if (hiddenPlaceKinds.has(kind.label)) {
+        continue;
+      }
+      const editable = isManager || (me !== null && place.createdByMemberId === me.memberId);
+      const marker = L.marker([place.lat, place.lng], {
+        draggable: editable,
+        zIndexOffset: 500,
+        icon: L.divIcon({
+          className: "tb-place-pin",
+          html: placePinHtml(place),
+          iconSize: [32, 32],
+          // The rotated square's tip sits about 21px below its centre.
+          iconAnchor: [16, 37],
+          popupAnchor: [0, -34],
+        }),
+      }).addTo(layer);
+      marker.bindTooltip(`${kind.label} · ${place.name}${editable ? " · 드래그로 이동" : ""}`);
+      marker.on("dragend", () => {
+        const next = marker.getLatLng();
+        movePlaceRef.current(place.id, next.lat, next.lng);
+      });
+      marker.bindPopup(
+        `<div style="min-width:190px;max-width:250px;font-size:13px;line-height:1.5">
+          <div style="display:flex;align-items:center;gap:6px;font-weight:700">${kind.icon} ${escapeHtml(place.name)}</div>
+          <div style="margin-top:2px;color:${kind.color};font-size:12px;font-weight:600">${escapeHtml(kind.label)}</div>
+          ${place.address ? `<div style="margin-top:4px;color:#61667a;font-size:12px">${escapeHtml(place.address)}</div>` : ""}
+          ${place.memo ? `<div style="margin-top:4px;white-space:pre-wrap;font-size:12px">${escapeHtml(place.memo)}</div>` : ""}
+          <div style="margin-top:8px;display:flex;align-items:center;gap:6px">
+            <span style="flex:1;color:#8b9790;font-size:11px">등록 ${escapeHtml(place.createdByName)}</span>
+            <button type="button" data-edit-place="${place.id}" style="padding:3px 9px;border-radius:8px;border:1px solid #18786f;background:#e4f2ef;color:#18786f;font-weight:600;cursor:pointer">${editable ? "수정" : "보기"}</button>
+            ${editable ? `<button type="button" data-delete-place="${place.id}" style="padding:3px 8px;border-radius:8px;border:1px solid #edbeb8;background:#fbecea;color:#c44232;font-weight:600;cursor:pointer">삭제</button>` : ""}
+          </div>
+        </div>`
+      );
+      markers.set(place.id, marker);
+    }
+    placeMarkersRef.current = markers;
+  }, [hiddenPlaceKinds, isManager, mapPlaces, mapReady, me, viewMode]);
+
+  // Fly to a place picked in the side panel, 통합 검색 or just saved.
+  useEffect(() => {
+    if (focusPlaceId === null || viewMode !== "map" || !leafletMapRef.current) {
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      const place = mapPlaces.find((entry) => entry.id === focusPlaceId);
+      const map = leafletMapRef.current;
+      setFocusPlaceId(null);
+      if (!place || !map) {
+        return;
+      }
+      const label = placeKindOf(place).label;
+      if (hiddenPlaceKinds.has(label)) {
+        setHiddenPlaceKinds((current) => {
+          const next = new Set(current);
+          next.delete(label);
+          return next;
+        });
+      }
+      map.setView([place.lat, place.lng], Math.max(map.getZoom(), 14));
+      window.setTimeout(() => placeMarkersRef.current.get(place.id)?.openPopup(), 120);
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [focusPlaceId, hiddenPlaceKinds, mapPlaces, mapReady, viewMode]);
 
   // Drag a gantt bar's end handle to move the item's final due date.
   function startGanttDrag(
@@ -6625,7 +6853,7 @@ export default function TaskBoard() {
         ) : viewMode === "map" ? (
           <div className="grid items-stretch gap-4 lg:grid-cols-[minmax(0,1fr)_300px]">
             <div className="tb-card tb-map-shell min-h-[560px] overflow-hidden lg:min-h-[calc(100dvh-220px)]">
-              {placingItemId !== null || creatingOnMap ? (
+              {placingItemId !== null || creatingOnMap || addingPlace ? (
                 <div className="flex items-center justify-between gap-3 border-b border-[var(--warning-border)] bg-[var(--warning-soft)] px-4 py-2 text-sm font-medium text-[var(--warning)]">
                   <span>
                     {placingItemId !== null ? (
@@ -6637,6 +6865,8 @@ export default function TaskBoard() {
                         </strong>
                         의 위치를 지정하세요
                       </>
+                    ) : addingPlace ? (
+                      <>🖱 지도를 클릭해 장소(사무실·현장 등)의 위치를 선택하세요</>
                     ) : (
                       <>🖱 지도를 클릭해 새 업무의 위치를 선택하세요</>
                     )}
@@ -6646,6 +6876,8 @@ export default function TaskBoard() {
                     onClick={() => {
                       setPlacingItemId(null);
                       setCreatingOnMap(false);
+                      setAddingPlace(false);
+                      repickDraftRef.current = null;
                     }}
                     className="tb-btn shrink-0 !py-1 text-xs"
                   >
@@ -6660,23 +6892,38 @@ export default function TaskBoard() {
             </div>
 
             <div className="space-y-3">
-              <div className="grid grid-cols-2 gap-2">
+              <div className="grid grid-cols-3 gap-2">
                 <button
                   type="button"
                   onClick={() => {
                     setPlacingItemId(null);
+                    setAddingPlace(false);
                     setCreatingOnMap(true);
                   }}
                   disabled={creatingOnMap || !canCreateItems}
                   title={canCreateItems ? undefined : "이 보드는 부서장만 새 업무를 등록할 수 있습니다"}
-                  className="tb-btn tb-btn-primary justify-center"
+                  className="tb-btn tb-btn-primary justify-center whitespace-nowrap !px-2 text-sm"
                 >
                   + 새 업무
                 </button>
                 <button
                   type="button"
+                  onClick={() => {
+                    setPlacingItemId(null);
+                    setCreatingOnMap(false);
+                    repickDraftRef.current = null;
+                    setAddingPlace(true);
+                  }}
+                  disabled={addingPlace}
+                  className="tb-btn justify-center whitespace-nowrap !px-2 text-sm"
+                  title="사무실·현장·회의 장소 등을 지도에 표시"
+                >
+                  + 장소
+                </button>
+                <button
+                  type="button"
                   onClick={() => setMapSettingsOpen(true)}
-                  className="tb-btn justify-center"
+                  className="tb-btn justify-center whitespace-nowrap !px-2 text-sm"
                 >
                   지도 설정
                 </button>
@@ -6713,8 +6960,11 @@ export default function TaskBoard() {
                 {mapSearchResults.length ? (
                   <div className="mt-2 max-h-40 space-y-1 overflow-auto">
                     {mapSearchResults.map((result) => (
-                      <button
+                      <div
                         key={`${result.source}-${result.lat}-${result.lng}-${result.label}`}
+                        className="flex items-start gap-1"
+                      >
+                      <button
                         type="button"
                         onClick={() => {
                           leafletMapRef.current?.setView(
@@ -6723,7 +6973,7 @@ export default function TaskBoard() {
                           );
                           setMapNewLocation(result.label);
                         }}
-                        className="w-full rounded-[var(--radius-sm)] px-2 py-1.5 text-left text-xs transition hover:bg-[var(--surface-3)]"
+                        className="min-w-0 flex-1 rounded-[var(--radius-sm)] px-2 py-1.5 text-left text-xs transition hover:bg-[var(--surface-3)]"
                       >
                         <div className="line-clamp-2 font-medium">
                           {result.label}
@@ -6733,10 +6983,58 @@ export default function TaskBoard() {
                           {result.lng.toFixed(4)}
                         </div>
                       </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          leafletMapRef.current?.setView([result.lat, result.lng], 14);
+                          setPlaceError("");
+                          setPlaceDraft(
+                            newPlaceDraft(Number(result.lat.toFixed(5)), Number(result.lng.toFixed(5)), {
+                              name: result.label.split(",")[0].trim().slice(0, 80),
+                              address: result.label.slice(0, 200),
+                              kind: "site",
+                            })
+                          );
+                        }}
+                        className="tb-chip tb-chip-btn mt-1 shrink-0 !px-2 !text-[10.5px]"
+                        title="이 위치를 장소로 등록"
+                      >
+                        ＋장소
+                      </button>
+                      </div>
                     ))}
                   </div>
                 ) : null}
               </div>
+
+              <PlacesCard
+                places={mapPlaces}
+                hiddenKinds={hiddenPlaceKinds}
+                canEdit={canEditPlace}
+                adding={addingPlace}
+                onToggleKind={(label) =>
+                  setHiddenPlaceKinds((current) => {
+                    const next = new Set(current);
+                    if (next.has(label)) {
+                      next.delete(label);
+                    } else {
+                      next.add(label);
+                    }
+                    return next;
+                  })
+                }
+                onAdd={() => {
+                  setPlacingItemId(null);
+                  setCreatingOnMap(false);
+                  repickDraftRef.current = null;
+                  setAddingPlace(true);
+                }}
+                onFocus={(place) => setFocusPlaceId(place.id)}
+                onEdit={(place) => {
+                  setPlaceError("");
+                  setPlaceDraft(draftFromPlace(place));
+                }}
+              />
 
               <div className="tb-card p-4">
                 <h2 className="text-sm font-semibold">범례</h2>
@@ -9256,6 +9554,28 @@ export default function TaskBoard() {
         />
       ) : null}
 
+      {placeDraft ? (
+        <PlaceEditor
+          draft={placeDraft}
+          editable={placeDraft.id === null || canEditPlace({ createdByMemberId: placeDraft.createdByMemberId ?? -1 })}
+          saving={savingPlace}
+          error={placeError}
+          customKinds={[
+            ...new Set(mapPlaces.map((place) => place.customKind).filter(Boolean)),
+          ]}
+          onChange={setPlaceDraft}
+          onSave={() => void savePlace()}
+          onDelete={() => placeDraft.id !== null && void deletePlace(placeDraft.id)}
+          onRepick={() => {
+            // Pick a new spot, then come back to this draft (saved on 저장).
+            repickDraftRef.current = placeDraft;
+            setAddingPlace(true);
+            setPlaceDraft(null);
+          }}
+          onClose={() => setPlaceDraft(null)}
+        />
+      ) : null}
+
       {historyOpen ? <HistoryPanel history={history} onClose={() => setHistoryOpen(false)} /> : null}
 
       {searchOpen ? (
@@ -9263,6 +9583,7 @@ export default function TaskBoard() {
           request={apiRequest}
           items={items}
           members={members}
+          places={mapPlaces}
           onClose={() => setSearchOpen(false)}
           onOpenItem={openItem}
           onOpenEvent={openEvent}
@@ -9271,6 +9592,10 @@ export default function TaskBoard() {
             setMinutesHighlight(terms);
           }}
           onOpenWorkLog={openWorkLog}
+          onOpenPlace={(id) => {
+            setFocusPlaceId(id);
+            openView("map");
+          }}
           onOpenMembers={() => setMembersOpen(true)}
           onOpenDocuments={() => void openDocuments()}
           onOpenManual={openManualSection}

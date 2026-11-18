@@ -12,7 +12,7 @@ export const MANUAL_SECTIONS = [
   { id: "manual-dashboard", icon: "📊", title: "대시보드" },
   { id: "manual-calendar", icon: "🗓", title: "업무일정 (두 달 보기)" },
   { id: "manual-minutes", icon: "🗒", title: "회의록과 미참석자 확인" },
-  { id: "manual-map", icon: "🗺", title: "지도" },
+  { id: "manual-map", icon: "🗺", title: "지도와 장소" },
   { id: "manual-gantt", icon: "📅", title: "간트" },
   { id: "manual-search", icon: "🔍", title: "통합 검색" },
   { id: "manual-filter", icon: "🔎", title: "필터·검색·정렬" },
@@ -342,6 +342,19 @@ export default function ManualContent() {
         <p>
           <strong>지도 설정</strong>에서 Leaflet/OSM, Google, VWorld와 일반·위성·하이브리드를
           고르고(API 키는 브라우저에 저장), <strong>지명 검색</strong>으로 장소를 찾습니다.
+        </p>
+        <p>
+          업무가 아닌 곳도 <strong>장소</strong>로 표시할 수 있습니다. <Key>+ 장소</Key>(또는 오른쪽
+          장소 칸의 <Key>+ 장소 추가</Key>)를 누르고 지도를 클릭하거나, 지명 검색 결과의{" "}
+          <Key>＋장소</Key>를 누릅니다. 이름과 <strong>유형</strong>(🏢 사무실 · 🌿 현장·조사지 · 🤝
+          회의 장소 · 🏛 협력 기관 · 🅿️ 주차·집결지 · ⭐ 기타)을 고르고, 기타는 유형 이름(예: 숙소)을
+          직접 적을 수 있습니다. 주소와 메모(연락처, 출입·주차 안내 등)도 남깁니다.
+        </p>
+        <p>
+          장소 핀은 유형별 아이콘과 색으로 업무 핀과 구분됩니다. 장소 칸의 유형 칩으로 원하는
+          유형만 보이게 하고, 목록에서 이름을 누르면 그 장소로 이동합니다. 장소는 보드의 모든
+          구성원이 함께 보며, <strong>등록한 사람과 부서장</strong>이 핀을 끌어 옮기거나 수정·삭제할
+          수 있습니다. 장소는 통합 검색으로도 찾을 수 있습니다.
         </p>
       </Section>
 

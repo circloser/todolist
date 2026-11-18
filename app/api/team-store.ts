@@ -213,6 +213,23 @@ export async function prepareTeamTables() {
     d1.prepare(
       "CREATE INDEX IF NOT EXISTS meeting_minutes_reads_workspace_idx ON meeting_minutes_reads (workspace_id)"
     ),
+    d1.prepare(`CREATE TABLE IF NOT EXISTS map_places (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      workspace_id TEXT NOT NULL,
+      name TEXT NOT NULL,
+      kind TEXT NOT NULL DEFAULT 'etc',
+      custom_kind TEXT NOT NULL DEFAULT '',
+      lat REAL NOT NULL,
+      lng REAL NOT NULL,
+      address TEXT NOT NULL DEFAULT '',
+      memo TEXT NOT NULL DEFAULT '',
+      created_by_member_id INTEGER NOT NULL,
+      created_by_name TEXT NOT NULL,
+      updated_by TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    )`),
+    d1.prepare("CREATE INDEX IF NOT EXISTS map_places_workspace_idx ON map_places (workspace_id)"),
   ]);
 
   // Columns added after the first release of these tables.
@@ -339,7 +356,7 @@ export async function logTeamHistory({
   actor,
 }: {
   workspaceId: string;
-  entityType: "member" | "worklog" | "event" | "minutes";
+  entityType: "member" | "worklog" | "event" | "minutes" | "place";
   entityId: number | null;
   action: string;
   summary: string;

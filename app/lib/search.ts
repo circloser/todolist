@@ -5,13 +5,14 @@
 export const SEARCH_MAX_TERMS = 5;
 export const SEARCH_MAX_TERM_LENGTH = 40;
 
-export type SearchKind = "item" | "event" | "minutes" | "worklog" | "member" | "document" | "manual";
+export type SearchKind = "item" | "event" | "minutes" | "worklog" | "place" | "member" | "document" | "manual";
 
 export const SEARCH_KIND_LABEL: Record<SearchKind, string> = {
   item: "업무",
   event: "업무일정",
   minutes: "회의록",
   worklog: "업무일지",
+  place: "장소",
   member: "구성원",
   document: "양식",
   manual: "매뉴얼",
