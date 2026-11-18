@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
   canViewAllLogs,
@@ -53,6 +53,8 @@ type WorkLogPanelProps = {
   onClose: () => void;
   /** Render as a full-width board view instead of a modal. */
   inline?: boolean;
+  /** Jump to a log (from 통합 검색); a new key means a new jump. */
+  focus?: { key: number; memberId: number; logDate: string } | null;
 };
 
 function draftFrom(log: WorkLog | null): Draft {
@@ -82,6 +84,7 @@ export default function WorkLogPanel({
   onOpenMembers,
   onClose,
   inline = false,
+  focus = null,
 }: WorkLogPanelProps) {
   const isManager = viewer?.accessRole === "manager";
   const myId = viewer?.memberId ?? null;
@@ -100,6 +103,8 @@ export default function WorkLogPanel({
   const [queueLogs, setQueueLogs] = useState<WorkLog[]>([]);
   const [queueLoading, setQueueLoading] = useState(false);
   const [pendingReview, setPendingReview] = useState(0);
+  const [boardFocus, setBoardFocus] = useState<WorkLogPanelProps["focus"]>(null);
+  const handledFocus = useRef<number | null>(null);
 
   const myLog =
     dayLogs.find((log) => log.memberId === myId && log.logDate === date) ?? null;
@@ -198,6 +203,26 @@ export default function WorkLogPanel({
   function confirmDiscard() {
     return !dirty || window.confirm("저장하지 않은 내용이 있습니다. 버리고 이동할까요?");
   }
+
+  // 통합 검색: my own log opens in 내 일지 on that day; someone else's opens
+  // in 모아보기 on that day with their log shown.
+  useEffect(() => {
+    if (!focus || handledFocus.current === focus.key) {
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      handledFocus.current = focus.key;
+      setNotice("");
+      if (focus.memberId === myId) {
+        setTab("write");
+        setDate(focus.logDate);
+      } else {
+        setBoardFocus(focus);
+        setTab("board");
+      }
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [focus, myId]);
 
   function selectDate(next: string) {
     if (!next || next === date || !confirmDiscard()) {
@@ -704,6 +729,8 @@ export default function WorkLogPanel({
             </div>
           ) : tab === "board" ? (
             <WorkLogBoard
+              key={boardFocus?.key ?? 0}
+              initialFocus={boardFocus}
               viewer={viewer}
               members={members}
               itemsById={itemsById}

@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 
+import Highlight from "./highlight";
 import { renderMinutesHtml } from "./lib/minutes-report";
 import {
   minutesAudience,
@@ -116,14 +117,26 @@ function stamp(iso: string) {
       });
 }
 
-function Section({ title, value }: { title: string; value: string }) {
+function Section({
+  title,
+  value,
+  terms,
+}: {
+  title: string;
+  value: string;
+  terms: string[];
+}) {
   return (
     <div>
       <h4 className="mb-1 text-xs font-semibold text-[var(--text-faint)]">
         {title}
       </h4>
       <div className="whitespace-pre-wrap rounded-[var(--radius)] border border-[var(--border)] bg-[var(--surface-2)] px-3 py-2 text-sm leading-6">
-        {value.trim() || <span className="text-[var(--text-faint)]">-</span>}
+        {value.trim() ? (
+          <Highlight text={value.trim()} terms={terms} />
+        ) : (
+          <span className="text-[var(--text-faint)]">-</span>
+        )}
       </div>
     </div>
   );
@@ -144,6 +157,8 @@ type MinutesViewProps = {
   seed: CalendarEvent | null;
   onSeedHandled: () => void;
   onOpenEvent: (id: number) => void;
+  /** Search words to mark in the opened minutes (from 통합 검색). */
+  highlight?: string[];
 };
 
 export default function MinutesView({
@@ -161,6 +176,7 @@ export default function MinutesView({
   seed,
   onSeedHandled,
   onOpenEvent,
+  highlight = [],
 }: MinutesViewProps) {
   const [filter, setFilter] = useState<ListFilter>("all");
   const [keyword, setKeyword] = useState("");
@@ -882,7 +898,7 @@ export default function MinutesView({
               </button>
               <div className="min-w-0 flex-1">
                 <h3 className="text-lg font-semibold leading-7">
-                  {detail.title}
+                  <Highlight text={detail.title} terms={highlight} />
                 </h3>
                 <div className="text-xs text-[var(--text-muted)]">
                   {dateLabel(detail)}
@@ -1033,9 +1049,9 @@ export default function MinutesView({
               </div>
             ) : null}
 
-            <Section title="안건" value={detail.agenda} />
-            <Section title="회의 내용" value={detail.content} />
-            <Section title="결정 사항" value={detail.decisions} />
+            <Section title="안건" value={detail.agenda} terms={highlight} />
+            <Section title="회의 내용" value={detail.content} terms={highlight} />
+            <Section title="결정 사항" value={detail.decisions} terms={highlight} />
 
             <div>
               <h4 className="mb-1 text-xs font-semibold text-[var(--text-faint)]">
@@ -1060,7 +1076,7 @@ export default function MinutesView({
                       <span
                         className={`min-w-0 flex-1 ${item.done ? "text-[var(--text-faint)] line-through" : ""}`}
                       >
-                        {item.text}
+                        <Highlight text={item.text} terms={highlight} />
                       </span>
                       <span className="shrink-0 text-[11px] text-[var(--text-faint)]">
                         {item.ownerName || "담당 없음"}
