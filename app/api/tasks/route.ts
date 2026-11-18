@@ -9,6 +9,7 @@ import {
   workspaceLabel,
 } from "../workspace-auth";
 import { getTeamPolicy, prepareTeamTables } from "../team-store";
+import { sendDeadlineAlerts } from "../deadline-alerts";
 import {
   forbidden,
   getSessionUser,
@@ -1796,21 +1797,6 @@ async function getWebhookSettings(workspaceId: string) {
     : { url: "", enabled: false };
 }
 
-// Due-date math on the server uses the Korean calendar day, not UTC.
-function kstTodayIso() {
-  return new Date(Date.now() + 9 * 3_600_000).toISOString().slice(0, 10);
-}
-
-function daysFromKstToday(dateIso: string) {
-  const today = kstTodayIso();
-  const toUtcMs = (iso: string) =>
-    Date.UTC(
-      Number(iso.slice(0, 4)),
-      Number(iso.slice(5, 7)) - 1,
-      Number(iso.slice(8, 10))
-    );
-  return Math.round((toUtcMs(dateIso) - toUtcMs(today)) / 86_400_000);
-}
 
 // ---------------------------------------------------------------- access
 // Who may change what on the board. This mirrors the dispatch order of
@@ -2204,122 +2190,25 @@ export async function POST(request: Request) {
     }
 
     if (payload.action === "send-deadline-alerts") {
-      const webhook = await getWebhookSettings(workspaceId);
+      const result = await sendDeadlineAlerts(workspaceId, actor);
 
-      if (!webhook.url || !webhook.enabled) {
+      if (result.status === "disabled") {
         return Response.json(
           { error: "알림 웹훅이 설정되어 있지 않습니다. 보드 설정에서 웹훅 URL을 저장해 주세요." },
           { status: 400 }
         );
       }
-
-      const items = await getItems(workspaceId);
-      type Alert = { label: string; date: string; days: number };
-      const groups = new Map<string, Alert[]>();
-      let overdueTotal = 0;
-      let urgentTotal = 0;
-
-      for (const item of items) {
-        const done =
-          item.steps.length > 0 &&
-          item.steps.every((step) => step.status === "done");
-
-        if (done) {
-          continue;
-        }
-
-        const entries: Alert[] = [];
-        const next = item.steps.find((step) => step.status !== "done");
-
-        if (next?.dueDate) {
-          const days = daysFromKstToday(next.dueDate);
-          if (days <= 3) {
-            entries.push({
-              label: `${item.title} — ${next.title}`,
-              date: next.dueDate,
-              days,
-            });
-          }
-        }
-
-        if (item.dueDate) {
-          const days = daysFromKstToday(item.dueDate);
-          if (days <= 3) {
-            entries.push({
-              label: `${item.title} — 최종 마감`,
-              date: item.dueDate,
-              days,
-            });
-          }
-        }
-
-        if (entries.length) {
-          const who = item.assignee.trim() || "미지정";
-          groups.set(who, [...(groups.get(who) ?? []), ...entries]);
-          for (const entry of entries) {
-            if (entry.days < 0) {
-              overdueTotal += 1;
-            } else {
-              urgentTotal += 1;
-            }
-          }
-        }
-      }
-
-      const total = overdueTotal + urgentTotal;
-
-      if (!total) {
-        return Response.json({ sent: 0 });
-      }
-
-      const settings = await getAppSettings(workspaceId);
-      const lines: string[] = [
-        `📋 [${settings.organizationName}] 마감 알림 (${kstTodayIso()})`,
-        `🔴 지연 ${overdueTotal}건 · 🟡 임박(D-3 이내) ${urgentTotal}건`,
-        "",
-      ];
-
-      for (const [assignee, entries] of groups) {
-        lines.push(`■ ${assignee}`);
-        for (const entry of entries.sort((a, b) => a.days - b.days)) {
-          const badge =
-            entry.days < 0
-              ? `🔴 D+${Math.abs(entry.days)}`
-              : entry.days <= 1
-                ? `🟠 D-${entry.days}`
-                : `🟡 D-${entry.days}`;
-          lines.push(
-            `  · ${badge} ${entry.label} (${entry.date.slice(5).replace("-", ".")})`
-          );
-        }
-      }
-
-      const text = lines.join("\n");
-      const body = webhook.url.includes("discord.com/api/webhooks")
-        ? { content: text }
-        : { text };
-      const response = await fetch(webhook.url, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      });
-
-      if (!response.ok) {
+      if (result.status === "failed") {
         return Response.json(
-          { error: `웹훅 발송에 실패했습니다 (HTTP ${response.status}).` },
+          { error: result.error, history: await getHistory(workspaceId) },
           { status: 502 }
         );
       }
 
-      await logHistory({
-        workspaceId,
-        entityType: "notification",
-        action: "send",
-        summary: `${actor}님이 마감 알림 ${total}건을 웹훅으로 발송함`,
-        actor,
+      return Response.json({
+        sent: result.status === "sent" ? result.sent : 0,
+        history: await getHistory(workspaceId),
       });
-
-      return Response.json({ sent: total, history: await getHistory(workspaceId) });
     }
 
     if (payload.action === "duplicate-item") {

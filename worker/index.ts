@@ -1,6 +1,7 @@
 /** Cloudflare Worker entry point for the vinext-starter template. */
 import { handleImageOptimization, DEFAULT_DEVICE_SIZES, DEFAULT_IMAGE_SIZES } from "vinext/server/image-optimization";
 import handler from "vinext/server/app-router-entry";
+import { sendAllDeadlineAlerts } from "../app/api/deadline-alerts";
 
 interface Env {
   ASSETS: Fetcher;
@@ -43,20 +44,24 @@ const worker = {
     return handler.fetch(request, env, ctx);
   },
 
-  // Cron trigger (see scripts/prepare-cloudflare-config.mjs): reuse the app's
-  // own API route so the digest logic lives in one place. A 400 response
-  // (webhook not configured / disabled) makes this a harmless no-op.
-  async scheduled(_event: unknown, env: Env, ctx: ExecutionContext): Promise<void> {
-    const request = new Request("https://cron.internal/api/tasks", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        action: "send-deadline-alerts",
-        actor: "자동 알림",
-      }),
-    });
-
-    ctx.waitUntil(handler.fetch(request, env, ctx));
+  // Cron trigger (weekdays 00:00 UTC = 09:00 KST, see
+  // scripts/prepare-cloudflare-config.mjs). Calls the alert code directly:
+  // going through the HTTP API would need a signed-in user, which a cron
+  // run does not have. Sends for every board whose webhook is switched on;
+  // each result (sent / failed) is written to that board's history.
+  async scheduled(_event: unknown, _env: Env, ctx: ExecutionContext): Promise<void> {
+    ctx.waitUntil(
+      sendAllDeadlineAlerts().then(
+        (results) => {
+          console.log(
+            `[deadline-alerts] ${results.length} board(s): ${results
+              .map((result) => `${result.workspaceId}=${result.status}`)
+              .join(", ") || "none enabled"}`
+          );
+        },
+        (error) => console.error("[deadline-alerts] failed", error)
+      )
+    );
   },
 };
 
