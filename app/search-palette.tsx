@@ -14,6 +14,7 @@ import {
   type SearchKind,
   type SearchResponse,
 } from "./lib/search";
+import { placeKindOf, type MapPlace } from "./lib/places";
 import type { TeamMember } from "./lib/team";
 import { assigneeName, type WorkflowItem } from "./lib/workflow";
 import ManualContent from "./manual-content";
@@ -27,12 +28,13 @@ import ManualContent from "./manual-content";
 type ApiRequest = (path: string, init?: RequestInit) => Promise<Response>;
 type Scope = "all" | SearchKind;
 
-const KIND_ORDER: SearchKind[] = ["item", "event", "minutes", "worklog", "member", "document", "manual"];
+const KIND_ORDER: SearchKind[] = ["item", "event", "minutes", "worklog", "place", "member", "document", "manual"];
 const KIND_ICON: Record<SearchKind, string> = {
   item: "📋",
   event: "🗓",
   minutes: "🗒",
   worklog: "📝",
+  place: "📌",
   member: "👥",
   document: "📎",
   manual: "📖",
@@ -79,11 +81,13 @@ type SearchPaletteProps = {
   request: ApiRequest;
   items: WorkflowItem[];
   members: TeamMember[];
+  places: MapPlace[];
   onClose: () => void;
   onOpenItem: (id: number) => void;
   onOpenEvent: (id: number) => void;
   onOpenMinutes: (id: number, terms: string[]) => void;
   onOpenWorkLog: (memberId: number, logDate: string) => void;
+  onOpenPlace: (id: number) => void;
   onOpenMembers: () => void;
   onOpenDocuments: () => void;
   onOpenManual: (sectionId: string) => void;
@@ -93,11 +97,13 @@ export default function SearchPalette({
   request,
   items,
   members,
+  places,
   onClose,
   onOpenItem,
   onOpenEvent,
   onOpenMinutes,
   onOpenWorkLog,
+  onOpenPlace,
   onOpenMembers,
   onOpenDocuments,
   onOpenManual,
@@ -209,8 +215,32 @@ export default function SearchPalette({
         meta: "사용자 매뉴얼",
         target: { sectionId: section.id },
       }));
-    return [...itemHits, ...memberHits, ...manualHits];
-  }, [items, manualIndex, members, terms]);
+    const placeHits = places
+      .map((place) => {
+        const kind = placeKindOf(place);
+        return {
+          place,
+          kind,
+          fields: [
+            ["이름", place.name],
+            ["유형", kind.label],
+            ["주소", place.address],
+            ["메모", place.memo],
+            ["등록", place.createdByName],
+          ] as SearchField[],
+        };
+      })
+      .filter(({ fields }) => matchesAll(fields, terms))
+      .map(({ place, kind, fields }) => ({
+        kind: "place" as const,
+        id: String(place.id),
+        title: place.name,
+        ...searchSnippet(fields, terms),
+        meta: `${kind.icon} ${kind.label}`,
+        target: { placeId: place.id },
+      }));
+    return [...itemHits, ...placeHits, ...memberHits, ...manualHits];
+  }, [items, manualIndex, members, places, terms]);
 
   const remoteHits = useMemo(
     () => (termKey && serverHits.query === termKey ? serverHits.hits : []),
@@ -263,6 +293,9 @@ export default function SearchPalette({
         break;
       case "worklog":
         onOpenWorkLog(Number(target.memberId), String(target.logDate));
+        break;
+      case "place":
+        onOpenPlace(Number(target.placeId));
         break;
       case "member":
         onOpenMembers();
@@ -393,7 +426,7 @@ export default function SearchPalette({
                 </div>
               ) : null}
               <p className="text-xs leading-5 text-[var(--text-faint)]">
-                업무명·메모·진행 단계·체크리스트·계약·위치, 업무일정, 회의록 내용, 업무일지(볼 수 있는 범위), 구성원, 양식,
+                업무명·메모·진행 단계·체크리스트·계약·위치, 업무일정, 회의록 내용, 업무일지(볼 수 있는 범위), 지도 장소, 구성원, 양식,
                 매뉴얼을 한 번에 찾습니다. 여러 단어를 띄어 쓰면 모두 들어 있는 것만 찾습니다. ↑↓로 고르고 Enter로 이동합니다.
               </p>
             </div>

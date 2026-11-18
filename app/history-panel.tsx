@@ -13,11 +13,17 @@ const KINDS: Array<[string, string]> = [
   ["worklog", "업무일지"],
   ["event", "업무일정"],
   ["minutes", "회의록"],
+  ["place", "지도 장소"],
   ["member", "구성원·설정"],
 ];
 
 function kindOf(entry: HistoryEntry) {
-  if (entry.entityType === "worklog" || entry.entityType === "event" || entry.entityType === "minutes") {
+  if (
+    entry.entityType === "worklog" ||
+    entry.entityType === "event" ||
+    entry.entityType === "minutes" ||
+    entry.entityType === "place"
+  ) {
     return entry.entityType;
   }
   if (entry.entityType === "member" || /설정|옵션|웹훅|발송|가입|부서장/.test(entry.summary)) {

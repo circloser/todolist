@@ -385,3 +385,25 @@ export const meetingMinutesReads = sqliteTable(
     index("meeting_minutes_reads_workspace_idx").on(table.workspaceId),
   ]
 );
+
+// 지도 장소: places pinned on the board map besides work items.
+export const mapPlaces = sqliteTable(
+  "map_places",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    workspaceId: text("workspace_id").notNull(),
+    name: text("name").notNull(),
+    kind: text("kind").notNull().default("etc"),
+    customKind: text("custom_kind").notNull().default(""),
+    lat: real("lat").notNull(),
+    lng: real("lng").notNull(),
+    address: text("address").notNull().default(""),
+    memo: text("memo").notNull().default(""),
+    createdByMemberId: integer("created_by_member_id").notNull(),
+    createdByName: text("created_by_name").notNull(),
+    updatedBy: text("updated_by").notNull().default(""),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (table) => [index("map_places_workspace_idx").on(table.workspaceId)]
+);

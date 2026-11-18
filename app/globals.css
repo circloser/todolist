@@ -1382,3 +1382,29 @@ body {
     font-weight: 700;
   }
 }
+
+@layer components {
+  /* 지도 장소 pins: a rounded marker with the 유형 icon, pointing down. */
+  .tb-place-pin {
+    background: transparent;
+    border: 0;
+  }
+  .tb-place-pin span {
+    position: relative;
+    display: grid;
+    width: 30px;
+    height: 30px;
+    place-items: center;
+    border: 2.5px solid var(--place-color);
+    border-radius: 10px 10px 10px 2px;
+    transform: rotate(-45deg);
+    background: #fff;
+    font-size: 15px;
+    line-height: 1;
+    box-shadow: 0 8px 18px rgba(30, 42, 36, 0.28);
+  }
+  .tb-place-pin i {
+    font-style: normal;
+    transform: rotate(45deg);
+  }
+}
