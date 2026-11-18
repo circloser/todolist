@@ -126,6 +126,28 @@ body {
   #manual-print * {
     visibility: visible;
   }
+  /* Manual printed from the landing page */
+  body.tb-printing-manual .tb-landing {
+    min-height: 0 !important;
+    overflow: visible !important;
+    background: #ffffff !important;
+  }
+  body.tb-printing-manual .tb-landing > :not(.tb-landing-manual),
+  body.tb-printing-manual .tb-no-print {
+    display: none !important;
+  }
+  body.tb-printing-manual .tb-landing-manual {
+    max-width: none !important;
+    padding: 0 !important;
+  }
+  body.tb-printing-manual .tb-landing-manual > div {
+    display: block !important;
+  }
+  body.tb-printing-manual #manual-print {
+    position: static !important;
+    border: 0 !important;
+    box-shadow: none !important;
+  }
   #report-print,
   #manual-print {
     position: absolute !important;
@@ -232,28 +254,75 @@ body {
   }
 
   /* Landing (sign-in / board picker) */
-  .tb-landing {
-    background:
-      radial-gradient(1100px 560px at -10% -10%, rgba(24, 120, 111, 0.14), transparent 62%),
-      radial-gradient(900px 520px at 110% 10%, rgba(37, 99, 235, 0.08), transparent 60%),
-      radial-gradient(700px 420px at 50% 115%, rgba(182, 109, 18, 0.07), transparent 60%),
-      var(--bg);
+  html:has(.tb-landing) {
+    scroll-behavior: smooth;
   }
   .tb-landing {
+    background: var(--bg);
     word-break: keep-all;
     overflow-wrap: anywhere;
   }
-  .tb-landing-dots {
+  /* Compass panel: deep teal, quiet concentric light. */
+  .tb-hero-art {
+    background:
+      radial-gradient(640px 520px at 50% 46%, rgba(143, 227, 210, 0.18), transparent 70%),
+      radial-gradient(900px 600px at 0% 100%, rgba(5, 32, 29, 0.55), transparent 65%),
+      linear-gradient(155deg, #0c3833 0%, #11524a 48%, #18786f 100%);
+  }
+  .tb-hero-art::before {
+    content: "";
     position: absolute;
     inset: 0;
     pointer-events: none;
-    background-image: radial-gradient(rgba(24, 120, 111, 0.16) 1px, transparent 1.2px);
-    background-size: 22px 22px;
-    mask-image: linear-gradient(180deg, rgba(0, 0, 0, 0.75), transparent 72%);
+    background-image: repeating-radial-gradient(
+      circle at 50% 46%,
+      rgba(255, 255, 255, 0.05) 0,
+      rgba(255, 255, 255, 0.05) 1px,
+      transparent 1px,
+      transparent 58px
+    );
+    mask-image: radial-gradient(circle at 50% 46%, #000 0%, transparent 75%);
   }
-  .tb-landing-highlight {
-    background: linear-gradient(transparent 62%, rgba(24, 120, 111, 0.2) 62%);
-    color: var(--accent);
+  @media (max-width: 1023px) {
+    .tb-hero-art {
+      border-radius: 0 0 28px 28px;
+    }
+  }
+  .tb-hero-side {
+    background:
+      radial-gradient(520px 420px at 100% 0%, rgba(24, 120, 111, 0.08), transparent 70%),
+      var(--bg);
+  }
+  .tb-compass-dial {
+    transform-box: view-box;
+    transform-origin: 200px 200px;
+    animation: tb-compass-drift 240s linear infinite;
+  }
+  .tb-compass-needle {
+    transform-box: view-box;
+    transform-origin: 200px 200px;
+    transform: rotate(40deg);
+    animation: tb-needle-sway 7s ease-in-out infinite;
+  }
+  @keyframes tb-compass-drift {
+    to {
+      transform: rotate(360deg);
+    }
+  }
+  @keyframes tb-needle-sway {
+    0%,
+    100% {
+      transform: rotate(36deg);
+    }
+    50% {
+      transform: rotate(44deg);
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .tb-compass-dial,
+    .tb-compass-needle {
+      animation: none;
+    }
   }
   .tb-landing-card {
     position: relative;
@@ -267,21 +336,6 @@ body {
     inset: 0 0 auto 0;
     height: 4px;
     background: linear-gradient(90deg, var(--accent), #2f8f55 55%, #2563eb);
-  }
-  .tb-landing-feature {
-    border: 1px solid var(--border);
-    border-radius: var(--radius-lg);
-    background: rgba(255, 254, 250, 0.72);
-    padding: 14px;
-    backdrop-filter: blur(4px);
-  }
-  .tb-landing-preview {
-    max-width: 520px;
-    border: 1px solid var(--border);
-    border-radius: var(--radius-lg);
-    background: var(--surface);
-    box-shadow: var(--shadow-md);
-    transform: rotate(-1deg);
   }
 
   .tb-topbar {

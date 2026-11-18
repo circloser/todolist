@@ -3,6 +3,8 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
 
 import { BRAND, CompassMark } from "./brand";
+import CompassArt from "./compass-art";
+import ManualContent, { MANUAL_SECTIONS } from "./manual-content";
 import type { AuthResponse } from "./lib/team";
 import type { WorkspaceSummary } from "./lib/workflow";
 
@@ -45,95 +47,18 @@ function Notice({ tone, children }: { tone: "error" | "info" | "success"; childr
   );
 }
 
-const FEATURES = [
-  {
-    title: "단계별 진행 보드",
-    body: "계획부터 결과 보고까지 업무 유형별 단계를 순서대로 체크하고, 목록·지도·간트로 봅니다.",
-    icon: "M3 3h7v7H3zM14 3h7v7h-7zM14 14h7v7h-7zM3 14h7v7H3z",
-  },
-  {
-    title: "업무일지와 결재",
-    body: "하루 한 장 일지를 쓰고 부서장이 승인·반려합니다. 보드에서 한 일을 불러와 빠르게 씁니다.",
-    icon: "M4 19.5A2.5 2.5 0 0 1 6.5 17H20M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2zM9 7h7M9 11h5",
-  },
-  {
-    title: "모아보기·보고서",
-    body: "주간 표와 월간 달력으로 팀 전체를 한눈에, 개인·팀·연간 보고서는 A4로 바로 인쇄합니다.",
-    icon: "M3 3v18h18M7 15l4-4 3 3 5-6",
-  },
-  {
-    title: "개인 계정과 권한",
-    body: "본인 업무와 일지만 수정하고, 부서장은 배정·승인과 운영 옵션을 관리합니다.",
-    icon: "M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10zM9 12l2 2 4-4",
-  },
-];
-
-function FeatureIcon({ path }: { path: string }) {
-  return (
-    <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-[10px] bg-[var(--accent-soft)] text-[var(--accent)]">
-      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-        <path d={path} />
-      </svg>
-    </span>
-  );
-}
-
-// Decorative mini product preview (not interactive).
-function ProductPreview() {
-  const rows = [
-    { name: "김민지", color: "#e8eefc", cells: ["a", "a", "p", "p", ""] },
-    { name: "박서준", color: "#fdf0de", cells: ["a", "p", "", "p", "p"] },
-    { name: "이도윤", color: "#f6e6ef", cells: ["a", "a", "a", "r", "p"] },
-  ];
-  const tone: Record<string, string> = {
-    a: "var(--complete)",
-    p: "var(--warning)",
-    r: "var(--danger)",
+// Print only the manual (the rest of the landing is hidden by print CSS).
+function printManual() {
+  document.body.classList.add("tb-printing-manual");
+  const cleanup = () => {
+    document.body.classList.remove("tb-printing-manual");
+    window.removeEventListener("afterprint", cleanup);
   };
-  return (
-    <div aria-hidden="true" className="tb-landing-preview hidden md:block">
-      <div className="flex items-center justify-between border-b border-[var(--border)] px-4 py-2.5">
-        <span className="text-xs font-semibold">이번 주 업무일지</span>
-        <span className="text-[10px] text-[var(--text-faint)]">월 화 수 목 금</span>
-      </div>
-      <div className="space-y-1.5 px-4 py-3">
-        {rows.map((row) => (
-          <div key={row.name} className="flex items-center gap-2">
-            <span className="w-12 truncate text-[11px] text-[var(--text-muted)]">{row.name}</span>
-            <div className="grid flex-1 grid-cols-5 gap-1">
-              {row.cells.map((cell, index) => (
-                <span
-                  key={index}
-                  className="h-5 rounded-[4px] border border-[var(--border)]"
-                  style={{
-                    background: cell ? row.color : "transparent",
-                    boxShadow: cell ? `inset 3px 0 0 ${tone[cell]}` : undefined,
-                  }}
-                />
-              ))}
-            </div>
-          </div>
-        ))}
-      </div>
-      <div className="space-y-2 border-t border-[var(--border)] px-4 py-3">
-        {[
-          ["습지 식생 조사 용역", 72],
-          ["탐방로 정비 공사", 45],
-          ["생태 모니터링 보고서", 90],
-        ].map(([title, value]) => (
-          <div key={title as string}>
-            <div className="mb-1 flex justify-between text-[11px]">
-              <span className="text-[var(--text-muted)]">{title}</span>
-              <span className="font-semibold text-[var(--accent)]">{value}%</span>
-            </div>
-            <div className="tb-progress">
-              <span style={{ width: `${value}%`, background: "var(--accent)" }} />
-            </div>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
+  window.addEventListener("afterprint", cleanup);
+  window.setTimeout(() => {
+    window.print();
+    window.setTimeout(cleanup, 1000);
+  }, 0);
 }
 
 export default function AuthScreen({ auth, message, onAuth, onEnter, onBack }: AuthScreenProps) {
@@ -304,34 +229,44 @@ export default function AuthScreen({ auth, message, onAuth, onEnter, onBack }: A
   }
 
   return (
-    <main className="tb-landing relative min-h-dvh overflow-hidden">
-      <div aria-hidden="true" className="tb-landing-dots" />
-      <div className="relative mx-auto grid max-w-[1180px] gap-8 px-4 pb-10 pt-7 sm:px-6 lg:grid-cols-[minmax(0,1fr)_448px] lg:gap-x-16 lg:gap-y-10 lg:px-8 lg:pt-14">
-        <header className="lg:col-start-1 lg:row-start-1">
-          <div className="flex items-center gap-2.5">
-            <CompassMark size={36} />
+    <main className="tb-landing relative min-h-dvh overflow-x-hidden">
+      <section className="relative grid lg:min-h-dvh lg:grid-cols-[minmax(0,1.12fr)_minmax(440px,0.88fr)]">
+        <div className="tb-hero-art relative flex flex-col overflow-hidden px-5 pb-10 pt-6 text-white sm:px-8 lg:px-14 lg:py-12">
+          <div className="relative z-10 flex items-center gap-2.5">
+            <CompassMark size={34} className="rounded-[9px] ring-1 ring-white/25" />
             <div className="leading-tight">
-              <div className="text-lg font-bold tracking-tight">{BRAND.name}</div>
-              <div className="text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--text-faint)]">
+              <div className="text-base font-bold tracking-tight">{BRAND.name}</div>
+              <div className="text-[10px] font-semibold uppercase tracking-[0.22em] text-white/55">
                 {BRAND.english}
               </div>
             </div>
+            <a
+              href="#manual"
+              className="ml-auto rounded-full border border-white/25 px-3.5 py-1.5 text-xs font-semibold text-white/85 transition hover:border-white/60 hover:text-white"
+            >
+              사용자 매뉴얼
+            </a>
           </div>
-          <h1 className="mt-7 text-[30px] font-bold leading-[1.22] tracking-tight sm:text-[42px] lg:mt-12 lg:text-[48px]">
-            팀의 업무 흐름과
-            <br />
-            <span className="tb-landing-highlight">하루의 기록</span>을 한 곳에서
-          </h1>
-          <p className="mt-4 max-w-[540px] text-[15px] leading-7 text-[var(--text-muted)]">
-            단계별 진행 보드로 업무가 어디까지 왔는지 함께 보고, 매일의 업무일지를 쓰고
-            결재받고, 주간·월간·연간 보고서까지 바로 인쇄합니다.
-          </p>
-        </header>
 
-        <section
-          aria-label={user ? "보드 선택" : "로그인"}
-          className="w-full lg:col-start-2 lg:row-span-2 lg:row-start-1 lg:self-center"
-        >
+          <div className="relative flex flex-1 items-center justify-center py-5 lg:py-6">
+            <CompassArt className="h-auto w-[min(56vw,220px)] sm:w-[300px] lg:w-[min(40vw,50vh,520px)]" />
+          </div>
+
+          <div className="relative z-10">
+            <p className="text-[12px] font-semibold tracking-[0.18em] text-[#a7f0e0]">
+              진행 · 일지 · 결재 · 보고서
+            </p>
+            <h1 className="mt-2 text-[28px] font-bold leading-[1.18] tracking-tight sm:text-[36px] lg:text-[44px]">
+              팀의 방향을, 한눈에.
+            </h1>
+            <p className="mt-3 max-w-[460px] text-[14px] leading-6 text-white/70 sm:text-[15px]">
+              업무 진행부터 업무일지·결재·보고서까지, {BRAND.name} 하나로.
+            </p>
+          </div>
+        </div>
+
+        <div className="tb-hero-side relative flex items-center justify-center px-4 py-10 sm:px-8 lg:py-12">
+          <section aria-label={user ? "보드 선택" : "로그인"} className="relative w-full max-w-[420px]">
         <div className="tb-card tb-landing-card space-y-4 p-5 sm:p-6">
           <div>
             <h2 className="text-lg font-semibold tracking-tight">
@@ -664,26 +599,63 @@ export default function AuthScreen({ auth, message, onAuth, onEnter, onBack }: A
               ) : null}
             </>
           )}
+          {!user ? (
+            <p className="border-t border-[var(--border)] pt-3 text-center text-xs text-[var(--text-muted)]">
+              처음이신가요?{" "}
+              <a href="#manual-start" className="font-semibold text-[var(--accent)] hover:underline">
+                시작 안내 보기
+              </a>
+            </p>
+          ) : null}
         </div>
-        </section>
+          </section>
+        </div>
+      </section>
 
-        <section aria-label="주요 기능" className="lg:col-start-1 lg:row-start-2">
-          <ul className="grid gap-3 sm:grid-cols-2">
-            {FEATURES.map((feature) => (
-              <li key={feature.title} className="tb-landing-feature flex gap-3">
-                <FeatureIcon path={feature.icon} />
-                <div>
-                  <div className="text-sm font-semibold">{feature.title}</div>
-                  <p className="mt-0.5 text-[13px] leading-5 text-[var(--text-muted)]">{feature.body}</p>
-                </div>
-              </li>
-            ))}
-          </ul>
-          <div className="mt-6">
-            <ProductPreview />
+      <section
+        id="manual"
+        aria-labelledby="manual-title"
+        className="tb-landing-manual relative mx-auto max-w-[1180px] scroll-mt-4 px-4 pb-14 sm:px-6 lg:px-8"
+      >
+        <div className="tb-no-print mb-6 flex flex-wrap items-end justify-between gap-3 border-t border-[var(--border)] pt-10">
+          <div>
+            <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--accent)]">
+              User guide
+            </p>
+            <h2 id="manual-title" className="mt-1 text-2xl font-bold tracking-tight sm:text-[28px]">
+              사용자 매뉴얼
+            </h2>
+            <p className="mt-1 text-sm text-[var(--text-muted)]">
+              처음 쓰는 분은 &lsquo;처음 시작하기&rsquo;부터 읽어 보세요. 로그인하지 않아도 볼 수
+              있습니다.
+            </p>
           </div>
-        </section>
-      </div>
+          <button type="button" onClick={printManual} className="tb-btn">
+            🖨 매뉴얼 인쇄
+          </button>
+        </div>
+        <div className="grid gap-6 lg:grid-cols-[230px_minmax(0,1fr)]">
+          <nav aria-label="매뉴얼 목차" className="tb-no-print lg:sticky lg:top-6 lg:self-start">
+            <ul className="flex flex-wrap gap-1.5 lg:flex-col lg:gap-0.5">
+              {MANUAL_SECTIONS.map((section) => (
+                <li key={section.id}>
+                  <a
+                    href={`#${section.id}`}
+                    className="inline-flex items-center gap-1.5 rounded-full border border-[var(--border)] bg-[var(--surface)] px-2.5 py-1 text-xs text-[var(--text-muted)] hover:border-[var(--accent)] hover:text-[var(--accent)] lg:flex lg:rounded-[var(--radius)] lg:border-transparent lg:bg-transparent lg:py-1.5 lg:text-[13px]"
+                  >
+                    <span aria-hidden="true">{section.icon}</span>
+                    {section.title}
+                  </a>
+                </li>
+              ))}
+            </ul>
+          </nav>
+          <div id="manual-print" className="tb-card min-w-0 p-5 shadow-[var(--shadow-md)] sm:p-7">
+            <ManualContent />
+          </div>
+        </div>
+      </section>
+
       <footer className="relative pb-6 text-center text-xs text-[var(--text-faint)]">
         {BRAND.name} · {BRAND.tagline}
       </footer>
