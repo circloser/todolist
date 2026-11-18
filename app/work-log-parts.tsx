@@ -34,6 +34,8 @@ export const STATUS_TONE: Record<WorkLog["status"], { badge: string; color: stri
   submitted: { badge: "tb-badge-warning", color: "var(--warning)" },
   approved: { badge: "tb-badge-complete", color: "var(--complete)" },
   rejected: { badge: "tb-badge-danger", color: "var(--danger)" },
+  // 부서장 본인 일지: no approval, shown like a submitted log on a board without approval.
+  recorded: { badge: "tb-badge-success", color: "var(--success)" },
 };
 
 export function StatusBadge({ log, approval = true }: { log: WorkLog | null; approval?: boolean }) {

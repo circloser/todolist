@@ -60,7 +60,7 @@ describe("summarizeMember", () => {
     expect(summary.missing).toEqual(["2026-11-17", "2026-11-19"]);
     expect(summary.writtenWeekdays).toBe(2);
     expect(summary.rate).toBe(50);
-    expect(summary.status).toEqual({ submitted: 1, approved: 1, rejected: 1 });
+    expect(summary.status).toEqual({ submitted: 1, approved: 1, rejected: 1, recorded: 0 });
   });
 
   it("ranks linked items and collects issues", () => {
@@ -74,6 +74,15 @@ describe("summarizeMember", () => {
 
   it("can restrict to approved logs", () => {
     expect(summarizeMember(minji, logs, context, items, true).logs.map((entry) => entry.id)).toEqual([1]);
+    // 부서장 본인 일지 needs no approval, so "approved only" keeps it.
+    const boss = { id: 1, name: "최부장", role: "부장" };
+    const bossLogs = [log({ id: 9, memberId: 1, memberName: "최부장", status: "recorded", content: "회의" })];
+    const bossSummary = summarizeMember(boss, bossLogs, context, items, true);
+    expect(bossSummary.logs.map((entry) => entry.id)).toEqual([9]);
+    expect(bossSummary.status).toEqual({ submitted: 0, approved: 0, rejected: 0, recorded: 1 });
+    const html = renderPersonalReport(context, [boss], bossLogs, items);
+    expect(html).toContain("승인 불필요");
+    expect(html).not.toContain("승인 대기");
   });
 });
 

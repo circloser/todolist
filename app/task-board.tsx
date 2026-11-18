@@ -47,6 +47,9 @@ import MinutesView from "./minutes-view";
 import { useScheduleFeed } from "./schedule-feed";
 import { ScheduleNotices, ScheduleToasts } from "./schedule-notices";
 import SearchPalette from "./search-palette";
+import HeaderMenu, { MenuItem } from "./header-menu";
+import HistoryPanel from "./history-panel";
+import SettingsPanel, { type SettingsTab } from "./settings-panel";
 import WorkLogPanel from "./work-log-panel";
 import type { CalendarEvent } from "./lib/schedule";
 import {
@@ -386,6 +389,9 @@ export default function TaskBoard() {
   const [minutesSeed, setMinutesSeed] = useState<CalendarEvent | null>(null);
   // 통합 검색 and where its results lead.
   const [searchOpen, setSearchOpen] = useState(false);
+  // 설정 (보드·알림 웹훅·운영 옵션) and 변경 이력, opened from the header.
+  const [settingsTab, setSettingsTab] = useState<SettingsTab | null>(null);
+  const [historyOpen, setHistoryOpen] = useState(false);
   const [minutesHighlight, setMinutesHighlight] = useState<string[]>([]);
   const [workLogFocus, setWorkLogFocus] = useState<{
     key: number;
@@ -3560,8 +3566,8 @@ export default function TaskBoard() {
 
   // Jump from a dashboard widget straight to a task: switch to the list,
   // expand it, and scroll it into view with a brief highlight.
-  const isItemView =
-    viewMode === "dashboard" ||
+  // Search and filters only change what 목록·지도·간트 show.
+  const showItemFilters =
     viewMode === "list" ||
     viewMode === "map" ||
     viewMode === "gantt" ||
@@ -3929,21 +3935,13 @@ export default function TaskBoard() {
 
   return (
     <main className="tb-app min-h-dvh">
-      <header className="tb-topbar z-30">
-        <div className="mx-auto flex max-w-[1600px] flex-col gap-4 px-4 py-4 sm:px-6 lg:px-8">
-          <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-            <div className="min-w-0">
-              {savingSettings ? (
-                <div className="mb-1.5 flex flex-wrap items-center gap-2">
-                  <span className="text-xs font-medium text-[var(--accent)]">
-                    저장 중…
-                  </span>
-                </div>
-              ) : null}
-              <div className="mb-1 flex items-center gap-1.5 text-xs font-semibold text-[var(--accent)]">
-                <CompassMark size={18} />
-                <span>{BRAND.name}</span>
-              </div>
+      <header className="tb-topbar relative z-40">
+        <div className="mx-auto max-w-[1600px] px-4 sm:px-6 lg:px-8">
+          <div className="flex items-center gap-2 py-2.5 sm:gap-3">
+            <span className="hidden shrink-0 sm:inline-flex" title={BRAND.name}>
+              <CompassMark size={30} />
+            </span>
+            <div className="min-w-0 flex-1">
               <input
                 value={boardTitle}
                 readOnly={!isManager}
@@ -3955,95 +3953,221 @@ export default function TaskBoard() {
                     void saveBoardSettings({ boardTitle: event.target.value });
                   }
                 }}
-                className="tb-title-field tb-ghost text-2xl font-bold tracking-tight sm:text-[28px]"
+                className="tb-title-field tb-ghost w-full truncate text-lg font-bold tracking-tight sm:text-xl"
               />
+              <div className="truncate text-[11px] text-[var(--text-faint)]">
+                <span className="font-semibold text-[var(--accent)]">{BRAND.name}</span>
+                {" · "}
+                {workspaceYear(activeWorkspace)} · {workspaceTeam(activeWorkspace)}
+                {savingSettings ? (
+                  <span className="text-[var(--accent)]"> · 저장 중…</span>
+                ) : null}
+              </div>
             </div>
 
-            <div className="flex flex-wrap gap-2.5">
-              <div className="tb-stat">
-                <div className="tb-stat-label">전체 진행률</div>
-                <div className="tb-stat-value text-[var(--accent)]">
-                  {overallProgress}%
-                </div>
-                <div className="tb-progress mt-2 w-[88px]">
+            <div
+              className="hidden items-center gap-3 text-xs text-[var(--text-muted)] xl:flex"
+              aria-label="보드 현황"
+            >
+              <span className="flex items-center gap-2" title="전체 진행률">
+                <span className="tb-progress w-16">
                   <span
                     style={{
                       width: `${overallProgress}%`,
                       background: "var(--accent)",
                     }}
                   />
-                </div>
-              </div>
-              <div className="tb-stat">
-                <div className="tb-stat-label">전체 업무</div>
-                <div className="tb-stat-value">{items.length}</div>
-              </div>
-              <div className="tb-stat">
-                <div className="tb-stat-label">진행 중</div>
-                <div className="tb-stat-value">{openItemCount}</div>
-              </div>
+                </span>
+                <b className="text-sm text-[var(--accent)]">{overallProgress}%</b>
+              </span>
+              <span>
+                업무 <b className="text-[var(--text)]">{items.length}</b>
+              </span>
+              <span>
+                진행 중 <b className="text-[var(--text)]">{openItemCount}</b>
+              </span>
             </div>
-          </div>
 
-          <div className="tb-filter-strip flex flex-wrap items-center justify-between gap-2">
-            <div className="min-w-0">
-              <span className="tb-label">현재 보드</span>
-              <div className="text-sm font-semibold">
-                {workspaceYear(activeWorkspace)} · {workspaceTeam(activeWorkspace)}
-              </div>
-            </div>
-            <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setSearchOpen(true)}
+              className="tb-btn tb-search-trigger !px-2.5"
+              title="업무·일정·회의록·업무일지·구성원·양식·매뉴얼 통합 검색 (Ctrl+K 또는 /)"
+              aria-label="통합 검색"
+            >
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <circle cx="11" cy="11" r="8" />
+                <path d="m21 21-4.3-4.3" />
+              </svg>
+              <span className="hidden md:inline">검색</span>
+              <kbd className="tb-kbd hidden lg:inline-flex">Ctrl K</kbd>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setNotifOpen(true)}
+              className="tb-btn relative !px-2.5"
+              title="일정·회의록·마감 알림"
+              aria-label="알림"
+            >
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9" />
+                <path d="M10.3 21a1.94 1.94 0 0 0 3.4 0" />
+              </svg>
+              {notifications.total + scheduleFeed.count ? (
+                <span className="tb-header-count absolute -right-1 -top-1">
+                  {notifications.total + scheduleFeed.count}
+                </span>
+              ) : null}
+            </button>
+
+            {isManager ? (
               <button
                 type="button"
-                onClick={() => setSearchOpen(true)}
-                className="tb-btn tb-search-trigger"
-                title="업무·일정·회의록·업무일지·구성원·양식·매뉴얼 통합 검색 (Ctrl+K 또는 /)"
-                aria-label="통합 검색"
+                onClick={() => setSettingsTab("board")}
+                className="tb-btn !px-2.5"
+                title="설정: 보드, 알림 웹훅, 운영 옵션"
+                aria-label="설정"
               >
-                <svg
-                  width="15"
-                  height="15"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  aria-hidden="true"
-                >
-                  <circle cx="11" cy="11" r="8" />
-                  <path d="m21 21-4.3-4.3" />
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <circle cx="12" cy="12" r="3" />
+                  <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1Z" />
                 </svg>
-                통합 검색
-                <kbd className="tb-kbd hidden md:inline-flex">Ctrl K</kbd>
               </button>
-              {me ? (
-                <span className="flex items-center gap-1.5 text-sm" title={`@${me.loginId}`}>
-                  <span className="font-semibold">{me.name}</span>
+            ) : null}
+
+            <HeaderMenu
+              label="메뉴"
+              title="양식함, 구성원, 보고서, 변경 이력, 매뉴얼"
+              button={
+                <>
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
+                    <path d="M4 6h16M4 12h16M4 18h16" />
+                  </svg>
+                  <span className="hidden md:inline">메뉴</span>
+                  {isManager && joinRequests.length ? (
+                    <span className="tb-header-count bg-[var(--warning)]">{joinRequests.length}</span>
+                  ) : null}
+                </>
+              }
+            >
+              {(close) => (
+                <>
+                  <MenuItem
+                    icon="👥"
+                    onSelect={() => {
+                      close();
+                      setMembersOpen(true);
+                    }}
+                    badge={
+                      isManager && joinRequests.length ? (
+                        <span className="tb-badge tb-badge-warning">가입 신청 {joinRequests.length}</span>
+                      ) : (
+                        <span className="text-xs text-[var(--text-faint)]">
+                          {members.filter((member) => member.active).length}명
+                        </span>
+                      )
+                    }
+                  >
+                    구성원
+                  </MenuItem>
+                  <MenuItem
+                    icon="📎"
+                    onSelect={() => {
+                      close();
+                      void openDocuments();
+                    }}
+                  >
+                    양식함
+                  </MenuItem>
+                  <MenuItem
+                    icon="📄"
+                    onSelect={() => {
+                      close();
+                      setReportOpen(true);
+                    }}
+                  >
+                    월간 보고서
+                  </MenuItem>
+                  {isManager ? (
+                    <MenuItem
+                      icon="🧩"
+                      onSelect={() => {
+                        close();
+                        openTemplateEditor(null);
+                      }}
+                    >
+                      업무 유형·단계
+                    </MenuItem>
+                  ) : null}
+                  <div className="tb-menu-sep" />
+                  <MenuItem
+                    icon="🕘"
+                    onSelect={() => {
+                      close();
+                      setHistoryOpen(true);
+                    }}
+                  >
+                    변경 이력
+                  </MenuItem>
+                  <MenuItem
+                    icon="📖"
+                    onSelect={() => {
+                      close();
+                      setManualOpen(true);
+                    }}
+                  >
+                    사용자 매뉴얼
+                  </MenuItem>
+                </>
+              )}
+            </HeaderMenu>
+
+            <HeaderMenu
+              label="내 계정"
+              title={me ? `@${me.loginId}` : undefined}
+              button={
+                <>
+                  <span className="max-w-[7rem] truncate font-semibold">{me?.name ?? "계정"}</span>
                   <span
-                    className={`tb-badge ${isManager ? "tb-badge-complete" : "tb-badge-muted"}`}
+                    className={`tb-badge hidden sm:inline-flex ${
+                      isManager ? "tb-badge-complete" : "tb-badge-muted"
+                    }`}
                   >
                     {isManager ? "부서장" : "구성원"}
                   </span>
-                </span>
-              ) : null}
-              <button
-                type="button"
-                onClick={() => {
-                  void refreshAuth();
-                  openLanding();
-                }}
-                className="tb-btn"
-              >
-                보드 전환·계정
-              </button>
-              <button type="button" onClick={() => void logout()} className="tb-btn">
-                로그아웃
-              </button>
-            </div>
+                </>
+              }
+            >
+              {(close) => (
+                <>
+                  <div className="px-2.5 py-1.5 text-xs text-[var(--text-faint)]">
+                    {me ? `${me.name} · @${me.loginId}` : ""}
+                  </div>
+                  <MenuItem
+                    icon="🔁"
+                    onSelect={() => {
+                      close();
+                      void refreshAuth();
+                      openLanding();
+                    }}
+                  >
+                    보드 전환·계정
+                  </MenuItem>
+                  <MenuItem
+                    icon="🚪"
+                    onSelect={() => {
+                      close();
+                      void logout();
+                    }}
+                  >
+                    로그아웃
+                  </MenuItem>
+                </>
+              )}
+            </HeaderMenu>
           </div>
 
-          <div className="flex flex-col gap-3">
             <nav className="tb-viewnav" aria-label="화면 전환">
               {VIEW_TABS.map(([mode, label]) => {
                 const badge =
@@ -4084,10 +4208,12 @@ export default function TaskBoard() {
                 );
               })}
             </nav>
+        </div>
 
-            <div className="flex flex-wrap items-center gap-2">
-              {isItemView ? (
-              <>
+        {showItemFilters ? (
+          <div className="border-t border-[var(--border)]">
+            <div className="mx-auto flex max-w-[1600px] flex-col gap-2 px-4 py-2 sm:px-6 lg:px-8">
+              <div className="flex flex-wrap items-center gap-2">
               <div className="relative min-w-[220px] flex-1">
                 <svg
                   className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[var(--text-faint)]"
@@ -4185,152 +4311,13 @@ export default function TaskBoard() {
                   ) : null;
                 })()}
               </button>
-              </>
-              ) : (
-                <span className="mr-auto min-w-0 truncate text-xs text-[var(--text-muted)]">
-                  {viewMode === "calendar"
-                    ? "모든 구성원이 함께 보는 일정입니다. 시작 전에 알림이 뜹니다."
-                    : viewMode === "minutes"
-                      ? "참석자를 기록하고, 참석하지 못한 구성원은 읽은 뒤 확인합니다."
-                      : "하루 업무를 기록하고 함께 봅니다."}
-                </span>
-              )}
-
-              <button
-                type="button"
-                onClick={() => setNotifOpen(true)}
-                className="tb-btn relative"
-                title="일정·회의록·마감 알림"
-              >
-                <svg
-                  width="15"
-                  height="15"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                >
-                  <path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9" />
-                  <path d="M10.3 21a1.94 1.94 0 0 0 3.4 0" />
-                </svg>
-                알림
-                {notifications.total + scheduleFeed.count ? (
-                  <span className="ml-0.5 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-[var(--danger)] px-1 text-[10px] font-bold text-white">
-                    {notifications.total + scheduleFeed.count}
+                {savingOrder ? (
+                  <span className="text-xs font-medium text-[var(--accent)]">
+                    순서 저장 중…
                   </span>
                 ) : null}
-              </button>
-
-              <button
-                type="button"
-                onClick={() => void openDocuments()}
-                className="tb-btn hidden md:inline-flex"
-                title="기안문 등 공용 양식 보관함"
-              >
-                <svg
-                  width="15"
-                  height="15"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                >
-                  <path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48" />
-                </svg>
-                양식
-              </button>
-
-              <button
-                type="button"
-                onClick={() => setMembersOpen(true)}
-                className="tb-btn hidden md:inline-flex"
-                title="구성원 등록·관리"
-              >
-                <svg
-                  width="15"
-                  height="15"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                >
-                  <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
-                  <circle cx="9" cy="7" r="4" />
-                  <path d="M22 21v-2a4 4 0 0 0-3-3.87" />
-                  <path d="M16 3.13a4 4 0 0 1 0 7.75" />
-                </svg>
-                구성원
-                {isManager && joinRequests.length ? (
-                  <span
-                    className="ml-0.5 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-[var(--warning)] px-1 text-[10px] font-bold text-white"
-                    title="가입 신청"
-                  >
-                    {joinRequests.length}
-                  </span>
-                ) : members.length ? (
-                  <span className="tb-badge tb-badge-muted">
-                    {members.filter((member) => member.active).length}
-                  </span>
-                ) : null}
-              </button>
-
-              <button
-                type="button"
-                onClick={() => setReportOpen(true)}
-                className="tb-btn hidden md:inline-flex"
-                title="월간 보고서 (CSV/인쇄)"
-              >
-                <svg
-                  width="15"
-                  height="15"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                >
-                  <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-                  <path d="M14 2v6h6" />
-                  <path d="M16 13H8" />
-                  <path d="M16 17H8" />
-                </svg>
-                보고서
-              </button>
-
-              {isManager ? (
-              <button
-                type="button"
-                onClick={() => openTemplateEditor(null)}
-                className="tb-btn hidden md:inline-flex"
-                title="업무 유형과 단계 관리"
-              >
-                <svg
-                  width="15"
-                  height="15"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                >
-                  <path d="M12 20h9" />
-                  <path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z" />
-                </svg>
-                유형·단계
-              </button>
-              ) : null}
-
-            </div>
-
-            {showFilters && isItemView ? (
+              </div>
+              {showFilters ? (
               <div className="tb-filter-strip hidden flex-wrap items-center gap-2 md:flex">
                 <select
                   value={templateFilter}
@@ -4408,14 +4395,10 @@ export default function TaskBoard() {
                 </button>
               </div>
             ) : null}
-
-            {isItemView && (bottlenecks.length || assigneeStats.length) ? (
+              {showFilters ? (
+                <>
+{bottlenecks.length || assigneeStats.length ? (
               <div className="hidden flex-wrap items-center gap-2 md:flex">
-                {savingOrder ? (
-                  <span className="text-xs font-medium text-[var(--accent)]">
-                    순서 저장 중…
-                  </span>
-                ) : null}
                 {bottlenecks.slice(0, 3).map((bottleneck) => (
                   <button
                     key={bottleneck.title}
@@ -4458,8 +4441,11 @@ export default function TaskBoard() {
                 ))}
               </div>
             ) : null}
+                </>
+              ) : null}
+            </div>
           </div>
-        </div>
+        ) : null}
       </header>
 
       <section className="mx-auto max-w-[1600px] px-4 py-5 sm:px-6 lg:px-8">
@@ -5041,30 +5027,6 @@ export default function TaskBoard() {
                 ) : null}
               </div>
             </div>
-
-            {widgetPrefs.activity !== false ? (
-            <div className="tb-card tb-section p-5">
-              <h2 className="text-sm font-semibold">최근 활동</h2>
-              <div className="mt-3 grid gap-2.5 sm:grid-cols-2">
-                {history.slice(0, 10).map((entry) => (
-                  <div
-                    key={entry.id}
-                    className="border-l-2 border-[var(--accent-soft-2)] pl-3 text-sm leading-5 text-[var(--text-muted)]"
-                  >
-                    <div className="text-[11px] font-semibold text-[var(--text-faint)]">
-                      {formatDate(entry.createdAt)}
-                    </div>
-                    {entry.summary}
-                  </div>
-                ))}
-                {!history.length ? (
-                  <div className="text-sm text-[var(--text-faint)]">
-                    활동 기록이 없습니다.
-                  </div>
-                ) : null}
-              </div>
-            </div>
-            ) : null}
           </div>
         ) : viewMode === "list" ? (
           <div className="tb-list-view">
@@ -7745,133 +7707,6 @@ export default function TaskBoard() {
           </div>
         )}
 
-        {isItemView ? (
-        <div className="mt-5 grid gap-4 lg:grid-cols-[1fr_360px]">
-          <section className="tb-card tb-section p-5">
-            <h2 className="text-base font-semibold">변경 이력</h2>
-            <div className="mt-3 max-h-64 space-y-3 overflow-auto">
-              {history.slice(0, 20).map((entry) => (
-                <div
-                  key={entry.id}
-                  className="border-l-2 border-[var(--accent-soft-2)] pl-3 text-sm leading-5 text-[var(--text-muted)]"
-                >
-                  <div className="text-[11px] font-semibold text-[var(--text-faint)]">
-                    {formatDate(entry.createdAt)}
-                  </div>
-                  {entry.summary}
-                </div>
-              ))}
-              {!history.length ? (
-                <div className="text-sm text-[var(--text-faint)]">
-                  아직 변경 이력이 없습니다.
-                </div>
-              ) : null}
-            </div>
-          </section>
-
-          {isManager ? (
-          <section className="tb-card tb-section p-5">
-            <h2 className="text-base font-semibold">보드 설정</h2>
-            <div className="mt-3 grid gap-3.5">
-              <div className="grid gap-3 border-b border-[var(--border)] pb-3">
-                <div>
-                  <span className="tb-label">현재 연도/조직</span>
-                  <div className="grid gap-2 sm:grid-cols-2">
-                    <input
-                      value={workspaceDepartmentDraft}
-                      onChange={(event) =>
-                        setWorkspaceDepartmentDraft(event.target.value)
-                      }
-                      className="tb-field"
-                      placeholder="연도"
-                    />
-                    <input
-                      value={workspaceTeamDraft}
-                      onChange={(event) => setWorkspaceTeamDraft(event.target.value)}
-                      className="tb-field"
-                      placeholder="조직/팀명"
-                    />
-                  </div>
-                </div>
-                <div className="grid gap-2 sm:grid-cols-[1fr_auto]">
-                  <input
-                    type="password"
-                    value={workspacePasswordDraft}
-                    onChange={(event) => setWorkspacePasswordDraft(event.target.value)}
-                    className="tb-field"
-                    placeholder="새 암호 (변경할 때만 입력)"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => void saveWorkspaceSettings()}
-                    disabled={savingWorkspace}
-                    className="tb-btn tb-btn-primary"
-                  >
-                    {savingWorkspace ? "저장 중" : "연도/조직 저장"}
-                  </button>
-                </div>
-              </div>
-              <label>
-                <span className="tb-label">조직명</span>
-                <input
-                  value={organizationName}
-                  onChange={(event) => setOrganizationName(event.target.value)}
-                  onBlur={(event) =>
-                    void saveBoardSettings({
-                      organizationName: event.target.value,
-                    })
-                  }
-                  className="tb-field"
-                />
-              </label>
-              <label>
-                <span className="tb-label">보드명</span>
-                <input
-                  value={boardTitle}
-                  onChange={(event) => setBoardTitle(event.target.value)}
-                  onBlur={(event) =>
-                    void saveBoardSettings({ boardTitle: event.target.value })
-                  }
-                  className="tb-field"
-                />
-              </label>
-
-              <div className="border-t border-[var(--border)] pt-3">
-                <span className="tb-label">
-                  알림 웹훅 (Slack / Discord){savingWebhook ? " · 저장 중…" : ""}
-                </span>
-                <input
-                  value={webhookUrl}
-                  onChange={(event) => setWebhookUrl(event.target.value)}
-                  onBlur={(event) =>
-                    void saveWebhook(event.target.value, webhookEnabled)
-                  }
-                  className="tb-field"
-                  placeholder="https://hooks.slack.com/services/… 또는 Discord 웹훅 URL"
-                />
-                <label className="mt-2 flex cursor-pointer items-center gap-2 text-sm text-[var(--text-muted)]">
-                  <input
-                    type="checkbox"
-                    checked={webhookEnabled}
-                    onChange={(event) => {
-                      setWebhookEnabled(event.target.checked);
-                      void saveWebhook(webhookUrl, event.target.checked);
-                    }}
-                    className="h-4 w-4 accent-[var(--accent)]"
-                  />
-                  발송 활성화
-                </label>
-                <p className="mt-1.5 text-[11px] leading-4 text-[var(--text-faint)]">
-                  알림(🔔) 패널의 &lsquo;웹훅으로 발송&rsquo; 버튼으로 즉시 보낼
-                  수 있고, 활성화 상태면 평일 오전 9시에 임박·지연 목록과 오늘의
-                  업무일정이 자동 발송됩니다.
-                </p>
-              </div>
-            </div>
-          </section>
-          ) : null}
-        </div>
-        ) : null}
       </section>
 
       <footer className="border-t border-[var(--border)] bg-[var(--surface)]">
@@ -7914,6 +7749,13 @@ export default function TaskBoard() {
               className="hover:text-[var(--text-muted)] hover:underline"
             >
               👥 구성원 관리
+            </button>
+            <button
+              type="button"
+              onClick={() => setHistoryOpen(true)}
+              className="hover:text-[var(--text-muted)] hover:underline"
+            >
+              🕘 변경 이력
             </button>
           </div>
         </div>
@@ -9280,7 +9122,10 @@ export default function TaskBoard() {
         <MembersPanel
           members={members}
           requests={joinRequests}
-          policy={policy}
+          onOpenOptions={() => {
+            setMembersOpen(false);
+            setSettingsTab("options");
+          }}
           boardAssignees={assignees}
           request={apiRequest}
           onMembersChange={applyMembersResponse}
@@ -9294,6 +9139,124 @@ export default function TaskBoard() {
         />
       ) : null}
 
+
+      {settingsTab && isManager ? (
+        <SettingsPanel
+          tab={settingsTab}
+          onTabChange={setSettingsTab}
+          onClose={() => setSettingsTab(null)}
+          policy={policy}
+          members={members}
+          request={apiRequest}
+          onMembersChange={applyMembersResponse}
+          boardContent={
+            <div className="grid gap-3.5">
+              <div className="grid gap-3 border-b border-[var(--border)] pb-3">
+                <div>
+                  <span className="tb-label">현재 연도/조직</span>
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    <input
+                      value={workspaceDepartmentDraft}
+                      onChange={(event) =>
+                        setWorkspaceDepartmentDraft(event.target.value)
+                      }
+                      className="tb-field"
+                      placeholder="연도"
+                    />
+                    <input
+                      value={workspaceTeamDraft}
+                      onChange={(event) => setWorkspaceTeamDraft(event.target.value)}
+                      className="tb-field"
+                      placeholder="조직/팀명"
+                    />
+                  </div>
+                </div>
+                <div className="grid gap-2 sm:grid-cols-[1fr_auto]">
+                  <input
+                    type="password"
+                    value={workspacePasswordDraft}
+                    onChange={(event) => setWorkspacePasswordDraft(event.target.value)}
+                    className="tb-field"
+                    placeholder="새 암호 (변경할 때만 입력)"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => void saveWorkspaceSettings()}
+                    disabled={savingWorkspace}
+                    className="tb-btn tb-btn-primary"
+                  >
+                    {savingWorkspace ? "저장 중" : "연도/조직 저장"}
+                  </button>
+                </div>
+              </div>
+              <label>
+                <span className="tb-label">조직명</span>
+                <input
+                  value={organizationName}
+                  onChange={(event) => setOrganizationName(event.target.value)}
+                  onBlur={(event) =>
+                    void saveBoardSettings({
+                      organizationName: event.target.value,
+                    })
+                  }
+                  className="tb-field"
+                />
+              </label>
+              <label>
+                <span className="tb-label">보드명</span>
+                <input
+                  value={boardTitle}
+                  onChange={(event) => setBoardTitle(event.target.value)}
+                  onBlur={(event) =>
+                    void saveBoardSettings({ boardTitle: event.target.value })
+                  }
+                  className="tb-field"
+                />
+              </label>
+
+              <p className="text-[11px] leading-4 text-[var(--text-faint)]">
+                조직명과 보드명은 입력칸을 벗어나면 바로 저장됩니다. 보드 가입 암호는 바꿀 때만
+                입력하세요.
+              </p>
+            </div>
+          }
+          webhookContent={
+              <div>
+                <span className="tb-label">
+                  알림 웹훅 (Slack / Discord){savingWebhook ? " · 저장 중…" : ""}
+                </span>
+                <input
+                  value={webhookUrl}
+                  onChange={(event) => setWebhookUrl(event.target.value)}
+                  onBlur={(event) =>
+                    void saveWebhook(event.target.value, webhookEnabled)
+                  }
+                  className="tb-field"
+                  placeholder="https://hooks.slack.com/services/… 또는 Discord 웹훅 URL"
+                />
+                <label className="mt-2 flex cursor-pointer items-center gap-2 text-sm text-[var(--text-muted)]">
+                  <input
+                    type="checkbox"
+                    checked={webhookEnabled}
+                    onChange={(event) => {
+                      setWebhookEnabled(event.target.checked);
+                      void saveWebhook(webhookUrl, event.target.checked);
+                    }}
+                    className="h-4 w-4 accent-[var(--accent)]"
+                  />
+                  발송 활성화
+                </label>
+                <p className="mt-1.5 text-[11px] leading-4 text-[var(--text-faint)]">
+                  알림(🔔) 패널의 &lsquo;웹훅으로 발송&rsquo; 버튼으로 즉시 보낼
+                  수 있고, 활성화 상태면 평일 오전 9시에 임박·지연 목록과 오늘의
+                  업무일정이 자동 발송됩니다.
+                </p>
+              </div>
+          }
+        />
+      ) : null}
+
+      {historyOpen ? <HistoryPanel history={history} onClose={() => setHistoryOpen(false)} /> : null}
 
       {searchOpen ? (
         <SearchPalette

@@ -2,7 +2,6 @@
 
 import { FormEvent, useMemo, useState } from "react";
 
-import PolicyEditor from "./policy-editor";
 import {
   MEMBER_COLORS,
   pickMemberColor,
@@ -11,7 +10,6 @@ import {
   type JoinRequest,
   type MembersResponse,
   type TeamMember,
-  type TeamPolicy,
   type Viewer,
 } from "./lib/team";
 
@@ -21,12 +19,13 @@ type MembersPanelProps = {
   viewer: Viewer | null;
   members: TeamMember[];
   requests: JoinRequest[];
-  policy: TeamPolicy;
   boardAssignees: string[];
   request: ApiRequest;
   onMembersChange: (data: MembersResponse) => void;
   onAssignmentsRenamed: () => void;
   onOpenWorkLog: () => void;
+  /** 운영 옵션 now live in 설정 (부서장). */
+  onOpenOptions?: () => void;
   onClose: () => void;
 };
 
@@ -56,16 +55,15 @@ export default function MembersPanel({
   viewer,
   members,
   requests,
-  policy,
   boardAssignees,
   request,
   onMembersChange,
   onAssignmentsRenamed,
   onOpenWorkLog,
+  onOpenOptions,
   onClose,
 }: MembersPanelProps) {
   const isManager = viewer?.accessRole === "manager";
-  const [tab, setTab] = useState<"members" | "options">("members");
   const [name, setName] = useState("");
   const [role, setRole] = useState("");
   const [color, setColor] = useState(() => pickMemberColor(members.length));
@@ -211,33 +209,6 @@ export default function MembersPanel({
     }
   }
 
-  async function changePolicy(patch: Partial<TeamPolicy>) {
-    // Show the change right away; put the old value back if saving fails.
-    const previous = policy;
-    onMembersChange({ policy: { ...policy, ...patch } });
-    const saved = await send(
-      { method: "PATCH", body: JSON.stringify({ action: "update-policy", policy: patch }) },
-      () => "운영 옵션을 저장했습니다."
-    );
-    if (!saved) {
-      onMembersChange({ policy: previous });
-    }
-  }
-
-  async function toggleViewer(member: TeamMember, value: boolean) {
-    const previous = members;
-    onMembersChange({
-      members: members.map((entry) => (entry.id === member.id ? { ...entry, logViewer: value } : entry)),
-    });
-    const saved = await send(
-      { method: "PATCH", body: JSON.stringify({ id: member.id, logViewer: value }) },
-      () => `${member.name}님의 전체 일지 열람을 ${value ? "허용" : "해제"}했습니다.`
-    );
-    if (!saved) {
-      onMembersChange({ members: previous });
-    }
-  }
-
   async function unlinkAccount(member: TeamMember) {
     if (
       !window.confirm(
@@ -310,28 +281,15 @@ export default function MembersPanel({
                 : "구성원 정보는 부서장만 수정할 수 있습니다."}
             </p>
           </div>
-          {isManager ? (
-            <div className="tb-seg" role="tablist">
-              {(
-                [
-                  ["members", "구성원"],
-                  ["options", "운영 옵션"],
-                ] as const
-              ).map(([key, label]) => (
-                <button
-                  key={key}
-                  type="button"
-                  role="tab"
-                  aria-selected={tab === key}
-                  data-active={tab === key}
-                  onClick={() => setTab(key)}
-                  className="tb-seg-btn"
-                >
-                  {label}
-                  {key === "members" && requests.length ? ` ${requests.length}` : ""}
-                </button>
-              ))}
-            </div>
+          {isManager && onOpenOptions ? (
+            <button
+              type="button"
+              onClick={onOpenOptions}
+              className="tb-btn text-sm"
+              title="일지 열람 범위, 승인 절차 등은 설정에서 바꿉니다"
+            >
+              ⚙️ 운영 옵션
+            </button>
           ) : null}
           <button type="button" onClick={onOpenWorkLog} className="tb-btn text-sm">
             📝 업무일지
@@ -363,17 +321,6 @@ export default function MembersPanel({
             </div>
           ) : null}
 
-          {isManager && tab === "options" ? (
-            <PolicyEditor
-              policy={policy}
-              members={members}
-              busy={busy}
-              onChange={(patch) => void changePolicy(patch)}
-              onToggleViewer={(member, value) => void toggleViewer(member, value)}
-            />
-          ) : null}
-
-          {tab === "options" && isManager ? null : (
           <>
           {isManager && requests.length ? (
             <section
@@ -692,8 +639,7 @@ export default function MembersPanel({
             )}
           </ul>
           </>
-          )}
-          {isManager && tab === "members" ? (
+          {isManager ? (
             <p className="text-[11px] leading-4 text-[var(--text-faint)]">
               이름을 바꾸면 그 이름으로 지정된 업무의 담당자명과 업무일지에도 함께
               반영됩니다. 비활성화하면 그 계정은 보드에 접속할 수 없고 기존 기록은

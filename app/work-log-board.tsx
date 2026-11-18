@@ -159,7 +159,11 @@ export default function WorkLogBoard({
     }
     return map;
   }, [visibleLogs]);
-  const matches = (log: WorkLog) => statusFilter === "all" || log.status === statusFilter;
+  const matches = (log: WorkLog) =>
+    statusFilter === "all" ||
+    log.status === statusFilter ||
+    // Without approval every saved log is simply "제출", 부서장's included.
+    (!policy.logApproval && statusFilter === "submitted" && log.status === "recorded");
 
   const counts = useMemo(() => {
     const inRange = visibleLogs.filter((log) => log.logDate >= range.from && log.logDate <= range.to);
@@ -263,6 +267,7 @@ export default function WorkLogBoard({
           <option value="submitted">{policy.logApproval ? "승인 대기" : "제출"}</option>
           {policy.logApproval ? <option value="approved">승인</option> : null}
           {policy.logApproval ? <option value="rejected">반려</option> : null}
+          {policy.logApproval ? <option value="recorded">부서장 제출 (승인 불필요)</option> : null}
         </select>
         {layout === "week" ? (
           <label className="flex items-center gap-1.5 text-xs text-[var(--text-muted)]">
@@ -538,7 +543,7 @@ export default function WorkLogBoard({
           </div>
           <p className="mt-1.5 text-[11px] text-[var(--text-faint)]">
             날짜를 누르면 그날의 일간 카드로, 이름을 누르면 일지 상세로 이동합니다. 아래 줄 색: 주황
-            {policy.logApproval ? "=승인 대기, 파랑=승인, 빨강=반려" : "=제출"}.
+            {policy.logApproval ? "=승인 대기, 파랑=승인, 빨강=반려, 초록=부서장 제출(승인 불필요)" : "=제출"}.
           </p>
         </div>
       ) : (

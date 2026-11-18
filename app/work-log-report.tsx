@@ -44,7 +44,7 @@ const OPTION_LABELS: Record<keyof ReportOptions, string> = {
   issues: "특이사항 모음",
   signature: "결재란",
   showMissing: "미작성 평일 표시",
-  approvedOnly: "승인된 일지만",
+  approvedOnly: "승인된 일지만 (부서장 본인 일지 포함)",
   includeDaily: "일자별 상세 포함",
   teamOverview: "팀 연간 개요 페이지",
 };

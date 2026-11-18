@@ -51,7 +51,6 @@ export const DASHBOARD_WIDGETS: Array<{ key: string; label: string }> = [
   { key: "budget", label: "예산 요약" },
   { key: "bottlenecks", label: "병목 단계" },
   { key: "regions", label: "지역 현황" },
-  { key: "activity", label: "최근 활동" },
 ];
 
 export const defaultWidgetPrefs: Record<string, boolean> = Object.fromEntries(

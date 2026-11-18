@@ -233,6 +233,17 @@ export async function prepareTeamTables() {
   await addColumnIfMissing(
     "ALTER TABLE work_logs ADD COLUMN review_comment TEXT NOT NULL DEFAULT ''"
   );
+  // 부서장 본인 업무일지는 승인이 필요 없다: pending logs written by a current
+  // 부서장 (from before this rule) become "recorded". Idempotent.
+  await d1
+    .prepare(
+      `UPDATE work_logs SET status = 'recorded'
+       WHERE status = 'submitted' AND EXISTS (
+         SELECT 1 FROM workspace_members m
+         WHERE m.id = work_logs.member_id AND m.workspace_id = work_logs.workspace_id AND m.access_role = 'manager'
+       )`
+    )
+    .run();
   await d1
     .prepare(
       "CREATE UNIQUE INDEX IF NOT EXISTS workspace_members_user_idx ON workspace_members (workspace_id, user_id) WHERE user_id IS NOT NULL"

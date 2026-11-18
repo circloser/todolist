@@ -275,7 +275,9 @@ export default function WorkLogPanel({
       setDraft(draftFrom(saved));
       setNotice(
         policy.logApproval
-          ? `${formatLogDate(date)} 업무일지를 제출했습니다.${isManager ? "" : " 부서장 승인을 기다립니다."}`
+          ? `${formatLogDate(date)} 업무일지를 제출했습니다.${
+              isManager ? " 부서장 본인 일지는 승인 없이 기록됩니다." : " 부서장 승인을 기다립니다."
+            }`
           : `${formatLogDate(date)} 업무일지를 저장했습니다.`
       );
     } catch (saveError) {
@@ -547,6 +549,11 @@ export default function WorkLogPanel({
                     {myLog?.status === "approved" ? (
                       <span>
                         · {myLog.reviewerName} 승인 {formatTime(myLog.reviewedAt)}
+                      </span>
+                    ) : null}
+                    {isManager && policy.logApproval ? (
+                      <span className="text-[var(--text-faint)]">
+                        · 부서장 본인 일지는 승인 없이 기록됩니다
                       </span>
                     ) : null}
                   </>
