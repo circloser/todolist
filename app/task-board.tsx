@@ -5141,7 +5141,7 @@ export default function TaskBoard() {
                         handleGroupDragOver(event, group.name)
                       }
                       onDrop={(event) => handleGroupDrop(event, group.name)}
-                      className={`tb-hierarchy-header tb-list-group-header flex items-center gap-2.5 ${
+                      className={`tb-hierarchy-header tb-list-group-header flex flex-wrap items-center gap-1.5 sm:flex-nowrap sm:gap-2.5 ${
                         draggedGroup === group.name
                           ? "is-dragging ring-2 ring-[var(--accent-ring)]"
                           : ""
@@ -5198,7 +5198,7 @@ export default function TaskBoard() {
                       >
                         {groupCollapsed ? "▸" : "▾"}
                       </button>
-                      <span className="tb-badge tb-badge-muted shrink-0">
+                      <span className="tb-badge tb-badge-muted hidden shrink-0 sm:inline-flex">
                         {categoryLevelLabel(depth)}
                       </span>
                       <div className="min-w-0 flex-1">
@@ -5282,8 +5282,10 @@ export default function TaskBoard() {
                         onClick={() => openGroupTaskForm(group.name)}
                         className="tb-btn ml-auto shrink-0 !px-2.5 !py-1 text-xs"
                         title="이 그룹으로 새 업무 추가"
+                        aria-label="이 그룹으로 새 업무 추가"
                       >
-                        ＋ 업무
+                        <span className="sm:hidden">＋</span>
+                        <span className="hidden sm:inline">＋ 업무</span>
                       </button>
                       <button
                         type="button"
@@ -5819,7 +5821,7 @@ export default function TaskBoard() {
                                               toggleStepExpanded(step.id)
                                             }
                                             data-active={stepPanelOpen}
-                                            className={`tb-btn tb-list-subtask-toggle shrink-0 !py-1.5 text-xs ${
+                                            className={`tb-btn tb-list-subtask-toggle max-w-full shrink-0 !py-1.5 text-xs ${
                                               stepSubs.length &&
                                               stepSubsDone === stepSubs.length
                                                 ? "tb-btn-soft-success"

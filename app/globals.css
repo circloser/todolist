@@ -379,6 +379,9 @@ select {
 
   .tb-list-view {
     display: grid;
+    /* minmax(0, …): an implicit auto track grows to the widest group's
+       min-content and pushes the page wider than a phone screen. */
+    grid-template-columns: minmax(0, 1fr);
     gap: 22px;
   }
 
