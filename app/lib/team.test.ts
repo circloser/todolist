@@ -1,6 +1,14 @@
 import { describe, expect, it } from "vitest";
 import {
+  DEFAULT_POLICY,
   canEditItem,
+  canViewAllLogs,
+  logDateError,
+  monthGrid,
+  normalizePolicy,
+  shiftMonth,
+  weekDates,
+  weekdaysBetween,
   dailyActivityLines,
   dailyStatus,
   formatLogDate,
@@ -38,6 +46,7 @@ function member(id: number, name: string, active = true): TeamMember {
     position: id,
     accessRole: "member",
     hasAccount: true,
+    logViewer: false,
     createdAt: "",
     updatedAt: "",
   };
@@ -286,5 +295,89 @@ describe("permissions", () => {
     });
     expect(workLogPermissions(manager, approved, 2).canReopen).toBe(true);
     expect(workLogPermissions(manager, { memberId: 1, status: "submitted" }, 1).canReview).toBe(false);
+  });
+});
+
+describe("team policy", () => {
+  it("falls back to safe defaults for unknown input", () => {
+    expect(normalizePolicy(null)).toEqual(DEFAULT_POLICY);
+    expect(normalizePolicy({ logVisibility: "everyone", logBackdateDays: -3, logApproval: "yes" })).toEqual(
+      DEFAULT_POLICY
+    );
+    expect(normalizePolicy({ logVisibility: "team", logBackdateDays: 9999, memberCanCreateItems: false })).toMatchObject({
+      logVisibility: "team",
+      logBackdateDays: 365,
+      memberCanCreateItems: false,
+    });
+  });
+
+  it("decides who may read everyone's logs", () => {
+    const member = { accessRole: "member" as const };
+    const manager = { accessRole: "manager" as const };
+    const own = DEFAULT_POLICY;
+    const selected = { ...DEFAULT_POLICY, logVisibility: "selected" as const };
+    const team = { ...DEFAULT_POLICY, logVisibility: "team" as const };
+
+    expect(canViewAllLogs(own, manager, null)).toBe(true);
+    expect(canViewAllLogs(own, member, { logViewer: true })).toBe(false);
+    expect(canViewAllLogs(selected, member, { logViewer: true })).toBe(true);
+    expect(canViewAllLogs(selected, member, { logViewer: false })).toBe(false);
+    expect(canViewAllLogs(team, member, null)).toBe(true);
+    expect(canViewAllLogs(team, null, null)).toBe(false);
+  });
+
+  it("limits how far back logs can be written", () => {
+    const limited = { ...DEFAULT_POLICY, logBackdateDays: 3 };
+    expect(logDateError("2026-01-01", "2026-11-18", DEFAULT_POLICY)).toBeNull();
+    expect(logDateError("2026-11-15", "2026-11-18", limited)).toBeNull();
+    expect(logDateError("2026-11-14", "2026-11-18", limited)).toMatch(/3일 전까지/);
+    expect(logDateError("2026-11-19", "2026-11-18", limited)).toMatch(/미래/);
+  });
+
+  it("unlocks approved logs and hides review when the board says so", () => {
+    const minji = { accessRole: "member" as const, memberId: 2 };
+    const boss = { accessRole: "manager" as const, memberId: 1 };
+    const approved = { memberId: 2, status: "approved" as const };
+    const unlocked = { ...DEFAULT_POLICY, lockApprovedLogs: false };
+    const noApproval = { ...DEFAULT_POLICY, logApproval: false };
+
+    expect(workLogPermissions(minji, approved, 2, unlocked).canEdit).toBe(true);
+    expect(workLogPermissions(minji, approved, 2, DEFAULT_POLICY).canEdit).toBe(false);
+    expect(workLogPermissions(boss, approved, 2, noApproval)).toMatchObject({
+      canReview: false,
+      canReopen: false,
+    });
+  });
+});
+
+describe("calendar helpers", () => {
+  it("builds Monday-start weeks", () => {
+    expect(weekDates("2026-11-18")).toEqual([
+      "2026-11-16",
+      "2026-11-17",
+      "2026-11-18",
+      "2026-11-19",
+      "2026-11-20",
+      "2026-11-21",
+      "2026-11-22",
+    ]);
+    expect(weekDates("2026-11-22", false)).toHaveLength(5);
+    expect(weekDates("2026-11-22")[0]).toBe("2026-11-16");
+  });
+
+  it("covers a month with whole weeks", () => {
+    const grid = monthGrid("2026-11-18");
+    expect(grid[0][0]).toBe("2026-10-26");
+    expect(grid.at(-1)?.[6]).toBe("2026-12-06");
+    expect(grid.every((week) => week.length === 7)).toBe(true);
+  });
+
+  it("moves by months without overflowing short months", () => {
+    expect(shiftMonth("2026-01-31", 1)).toBe("2026-02-28");
+    expect(shiftMonth("2026-03-15", -3)).toBe("2025-12-15");
+  });
+
+  it("lists weekdays only", () => {
+    expect(weekdaysBetween("2026-11-20", "2026-11-23")).toEqual(["2026-11-20", "2026-11-23"]);
   });
 });

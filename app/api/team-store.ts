@@ -3,6 +3,8 @@ import {
   DEFAULT_MEMBER_COLOR,
   normalizeLogStatus,
   parseItemIds,
+  parsePolicy,
+  type TeamPolicy,
   type TeamMember,
   type WorkLog,
 } from "../lib/team";
@@ -23,6 +25,7 @@ export type MemberRow = {
   position: number;
   user_id: number | null;
   access_role: string;
+  log_viewer: number;
   created_at: string;
   updated_at: string;
   login_id?: string | null;
@@ -82,6 +85,7 @@ export async function prepareTeamTables() {
       position INTEGER NOT NULL DEFAULT 0,
       user_id INTEGER,
       access_role TEXT NOT NULL DEFAULT 'member',
+      log_viewer INTEGER NOT NULL DEFAULT 0,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     )`),
@@ -156,6 +160,9 @@ export async function prepareTeamTables() {
     "ALTER TABLE workspace_members ADD COLUMN access_role TEXT NOT NULL DEFAULT 'member'"
   );
   await addColumnIfMissing(
+    "ALTER TABLE workspace_members ADD COLUMN log_viewer INTEGER NOT NULL DEFAULT 0"
+  );
+  await addColumnIfMissing(
     "ALTER TABLE work_logs ADD COLUMN status TEXT NOT NULL DEFAULT 'submitted'"
   );
   await addColumnIfMissing(
@@ -183,6 +190,7 @@ export function toMember(row: MemberRow, includeLogin = false): TeamMember {
     position: row.position,
     accessRole: row.access_role === "manager" ? "manager" : "member",
     hasAccount: row.user_id !== null && row.user_id !== undefined,
+    logViewer: row.log_viewer === 1,
     ...(includeLogin && row.login_id ? { loginId: row.login_id } : {}),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -292,4 +300,31 @@ export function routeError(error: unknown) {
     { error: error instanceof Error ? error.message : "Unexpected error" },
     { status: 500 }
   );
+}
+
+// ------------------------------------------------------------ team policy
+
+export async function getTeamPolicy(workspaceId: string): Promise<TeamPolicy> {
+  try {
+    const row = await getD1()
+      .prepare(
+        "SELECT value FROM workspace_settings WHERE workspace_id = ? AND key = 'teamPolicy'"
+      )
+      .bind(workspaceId)
+      .first<{ value: string }>();
+    return parsePolicy(row?.value);
+  } catch {
+    return parsePolicy(null);
+  }
+}
+
+export async function saveTeamPolicy(workspaceId: string, policy: TeamPolicy) {
+  await getD1()
+    .prepare(
+      `INSERT INTO workspace_settings (workspace_id, key, value, updated_at)
+       VALUES (?, 'teamPolicy', ?, ?)
+       ON CONFLICT(workspace_id, key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`
+    )
+    .bind(workspaceId, JSON.stringify(policy), new Date().toISOString())
+    .run();
 }

@@ -1,0 +1,1 @@
+ALTER TABLE `workspace_members` ADD `log_viewer` integer DEFAULT 0 NOT NULL;

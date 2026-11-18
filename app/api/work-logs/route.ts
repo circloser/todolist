@@ -1,15 +1,20 @@
 import { getD1 } from "../../../db";
 import {
+  canViewAllLogs,
   formatLogDate,
   hasLogContent,
+  kstToday,
+  logDateError,
   normalizeItemIds,
   normalizeLogDate,
   normalizeLogRange,
   normalizeLogText,
   WORK_LOG_STATUS_LABEL,
+  type TeamPolicy,
 } from "../../lib/team";
 import { forbidden, requireWorkspaceAccess, type BoardAccess } from "../auth-store";
 import {
+  getTeamPolicy,
   logTeamHistory,
   prepareTeamTables,
   routeError,
@@ -18,7 +23,9 @@ import {
 } from "../team-store";
 
 // 업무일지: one log per member per calendar day (KST).
-// - Members write, edit and delete only their own logs, until approved.
+// - Members write, edit and delete only their own logs (until approved, when
+//   the board locks approved logs) and read others' only if the board's
+//   visibility option allows it.
 // - 부서장 read everyone's logs and approve / return (반려) / reopen them,
 //   but never edit someone else's content.
 
@@ -63,8 +70,8 @@ async function existingItemIds(workspaceId: string, ids: number[]) {
 }
 
 // Other members' logs waiting for this manager's review.
-async function pendingReviewCount(access: BoardAccess) {
-  if (!access.isManager) {
+async function pendingReviewCount(access: BoardAccess, policy: TeamPolicy) {
+  if (!access.isManager || !policy.logApproval) {
     return 0;
   }
 
@@ -88,6 +95,8 @@ export async function GET(request: Request) {
     }
 
     const url = new URL(request.url);
+    const policy = await getTeamPolicy(access.workspace.id);
+    const seesEveryone = canViewAllLogs(policy, access, { logViewer: access.member.log_viewer === 1 });
     const onlyPending = url.searchParams.get("status") === "submitted";
     const range = onlyPending
       ? ({ from: "0000-01-01", to: "9999-12-31" } as const)
@@ -100,9 +109,9 @@ export async function GET(request: Request) {
       return Response.json({ error: range.error }, { status: 400 });
     }
 
-    // Members only ever see their own logs, whatever they ask for.
+    // Without permission to read everyone's logs, you only ever get your own.
     const requested = Number(url.searchParams.get("memberId"));
-    const memberId = access.isManager
+    const memberId = seesEveryone
       ? Number.isInteger(requested) && requested > 0
         ? requested
         : null
@@ -123,14 +132,15 @@ export async function GET(request: Request) {
     const rows = await getD1()
       .prepare(
         `SELECT * FROM work_logs WHERE ${conditions.join(" AND ")}
-         ORDER BY log_date DESC, member_name LIMIT 500`
+         ORDER BY log_date DESC, member_name LIMIT 3000`
       )
       .bind(...binds)
       .all<WorkLogRow>();
 
     return Response.json({
       logs: (rows.results ?? []).map(toWorkLog),
-      pendingReview: await pendingReviewCount(access),
+      pendingReview: await pendingReviewCount(access, policy),
+      policy,
     });
   } catch (error) {
     return routeError(error);
@@ -162,6 +172,13 @@ export async function PUT(request: Request) {
       );
     }
 
+    const policy = await getTeamPolicy(workspaceId);
+    const windowError = logDateError(logDate, kstToday(), policy);
+
+    if (windowError) {
+      return Response.json({ error: windowError }, { status: 400 });
+    }
+
     const draft = {
       content: normalizeLogText(payload.content),
       plan: normalizeLogText(payload.plan),
@@ -184,7 +201,7 @@ export async function PUT(request: Request) {
       .bind(workspaceId, member.id, logDate)
       .first<{ id: number; status: string }>();
 
-    if (existed?.status === "approved") {
+    if (existed?.status === "approved" && policy.lockApprovedLogs) {
       return Response.json(
         { error: "승인된 업무일지는 수정할 수 없습니다. 부서장에게 승인 취소를 요청해 주세요." },
         { status: 409 }
@@ -341,7 +358,7 @@ export async function PATCH(request: Request) {
     return Response.json({
       logs: (updated.results ?? []).map(toWorkLog),
       reviewed: targets.length,
-      pendingReview: await pendingReviewCount(access),
+      pendingReview: await pendingReviewCount(access, await getTeamPolicy(workspaceId)),
     });
   } catch (error) {
     return routeError(error);
@@ -374,11 +391,16 @@ export async function DELETE(request: Request) {
       return forbidden("다른 구성원의 업무일지는 삭제할 수 없습니다.");
     }
 
-    if (row.status === "approved") {
+    if (row.status === "approved" && (await getTeamPolicy(workspaceId)).lockApprovedLogs) {
       return Response.json(
         { error: "승인된 업무일지는 삭제할 수 없습니다." },
         { status: 409 }
       );
+    }
+
+    const windowError = logDateError(row.log_date, kstToday(), await getTeamPolicy(workspaceId));
+    if (windowError) {
+      return Response.json({ error: windowError }, { status: 400 });
     }
 
     await getD1()

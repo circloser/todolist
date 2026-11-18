@@ -44,7 +44,9 @@ import {
   type JoinRequest,
   type MembersResponse,
   type WorkLogsResponse,
+  DEFAULT_POLICY,
   type TeamMember,
+  type TeamPolicy,
   type Viewer,
 } from "./lib/team";
 
@@ -423,6 +425,7 @@ export default function TaskBoard() {
   const [members, setMembers] = useState<TeamMember[]>([]);
   const [joinRequests, setJoinRequests] = useState<JoinRequest[]>([]);
   const [pendingReview, setPendingReview] = useState(0);
+  const [policy, setPolicy] = useState<TeamPolicy>(DEFAULT_POLICY);
   const [membersOpen, setMembersOpen] = useState(false);
   const [workLogOpen, setWorkLogOpen] = useState(false);
   const [documents, setDocuments] = useState<DocumentTemplate[]>([]);
@@ -489,6 +492,10 @@ export default function TaskBoard() {
   const isManager = me?.accessRole === "manager";
   // Mirrors the server rule: the assignee or a 부서장 may change an item.
   const canEdit = (item: Pick<WorkflowItem, "assignee">) => canEditItem(me, item);
+  // Board options a 부서장 can switch (enforced by the API as well).
+  const canCreateItems = isManager || policy.memberCanCreateItems;
+  const canDelete = (item: Pick<WorkflowItem, "assignee">) =>
+    canEdit(item) && (isManager || policy.memberCanDeleteItems);
 
   // The session cookie identifies the user; the header picks the board.
   function workspaceHeaders(init?: HeadersInit, workspaceIdOverride?: string) {
@@ -532,6 +539,7 @@ export default function TaskBoard() {
       if (response.ok) {
         setMembers(data.members ?? []);
         setJoinRequests(data.requests ?? []);
+        setPolicy(data.policy ?? DEFAULT_POLICY);
       }
     } catch {
       // The roster is optional; the board works without it.
@@ -558,6 +566,12 @@ export default function TaskBoard() {
     }
     if (data.requests) {
       setJoinRequests(data.requests);
+    }
+    if (data.policy) {
+      setPolicy(data.policy);
+      if (!data.policy.logApproval) {
+        setPendingReview(0);
+      }
     }
     if (data.assigneeSettings) {
       setAssigneeSettings(data.assigneeSettings);
@@ -3035,6 +3049,9 @@ export default function TaskBoard() {
   }
 
   function openGroupTaskForm(groupNameForTask: string) {
+    if (!canCreateItems) {
+      return;
+    }
     const name = categoryKey(groupNameForTask);
     setActiveAddGroup(name);
     setNewGroup(name === categoryKey("") ? "" : name);
@@ -3979,7 +3996,7 @@ export default function TaskBoard() {
                   <path d="M9 11h5" />
                 </svg>
                 업무일지
-                {isManager && pendingReview ? (
+                {isManager && policy.logApproval && pendingReview ? (
                   <span
                     className="ml-0.5 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-[var(--warning)] px-1 text-[10px] font-bold text-white"
                     title="승인 대기 업무일지"
@@ -4878,6 +4895,7 @@ export default function TaskBoard() {
                           {groupProgress}%
                         </span>
                       </div>
+                      {canCreateItems ? (
                       <button
                         type="button"
                         onClick={() => openGroupTaskForm(group.name)}
@@ -4888,6 +4906,7 @@ export default function TaskBoard() {
                         <span className="sm:hidden">＋</span>
                         <span className="hidden sm:inline">＋ 업무</span>
                       </button>
+                      ) : null}
                       {isManager ? (
                       <button
                         type="button"
@@ -5084,7 +5103,7 @@ export default function TaskBoard() {
                         {canEdit(item) ? (
                         <button
                           type="button"
-                          disabled={savingItemIds.has(item.id)}
+                          disabled={savingItemIds.has(item.id) || !canCreateItems}
                           onClick={() => setDuplicateTarget(item)}
                           className="tb-iconbtn h-8 w-8 disabled:cursor-not-allowed disabled:opacity-40"
                           title="업무 복제"
@@ -5099,7 +5118,7 @@ export default function TaskBoard() {
                             보기 전용
                           </span>
                         )}
-                        {canEdit(item) ? (
+                        {canDelete(item) ? (
                         <button
                           type="button"
                           disabled={deletingItemIds.has(item.id)}
@@ -6226,7 +6245,8 @@ export default function TaskBoard() {
                     setPlacingItemId(null);
                     setCreatingOnMap(true);
                   }}
-                  disabled={creatingOnMap}
+                  disabled={creatingOnMap || !canCreateItems}
+                  title={canCreateItems ? undefined : "이 보드는 부서장만 새 업무를 등록할 수 있습니다"}
                   className="tb-btn tb-btn-primary justify-center"
                 >
                   + 새 업무
@@ -8778,6 +8798,7 @@ export default function TaskBoard() {
         <MembersPanel
           members={members}
           requests={joinRequests}
+          policy={policy}
           boardAssignees={assignees}
           request={apiRequest}
           onMembersChange={applyMembersResponse}
@@ -8799,6 +8820,8 @@ export default function TaskBoard() {
           organizationName={organizationName}
           request={apiRequest}
           onPendingReviewChange={setPendingReview}
+          policy={policy}
+          boardTitle={boardTitle}
           onOpenMembers={() => {
             setWorkLogOpen(false);
             setMembersOpen(true);

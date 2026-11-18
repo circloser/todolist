@@ -6,8 +6,11 @@ import {
   normalizeMemberRole,
   pickMemberColor,
   unregisteredAssignees,
+  LOG_VISIBILITY_LABEL,
+  normalizePolicy,
   type AccessRole,
   type JoinRequest,
+  type TeamPolicy,
 } from "../../lib/team";
 import {
   forbidden,
@@ -18,10 +21,12 @@ import {
 import {
   getAssigneeColors,
   getMember,
+  getTeamPolicy,
   listMembers,
   logTeamHistory,
   prepareTeamTables,
   routeError,
+  saveTeamPolicy,
   toMember,
   type MemberRow,
 } from "../team-store";
@@ -42,6 +47,8 @@ type MemberPayload = {
   color?: string;
   active?: boolean;
   accessRole?: AccessRole;
+  logViewer?: boolean;
+  policy?: Partial<TeamPolicy>;
   renameAssignments?: boolean;
   order?: number[];
 };
@@ -82,6 +89,7 @@ async function membersResponse(access: BoardAccess, extra: object = {}, status =
       members: await listMembers(workspaceId, access.isManager),
       assigneeSettings: await getAssigneeColors(workspaceId),
       requests: access.isManager ? await joinRequests(workspaceId) : [],
+      policy: await getTeamPolicy(workspaceId),
       viewer: viewerOf(access),
     },
     { status }
@@ -379,6 +387,45 @@ export async function PATCH(request: Request) {
     const d1 = getD1();
     const now = new Date().toISOString();
 
+    if (payload.action === "update-policy") {
+      const before = await getTeamPolicy(workspaceId);
+      const policy = normalizePolicy({ ...before, ...(payload.policy ?? {}) });
+      await saveTeamPolicy(workspaceId, policy);
+
+      const on = (value: boolean) => (value ? "켬" : "끔");
+      const changes = [
+        policy.logVisibility !== before.logVisibility
+          ? `일지 열람: ${LOG_VISIBILITY_LABEL[policy.logVisibility]}`
+          : "",
+        policy.logApproval !== before.logApproval ? `일지 승인 절차 ${on(policy.logApproval)}` : "",
+        policy.lockApprovedLogs !== before.lockApprovedLogs
+          ? `승인 일지 잠금 ${on(policy.lockApprovedLogs)}`
+          : "",
+        policy.logBackdateDays !== before.logBackdateDays
+          ? `지난 일지 작성 ${policy.logBackdateDays ? `${policy.logBackdateDays}일까지` : "제한 없음"}`
+          : "",
+        policy.memberCanCreateItems !== before.memberCanCreateItems
+          ? `구성원 업무 등록 ${on(policy.memberCanCreateItems)}`
+          : "",
+        policy.memberCanDeleteItems !== before.memberCanDeleteItems
+          ? `구성원 업무 삭제 ${on(policy.memberCanDeleteItems)}`
+          : "",
+      ].filter(Boolean);
+
+      if (changes.length) {
+        await logTeamHistory({
+          workspaceId,
+          entityType: "member",
+          entityId: null,
+          action: "policy",
+          summary: `${actor}님이 운영 옵션을 변경함 (${changes.join(", ")})`,
+          actor,
+        });
+      }
+
+      return await membersResponse(access);
+    }
+
     if (payload.action === "reorder") {
       const members = await listMembers(workspaceId);
       const known = new Set(members.map((member) => member.id));
@@ -447,6 +494,8 @@ export async function PATCH(request: Request) {
         : current.access_role === "manager"
           ? "manager"
           : "member";
+    const logViewer =
+      typeof payload.logViewer === "boolean" ? payload.logViewer : current.log_viewer === 1;
 
     if (!name) {
       return Response.json({ error: "구성원 이름을 입력해 주세요." }, { status: 400 });
@@ -482,10 +531,20 @@ export async function PATCH(request: Request) {
       d1
         .prepare(
           `UPDATE workspace_members
-           SET name = ?, role = ?, color = ?, active = ?, access_role = ?, updated_at = ?
+           SET name = ?, role = ?, color = ?, active = ?, access_role = ?, log_viewer = ?, updated_at = ?
            WHERE workspace_id = ? AND id = ?`
         )
-        .bind(name, role, color, active ? 1 : 0, accessRole, now, workspaceId, current.id),
+        .bind(
+          name,
+          role,
+          color,
+          active ? 1 : 0,
+          accessRole,
+          logViewer ? 1 : 0,
+          now,
+          workspaceId,
+          current.id
+        ),
       upsertAssigneeColor(workspaceId, name, color, now),
     ];
     let renamedItems = 0;
@@ -531,6 +590,7 @@ export async function PATCH(request: Request) {
       color !== current.color ? "색상" : "",
       active !== (current.active === 1) ? (active ? "활성화" : "비활성화") : "",
       accessRole !== current.access_role ? (accessRole === "manager" ? "부서장 지정" : "부서장 해제") : "",
+      logViewer !== (current.log_viewer === 1) ? (logViewer ? "일지 열람 허용" : "일지 열람 해제") : "",
     ].filter(Boolean);
 
     if (changes.length) {

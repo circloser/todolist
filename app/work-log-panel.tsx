@@ -3,26 +3,33 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import {
+  canViewAllLogs,
   dailyActivityLines,
-  dailyStatus,
   formatLogDate,
-  isWeekend,
   kstToday,
-  monthRange,
+  logDateError,
   shiftDate,
-  WORK_LOG_STATUS_LABEL,
   workLogPermissions,
-  workLogsToCsv,
   type TeamMember,
+  type TeamPolicy,
   type Viewer,
   type WorkLog,
   type WorkLogsResponse,
 } from "./lib/team";
 import { assigneeName, isItemDone, type WorkflowItem } from "./lib/workflow";
+import WorkLogBoard from "./work-log-board";
+import {
+  LogBody,
+  ReviewActions,
+  StatusBadge,
+  formatTime,
+  groupByDate,
+  type Decision,
+} from "./work-log-parts";
+import WorkLogReport from "./work-log-report";
 
 type ApiRequest = (path: string, init?: RequestInit) => Promise<Response>;
-type Tab = "write" | "team" | "queue" | "history";
-type Decision = "approve" | "reject" | "reopen";
+type Tab = "write" | "board" | "queue" | "report";
 
 type Draft = {
   content: string;
@@ -37,7 +44,9 @@ type WorkLogPanelProps = {
   viewer: Viewer | null;
   members: TeamMember[];
   items: WorkflowItem[];
+  policy: TeamPolicy;
   organizationName: string;
+  boardTitle: string;
   request: ApiRequest;
   onPendingReviewChange?: (count: number) => void;
   onOpenMembers: () => void;
@@ -59,44 +68,13 @@ function sameDraft(first: Draft, second: Draft) {
   );
 }
 
-function formatTime(iso: string | null) {
-  if (!iso) {
-    return "";
-  }
-  const date = new Date(iso);
-  return Number.isNaN(date.getTime())
-    ? ""
-    : date.toLocaleString("ko-KR", {
-        month: "numeric",
-        day: "numeric",
-        hour: "2-digit",
-        minute: "2-digit",
-      });
-}
-
-function StatusBadge({ log }: { log: WorkLog | null }) {
-  if (!log) {
-    return <span className="tb-badge tb-badge-muted">미작성</span>;
-  }
-  const tone =
-    log.status === "approved"
-      ? "tb-badge-complete"
-      : log.status === "rejected"
-        ? "tb-badge-danger"
-        : "tb-badge-warning";
-  return <span className={`tb-badge ${tone}`}>{WORK_LOG_STATUS_LABEL[log.status]}</span>;
-}
-
-function mergeLogs(current: WorkLog[], updates: WorkLog[]) {
-  const byId = new Map(updates.map((log) => [log.id, log] as const));
-  return current.map((log) => byId.get(log.id) ?? log);
-}
-
 export default function WorkLogPanel({
   viewer,
   members,
   items,
+  policy,
   organizationName,
+  boardTitle,
   request,
   onPendingReviewChange,
   onOpenMembers,
@@ -104,6 +82,9 @@ export default function WorkLogPanel({
 }: WorkLogPanelProps) {
   const isManager = viewer?.accessRole === "manager";
   const myId = viewer?.memberId ?? null;
+  const myMember = members.find((member) => member.id === myId) ?? null;
+  const canSeeAll = canViewAllLogs(policy, viewer, myMember);
+  const showQueue = isManager && policy.logApproval;
   const [tab, setTab] = useState<Tab>("write");
   const [date, setDate] = useState(kstToday);
   const [dayLogs, setDayLogs] = useState<WorkLog[]>([]);
@@ -113,25 +94,21 @@ export default function WorkLogPanel({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
-  const [historyMonth, setHistoryMonth] = useState(() => kstToday().slice(0, 7));
-  const [historyMemberId, setHistoryMemberId] = useState<number | "all">(
-    () => myId ?? "all"
-  );
-  const [historyLogs, setHistoryLogs] = useState<WorkLog[]>([]);
-  const [historyLoading, setHistoryLoading] = useState(false);
   const [queueLogs, setQueueLogs] = useState<WorkLog[]>([]);
   const [queueLoading, setQueueLoading] = useState(false);
   const [pendingReview, setPendingReview] = useState(0);
 
   const myLog =
     dayLogs.find((log) => log.memberId === myId && log.logDate === date) ?? null;
-  const permissions = workLogPermissions(viewer, myLog, myId);
+  const today = kstToday();
+  const windowError = logDateError(date, today, policy);
+  const permissions = workLogPermissions(viewer, myLog, myId, policy);
+  const canWrite = permissions.canEdit && !windowError;
   const dirty = !sameDraft(draft, draftFrom(myLog));
   const itemsById = useMemo(
     () => new Map(items.map((item) => [item.id, item] as const)),
     [items]
   );
-  const today = kstToday();
 
   const updatePending = useCallback(
     (count: number | undefined) => {
@@ -161,7 +138,9 @@ export default function WorkLogPanel({
       setDayLoading(true);
       setError("");
       try {
-        const logs = await fetchLogs(`date=${encodeURIComponent(targetDate)}`);
+        const logs = await fetchLogs(
+          `date=${encodeURIComponent(targetDate)}${myId ? `&memberId=${myId}` : ""}`
+        );
         setDayLogs(logs);
         return logs;
       } catch (loadError) {
@@ -171,28 +150,8 @@ export default function WorkLogPanel({
         setDayLoading(false);
       }
     },
-    [fetchLogs]
+    [fetchLogs, myId]
   );
-
-  const loadHistory = useCallback(async () => {
-    const range = monthRange(historyMonth);
-    if (!range) {
-      return;
-    }
-    setHistoryLoading(true);
-    setError("");
-    try {
-      const params = new URLSearchParams({ from: range.from, to: range.to });
-      if (historyMemberId !== "all") {
-        params.set("memberId", String(historyMemberId));
-      }
-      setHistoryLogs(await fetchLogs(params.toString()));
-    } catch (loadError) {
-      setError(loadError instanceof Error ? loadError.message : "업무일지를 불러오지 못했습니다.");
-    } finally {
-      setHistoryLoading(false);
-    }
-  }, [fetchLogs, historyMemberId, historyMonth]);
 
   const loadQueue = useCallback(async () => {
     setQueueLoading(true);
@@ -206,7 +165,7 @@ export default function WorkLogPanel({
     }
   }, [fetchLogs]);
 
-  // Fetch the selected day and reset the editor to what is saved for it.
+  // Fetch my log for the selected day and reset the editor to it.
   useEffect(() => {
     let cancelled = false;
     const timer = window.setTimeout(() => {
@@ -225,24 +184,13 @@ export default function WorkLogPanel({
     };
   }, [date, loadDay, myId]);
 
-  // Review tabs always show fresh data (others may have just (re)submitted).
   useEffect(() => {
-    if (tab === "write") {
+    if (tab !== "queue") {
       return;
     }
-    const timer = window.setTimeout(() => {
-      if (tab === "history") {
-        void loadHistory();
-      } else if (tab === "queue") {
-        void loadQueue();
-      } else {
-        void loadDay(date);
-      }
-    }, 0);
+    const timer = window.setTimeout(() => void loadQueue(), 0);
     return () => window.clearTimeout(timer);
-    // `date` changes are already handled by the day effect above.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tab, loadHistory, loadQueue, loadDay]);
+  }, [tab, loadQueue]);
 
   function confirmDiscard() {
     return !dirty || window.confirm("저장하지 않은 내용이 있습니다. 버리고 이동할까요?");
@@ -256,13 +204,25 @@ export default function WorkLogPanel({
     setDate(next);
   }
 
-  function openDate(targetDate: string) {
+  function openOwn(targetDate: string) {
     if (!confirmDiscard()) {
       return;
     }
     setNotice("");
     setTab("write");
     setDate(targetDate);
+  }
+
+  function switchTab(next: Tab) {
+    if (next !== "write" && tab === "write" && !confirmDiscard()) {
+      return;
+    }
+    if (tab === "write" && next !== "write") {
+      setDraft(draftFrom(myLog));
+    }
+    setError("");
+    setNotice("");
+    setTab(next);
   }
 
   async function saveLog() {
@@ -285,7 +245,11 @@ export default function WorkLogPanel({
       const saved = data.log;
       setDayLogs((current) => [saved, ...current.filter((log) => log.id !== saved.id)]);
       setDraft(draftFrom(saved));
-      setNotice(`${formatLogDate(date)} 업무일지를 제출했습니다.${isManager ? "" : " 부서장 승인을 기다립니다."}`);
+      setNotice(
+        policy.logApproval
+          ? `${formatLogDate(date)} 업무일지를 제출했습니다.${isManager ? "" : " 부서장 승인을 기다립니다."}`
+          : `${formatLogDate(date)} 업무일지를 저장했습니다.`
+      );
     } catch (saveError) {
       setError(saveError instanceof Error ? saveError.message : "업무일지를 저장하지 못했습니다.");
     } finally {
@@ -311,7 +275,6 @@ export default function WorkLogPanel({
         throw new Error(data.error ?? "업무일지를 삭제하지 못했습니다.");
       }
       setDayLogs((current) => current.filter((entry) => entry.id !== log.id));
-      setHistoryLogs((current) => current.filter((entry) => entry.id !== log.id));
       setDraft(EMPTY_DRAFT);
       setNotice("업무일지를 삭제했습니다.");
     } catch (deleteError) {
@@ -321,40 +284,41 @@ export default function WorkLogPanel({
     }
   }
 
-  async function review(ids: number[], decision: Decision, comment = "") {
-    setSaving(true);
-    setError("");
-    setNotice("");
-    try {
-      const response = await request("/api/work-logs", {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ids, decision, comment }),
-      });
-      const data = (await response.json()) as WorkLogsResponse;
-      if (!response.ok) {
-        throw new Error(data.error ?? "검토 결과를 저장하지 못했습니다.");
+  const review = useCallback(
+    async (ids: number[], decision: Decision, comment = "") => {
+      setSaving(true);
+      setError("");
+      setNotice("");
+      try {
+        const response = await request("/api/work-logs", {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ ids, decision, comment }),
+        });
+        const data = (await response.json()) as WorkLogsResponse;
+        if (!response.ok) {
+          throw new Error(data.error ?? "검토 결과를 저장하지 못했습니다.");
+        }
+        const updated = data.logs ?? [];
+        setQueueLogs((current) =>
+          current
+            .map((log) => updated.find((entry) => entry.id === log.id) ?? log)
+            .filter((log) => log.status === "submitted")
+        );
+        updatePending(data.pendingReview);
+        const label =
+          decision === "approve" ? "승인" : decision === "reject" ? "반려" : "승인 취소";
+        setNotice(`업무일지 ${data.reviewed ?? updated.length}건을 ${label}했습니다.`);
+        return updated;
+      } catch (reviewError) {
+        setError(reviewError instanceof Error ? reviewError.message : "검토 결과를 저장하지 못했습니다.");
+        return null;
+      } finally {
+        setSaving(false);
       }
-      const updated = data.logs ?? [];
-      setDayLogs((current) => mergeLogs(current, updated));
-      setHistoryLogs((current) => mergeLogs(current, updated));
-      setQueueLogs((current) =>
-        current
-          .map((log) => updated.find((entry) => entry.id === log.id) ?? log)
-          .filter((log) => log.status === "submitted")
-      );
-      updatePending(data.pendingReview);
-      const label =
-        decision === "approve" ? "승인" : decision === "reject" ? "반려" : "승인 취소";
-      setNotice(`업무일지 ${data.reviewed ?? updated.length}건을 ${label}했습니다.`);
-      return true;
-    } catch (reviewError) {
-      setError(reviewError instanceof Error ? reviewError.message : "검토 결과를 저장하지 못했습니다.");
-      return false;
-    } finally {
-      setSaving(false);
-    }
-  }
+    },
+    [request, updatePending]
+  );
 
   function fillFromBoard() {
     if (!viewer) {
@@ -385,27 +349,6 @@ export default function WorkLogPanel({
     }));
   }
 
-  function downloadCsv() {
-    const titles = new Map(items.map((item) => [item.id, item.title] as const));
-    const blob = new Blob([workLogsToCsv(historyLogs, titles)], {
-      type: "text/csv;charset=utf-8",
-    });
-    const url = URL.createObjectURL(blob);
-    const anchor = document.createElement("a");
-    const who =
-      historyMemberId === "all"
-        ? "전체"
-        : members.find((entry) => entry.id === historyMemberId)?.name ?? "구성원";
-    anchor.href = url;
-    anchor.download = `${organizationName}_업무일지_${historyMonth}_${who}.csv`
-      .replace(/[\\/:*?"<>|]+/g, "_")
-      .replace(/\s+/g, " ");
-    document.body.appendChild(anchor);
-    anchor.click();
-    anchor.remove();
-    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
-  }
-
   // Suggested links: my own open items first, then search hits.
   const suggestedItems = useMemo(() => {
     if (!viewer) {
@@ -424,44 +367,15 @@ export default function WorkLogPanel({
     return pool.filter((item) => !draft.itemIds.includes(item.id)).slice(0, 12);
   }, [draft.itemIds, itemQuery, items, viewer]);
 
-  const status = useMemo(() => dailyStatus(members, dayLogs, date), [members, dayLogs, date]);
-  const dayReviewable = dayLogs.filter(
-    (log) => log.memberId !== myId && log.status === "submitted"
-  );
-
-  const historyGroups = useMemo(() => groupByDate(historyLogs), [historyLogs]);
   const queueGroups = useMemo(() => groupByDate(queueLogs), [queueLogs]);
 
-  const historyStats = useMemo(() => {
-    const range = monthRange(historyMonth);
-    if (!range || historyMemberId === "all") {
-      return null;
-    }
-    const lastDay = historyMonth === today.slice(0, 7) ? today : range.to;
-    let workdays = 0;
-    for (let day = range.from; day <= lastDay; day = shiftDate(day, 1)) {
-      if (!isWeekend(day)) {
-        workdays += 1;
-      }
-    }
-    return {
-      written: historyLogs.length,
-      approved: historyLogs.filter((log) => log.status === "approved").length,
-      workdays,
-    };
-  }, [historyLogs, historyMemberId, historyMonth, today]);
-
-  const tabs: Array<[Tab, string]> = isManager
-    ? [
-        ["write", "내 일지"],
-        ["team", "팀 현황"],
-        ["queue", `승인 대기${pendingReview ? ` ${pendingReview}` : ""}`],
-        ["history", "기록"],
-      ]
-    : [
-        ["write", "내 일지"],
-        ["history", "기록"],
-      ];
+  const tabs: Array<[Tab, string]> = [
+    ["write", "내 일지"],
+    ["board", "모아보기"],
+    ...(showQueue ? ([["queue", `승인 대기${pendingReview ? ` ${pendingReview}` : ""}`]] as Array<[Tab, string]>) : []),
+    ["report", "리포트·인쇄"],
+  ];
+  const wide = tab === "board" || tab === "report";
 
   const dateNav = (
     <div className="flex flex-wrap items-center gap-1.5">
@@ -497,42 +411,6 @@ export default function WorkLogPanel({
     </div>
   );
 
-  function logCard(log: WorkLog, showDate = false) {
-    const logMember = members.find((entry) => entry.id === log.memberId);
-    const rights = workLogPermissions(viewer, log, log.memberId);
-    return (
-      <article
-        key={log.id}
-        className="rounded-[var(--radius)] border border-[var(--border)] bg-[var(--surface)] p-3"
-        style={{ borderLeft: `4px solid ${logMember?.color ?? "var(--border-strong)"}` }}
-      >
-        <header className="mb-2 flex flex-wrap items-center gap-2">
-          <span className="font-semibold">{log.memberName}</span>
-          {showDate ? (
-            <span className="text-xs text-[var(--text-muted)]">{formatLogDate(log.logDate)}</span>
-          ) : null}
-          <StatusBadge log={log} />
-          <span className="text-[11px] text-[var(--text-faint)]">
-            {formatTime(log.updatedAt)} 제출
-          </span>
-          {log.memberId === myId ? (
-            <button
-              type="button"
-              onClick={() => openDate(log.logDate)}
-              className="tb-btn ml-auto !px-2 !py-1 text-xs"
-            >
-              열기
-            </button>
-          ) : null}
-        </header>
-        <LogBody log={log} itemsById={itemsById} />
-        {rights.canReview ? (
-          <ReviewActions log={log} busy={saving} onReview={review} />
-        ) : null}
-      </article>
-    );
-  }
-
   return (
     <div
       className="fixed inset-0 z-50 flex items-start justify-center overflow-auto bg-black/40 p-4 backdrop-blur-sm"
@@ -543,7 +421,7 @@ export default function WorkLogPanel({
       }}
     >
       <div
-        className="tb-card my-6 w-full max-w-[920px] shadow-[var(--shadow-lg)]"
+        className={`tb-card my-6 w-full shadow-[var(--shadow-lg)] ${wide ? "max-w-[1280px]" : "max-w-[920px]"}`}
         onClick={(event) => event.stopPropagation()}
         role="dialog"
         aria-modal="true"
@@ -561,7 +439,7 @@ export default function WorkLogPanel({
                 role="tab"
                 aria-selected={tab === key}
                 data-active={tab === key}
-                onClick={() => setTab(key)}
+                onClick={() => switchTab(key)}
                 className="tb-seg-btn"
               >
                 {label}
@@ -620,7 +498,7 @@ export default function WorkLogPanel({
                   <span>불러오는 중…</span>
                 ) : (
                   <>
-                    <StatusBadge log={myLog} />
+                    <StatusBadge log={myLog} approval={policy.logApproval} />
                     {myLog ? <span>제출 {formatTime(myLog.updatedAt)}</span> : null}
                     {myLog?.status === "approved" ? (
                       <span>
@@ -629,12 +507,16 @@ export default function WorkLogPanel({
                     ) : null}
                   </>
                 )}
-                {dirty && permissions.canEdit ? (
+                {dirty && canWrite ? (
                   <span className="tb-badge tb-badge-warning">저장 안 됨</span>
                 ) : null}
               </div>
 
-              {myLog?.status === "rejected" ? (
+              {windowError ? (
+                <div className="rounded-[var(--radius)] border border-[var(--warning-border)] bg-[var(--warning-soft)] px-3 py-2 text-sm">
+                  {windowError}
+                </div>
+              ) : myLog?.status === "rejected" ? (
                 <div className="rounded-[var(--radius)] border border-[var(--danger-border)] bg-[var(--danger-soft)] px-3 py-2 text-sm">
                   <div className="font-semibold text-[var(--danger)]">
                     {myLog.reviewerName}님이 반려했습니다
@@ -644,14 +526,18 @@ export default function WorkLogPanel({
                     내용을 보완해 다시 제출해 주세요.
                   </div>
                 </div>
-              ) : myLog?.status === "approved" ? (
+              ) : myLog?.status === "approved" && policy.lockApprovedLogs ? (
                 <div className="rounded-[var(--radius)] border border-[var(--complete-border)] bg-[var(--complete-soft)] px-3 py-2 text-sm">
                   승인된 일지는 수정할 수 없습니다. 고칠 내용이 있으면 부서장에게 승인
                   취소를 요청해 주세요.
                 </div>
+              ) : myLog?.status === "approved" ? (
+                <div className="rounded-[var(--radius)] border border-[var(--complete-border)] bg-[var(--complete-soft)] px-3 py-2 text-sm">
+                  승인된 일지입니다. 수정하면 다시 승인 대기 상태가 됩니다.
+                </div>
               ) : null}
 
-              <fieldset disabled={!permissions.canEdit || saving} className="m-0 min-w-0 space-y-4 border-0 p-0">
+              <fieldset disabled={!canWrite || saving} className="m-0 min-w-0 space-y-4 border-0 p-0">
                 <label className="block">
                   <span className="tb-label flex items-center justify-between gap-2">
                     <span>오늘 한 일</span>
@@ -686,7 +572,7 @@ export default function WorkLogPanel({
                         title="연결 해제"
                       >
                         {itemsById.get(id)?.title ?? `삭제된 업무 #${id}`}
-                        {permissions.canEdit ? " ×" : ""}
+                        {canWrite ? " ×" : ""}
                       </button>
                     ))}
                     {!draft.itemIds.length ? (
@@ -695,7 +581,7 @@ export default function WorkLogPanel({
                       </span>
                     ) : null}
                   </div>
-                  {permissions.canEdit ? (
+                  {canWrite ? (
                     <div className="mt-2 rounded-[var(--radius)] border border-dashed border-[var(--border-strong)] p-2">
                       <input
                         value={itemQuery}
@@ -756,7 +642,7 @@ export default function WorkLogPanel({
                 </div>
               </fieldset>
 
-              {permissions.canEdit ? (
+              {canWrite ? (
                 <div className="flex flex-wrap items-center justify-end gap-2 border-t border-[var(--border)] pt-3">
                   {permissions.canDelete && myLog ? (
                     <button
@@ -786,62 +672,31 @@ export default function WorkLogPanel({
                   >
                     {saving
                       ? "저장 중…"
-                      : myLog?.status === "rejected"
-                        ? "보완해 다시 제출"
-                        : myLog
-                          ? "수정해 제출"
-                          : "일지 제출"}
+                      : !policy.logApproval
+                        ? "일지 저장"
+                        : myLog?.status === "rejected"
+                          ? "보완해 다시 제출"
+                          : myLog
+                            ? "수정해 제출"
+                            : "일지 제출"}
                   </button>
                 </div>
               ) : null}
             </div>
-          ) : tab === "team" && isManager ? (
-            <div className="space-y-4">
-              <div className="flex flex-wrap items-center gap-3">
-                {dateNav}
-                <span className="ml-auto text-sm">
-                  작성 <strong className="text-[var(--success)]">{status.written}</strong>/
-                  {status.rows.length}명
-                </span>
-                {dayReviewable.length ? (
-                  <button
-                    type="button"
-                    onClick={() => void review(dayReviewable.map((log) => log.id), "approve")}
-                    disabled={saving}
-                    className="tb-btn tb-btn-primary !py-1.5 text-sm"
-                  >
-                    대기 {dayReviewable.length}건 일괄 승인
-                  </button>
-                ) : null}
-              </div>
-              {status.missing.length && !dayLoading ? (
-                <div className="rounded-[var(--radius)] border border-[var(--warning-border)] bg-[var(--warning-soft)] px-3 py-2 text-sm">
-                  미작성: {status.missing.map((entry) => entry.name).join(", ")}
-                </div>
-              ) : null}
-              <div className="grid gap-3 md:grid-cols-2">
-                {status.rows.map(({ member: rowMember, log }) =>
-                  log ? (
-                    logCard(log)
-                  ) : (
-                    <article
-                      key={rowMember.id}
-                      className="rounded-[var(--radius)] border border-[var(--border)] bg-[var(--surface)] p-3"
-                      style={{ borderLeft: `4px solid ${rowMember.color}` }}
-                    >
-                      <header className="flex items-center gap-2">
-                        <span className="font-semibold">{rowMember.name}</span>
-                        {rowMember.role ? (
-                          <span className="text-xs text-[var(--text-faint)]">{rowMember.role}</span>
-                        ) : null}
-                        <StatusBadge log={null} />
-                      </header>
-                    </article>
-                  )
-                )}
-              </div>
-            </div>
-          ) : tab === "queue" && isManager ? (
+          ) : tab === "board" ? (
+            <WorkLogBoard
+              viewer={viewer}
+              members={members}
+              itemsById={itemsById}
+              policy={policy}
+              canSeeAll={canSeeAll}
+              organizationName={organizationName}
+              busy={saving}
+              fetchLogs={fetchLogs}
+              review={review}
+              onOpenOwn={openOwn}
+            />
+          ) : tab === "queue" && showQueue ? (
             <div className="space-y-4">
               <div className="flex flex-wrap items-center gap-2">
                 <span className="text-sm text-[var(--text-muted)]">
@@ -866,7 +721,28 @@ export default function WorkLogPanel({
                     <h3 className="mb-2 text-sm font-semibold text-[var(--text-muted)]">
                       {formatLogDate(logDate)}
                     </h3>
-                    <div className="space-y-2">{logs.map((log) => logCard(log))}</div>
+                    <div className="grid gap-2 lg:grid-cols-2">
+                      {logs.map((log) => {
+                        const member = members.find((entry) => entry.id === log.memberId);
+                        return (
+                          <article
+                            key={log.id}
+                            className="rounded-[var(--radius)] border border-[var(--border)] bg-[var(--surface)] p-3"
+                            style={{ borderLeft: `4px solid ${member?.color ?? "var(--border-strong)"}` }}
+                          >
+                            <header className="mb-2 flex flex-wrap items-center gap-2">
+                              <span className="font-semibold">{log.memberName}</span>
+                              <StatusBadge log={log} />
+                              <span className="text-[11px] text-[var(--text-faint)]">
+                                {formatTime(log.updatedAt)} 제출
+                              </span>
+                            </header>
+                            <LogBody log={log} itemsById={itemsById} />
+                            <ReviewActions log={log} busy={saving} onReview={review} />
+                          </article>
+                        );
+                      })}
+                    </div>
                   </section>
                 ))
               ) : (
@@ -876,206 +752,19 @@ export default function WorkLogPanel({
               )}
             </div>
           ) : (
-            <div className="space-y-4">
-              <div className="flex flex-wrap items-center gap-2">
-                {isManager ? (
-                  <select
-                    value={historyMemberId}
-                    onChange={(event) =>
-                      setHistoryMemberId(
-                        event.target.value === "all" ? "all" : Number(event.target.value)
-                      )
-                    }
-                    className="tb-field w-auto !py-1.5 text-sm"
-                    aria-label="조회 구성원"
-                  >
-                    <option value="all">전체 구성원</option>
-                    {members.map((entry) => (
-                      <option key={entry.id} value={entry.id}>
-                        {entry.name}
-                        {entry.active ? "" : " (비활성)"}
-                      </option>
-                    ))}
-                  </select>
-                ) : null}
-                <input
-                  type="month"
-                  value={historyMonth}
-                  onChange={(event) => setHistoryMonth(event.target.value)}
-                  className="tb-field w-auto !py-1.5 text-sm"
-                  aria-label="조회 월"
-                />
-                {historyStats ? (
-                  <span className="text-sm text-[var(--text-muted)]">
-                    평일 {historyStats.workdays}일 중{" "}
-                    <strong className="text-[var(--text)]">{historyStats.written}일</strong> 작성 ·
-                    승인 {historyStats.approved}
-                  </span>
-                ) : (
-                  <span className="text-sm text-[var(--text-muted)]">{historyLogs.length}건</span>
-                )}
-                <button
-                  type="button"
-                  onClick={downloadCsv}
-                  disabled={!historyLogs.length}
-                  className="tb-btn ml-auto text-sm"
-                >
-                  CSV 다운로드
-                </button>
-              </div>
-              {historyLoading ? (
-                <div className="py-8 text-center text-sm text-[var(--text-muted)]">불러오는 중…</div>
-              ) : historyGroups.length ? (
-                <div className="space-y-4">
-                  {historyGroups.map(([logDate, logs]) => (
-                    <section key={logDate}>
-                      <h3 className="mb-2 text-sm font-semibold text-[var(--text-muted)]">
-                        {formatLogDate(logDate)}
-                      </h3>
-                      <div className="space-y-2">{logs.map((log) => logCard(log))}</div>
-                    </section>
-                  ))}
-                </div>
-              ) : (
-                <div className="py-8 text-center text-sm text-[var(--text-muted)]">
-                  이 기간에 작성된 업무일지가 없습니다.
-                </div>
-              )}
-            </div>
+            <WorkLogReport
+              viewer={viewer}
+              members={members}
+              items={items}
+              policy={policy}
+              canSeeAll={canSeeAll}
+              organizationName={organizationName}
+              boardTitle={boardTitle}
+              fetchLogs={fetchLogs}
+            />
           )}
         </div>
       </div>
-    </div>
-  );
-}
-
-function groupByDate(logs: WorkLog[]) {
-  const groups = new Map<string, WorkLog[]>();
-  for (const log of logs) {
-    groups.set(log.logDate, [...(groups.get(log.logDate) ?? []), log]);
-  }
-  return [...groups.entries()].sort(([first], [second]) => second.localeCompare(first));
-}
-
-function ReviewActions({
-  log,
-  busy,
-  onReview,
-}: {
-  log: WorkLog;
-  busy: boolean;
-  onReview: (ids: number[], decision: Decision, comment?: string) => Promise<boolean>;
-}) {
-  const [rejecting, setRejecting] = useState(false);
-  const [reason, setReason] = useState("");
-
-  return (
-    <div className="mt-3 border-t border-[var(--border)] pt-2">
-      {log.status !== "submitted" && log.reviewerName ? (
-        <p className="mb-2 text-xs text-[var(--text-muted)]">
-          {log.reviewerName} {log.status === "approved" ? "승인" : "반려"} · {formatTime(log.reviewedAt)}
-          {log.reviewComment ? ` — ${log.reviewComment}` : ""}
-        </p>
-      ) : null}
-      {rejecting ? (
-        <div className="flex flex-wrap gap-2">
-          <input
-            value={reason}
-            onChange={(event) => setReason(event.target.value)}
-            className="tb-field min-w-[180px] flex-1 !py-1.5 text-sm"
-            placeholder="반려 사유 (작성자에게 표시됩니다)"
-            aria-label={`${log.memberName} 반려 사유`}
-            maxLength={500}
-            autoFocus
-          />
-          <button
-            type="button"
-            disabled={busy || !reason.trim()}
-            onClick={() =>
-              void onReview([log.id], "reject", reason).then((ok) => {
-                if (ok) {
-                  setRejecting(false);
-                  setReason("");
-                }
-              })
-            }
-            className="tb-btn !px-3 !py-1.5 text-xs text-[var(--danger)]"
-          >
-            반려하기
-          </button>
-          <button type="button" onClick={() => setRejecting(false)} className="tb-btn !px-3 !py-1.5 text-xs">
-            취소
-          </button>
-        </div>
-      ) : (
-        <div className="flex flex-wrap gap-2">
-          {log.status !== "approved" ? (
-            <button
-              type="button"
-              disabled={busy}
-              onClick={() => void onReview([log.id], "approve")}
-              className="tb-btn tb-btn-primary !px-3 !py-1.5 text-xs"
-            >
-              승인
-            </button>
-          ) : null}
-          {log.status !== "rejected" ? (
-            <button
-              type="button"
-              disabled={busy}
-              onClick={() => setRejecting(true)}
-              className="tb-btn !px-3 !py-1.5 text-xs"
-            >
-              반려
-            </button>
-          ) : null}
-          {log.status !== "submitted" ? (
-            <button
-              type="button"
-              disabled={busy}
-              onClick={() => void onReview([log.id], "reopen")}
-              className="tb-btn !px-3 !py-1.5 text-xs"
-            >
-              승인 취소
-            </button>
-          ) : null}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function LogBody({
-  log,
-  itemsById,
-}: {
-  log: WorkLog;
-  itemsById: Map<number, WorkflowItem>;
-}) {
-  return (
-    <div className="space-y-2 text-sm">
-      {log.content ? <p className="whitespace-pre-wrap break-words">{log.content}</p> : null}
-      {log.itemIds.length ? (
-        <div className="flex flex-wrap gap-1">
-          {log.itemIds.map((id) => (
-            <span key={id} className="tb-chip">
-              {itemsById.get(id)?.title ?? `삭제된 업무 #${id}`}
-            </span>
-          ))}
-        </div>
-      ) : null}
-      {log.plan ? (
-        <p className="whitespace-pre-wrap break-words text-[var(--text-muted)]">
-          <span className="font-semibold text-[var(--text)]">계획 </span>
-          {log.plan}
-        </p>
-      ) : null}
-      {log.issues ? (
-        <p className="whitespace-pre-wrap break-words text-[var(--warning)]">
-          <span className="font-semibold">이슈 </span>
-          {log.issues}
-        </p>
-      ) : null}
     </div>
   );
 }

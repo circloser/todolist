@@ -18,6 +18,8 @@ export type TeamMember = {
   position: number;
   accessRole: AccessRole;
   hasAccount: boolean;
+  /** May read everyone's 업무일지 when visibility is "selected". */
+  logViewer: boolean;
   /** Only sent to managers. */
   loginId?: string;
   createdAt: string;
@@ -59,6 +61,7 @@ export type MembersResponse = {
   member?: TeamMember;
   assigneeSettings?: Record<string, string>;
   requests?: JoinRequest[];
+  policy?: TeamPolicy;
   imported?: number;
   renamedItems?: number;
   error?: string;
@@ -69,6 +72,7 @@ export type WorkLogsResponse = {
   log?: WorkLog | null;
   reviewed?: number;
   pendingReview?: number;
+  policy?: TeamPolicy;
   error?: string;
 };
 
@@ -168,18 +172,161 @@ export function normalizeLogStatus(value: unknown): WorkLogStatus {
 export function workLogPermissions(
   viewer: Pick<Viewer, "memberId" | "accessRole"> | null,
   log: Pick<WorkLog, "memberId" | "status"> | null,
-  memberId: number | null
+  memberId: number | null,
+  policy: TeamPolicy = DEFAULT_POLICY
 ) {
   const own = Boolean(viewer && memberId !== null && viewer.memberId === memberId);
   const manager = viewer?.accessRole === "manager";
   const status = log?.status ?? null;
+  const locked = status === "approved" && policy.lockApprovedLogs;
 
   return {
-    canEdit: own && status !== "approved",
-    canDelete: own && Boolean(log) && status !== "approved",
-    canReview: Boolean(manager && log && !own),
-    canReopen: Boolean(manager && log && !own && status !== "submitted"),
+    canEdit: own && !locked,
+    canDelete: own && Boolean(log) && !locked,
+    canReview: Boolean(policy.logApproval && manager && log && !own),
+    canReopen: Boolean(policy.logApproval && manager && log && !own && status !== "submitted"),
   };
+}
+
+// ------------------------------------------------------------ team policy
+// Board-wide switches a 부서장 can turn on and off. Stored as JSON in
+// workspace_settings and enforced by the API.
+
+export type LogVisibility = "own" | "selected" | "team";
+
+export type TeamPolicy = {
+  /** Who may read other members' 업무일지 (managers always can). */
+  logVisibility: LogVisibility;
+  /** Logs go through 부서장 approval. Off: logs are simply recorded. */
+  logApproval: boolean;
+  /** Approved logs can no longer be edited or deleted by their author. */
+  lockApprovedLogs: boolean;
+  /** How many past days a log may be written for (0 = no limit). */
+  logBackdateDays: number;
+  /** Members may register new work items (always their own). */
+  memberCanCreateItems: boolean;
+  /** Members may delete work items assigned to them. */
+  memberCanDeleteItems: boolean;
+};
+
+export const DEFAULT_POLICY: TeamPolicy = {
+  logVisibility: "own",
+  logApproval: true,
+  lockApprovedLogs: true,
+  logBackdateDays: 0,
+  memberCanCreateItems: true,
+  memberCanDeleteItems: true,
+};
+
+export const LOG_VISIBILITY_LABEL: Record<LogVisibility, string> = {
+  own: "본인 일지만",
+  selected: "지정한 구성원은 전체 열람",
+  team: "모든 구성원이 전체 열람",
+};
+
+export const BACKDATE_CHOICES = [0, 1, 3, 7, 14, 30];
+
+export function normalizePolicy(raw: unknown): TeamPolicy {
+  const value = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
+  const bool = (key: keyof TeamPolicy) =>
+    typeof value[key] === "boolean" ? (value[key] as boolean) : (DEFAULT_POLICY[key] as boolean);
+  const days = Number(value.logBackdateDays);
+
+  return {
+    logVisibility:
+      value.logVisibility === "selected" || value.logVisibility === "team"
+        ? value.logVisibility
+        : "own",
+    logApproval: bool("logApproval"),
+    lockApprovedLogs: bool("lockApprovedLogs"),
+    logBackdateDays: Number.isInteger(days) && days > 0 ? Math.min(days, 365) : 0,
+    memberCanCreateItems: bool("memberCanCreateItems"),
+    memberCanDeleteItems: bool("memberCanDeleteItems"),
+  };
+}
+
+export function parsePolicy(raw: string | null | undefined) {
+  if (!raw) {
+    return DEFAULT_POLICY;
+  }
+  try {
+    return normalizePolicy(JSON.parse(raw));
+  } catch {
+    return DEFAULT_POLICY;
+  }
+}
+
+export function canViewAllLogs(
+  policy: TeamPolicy,
+  viewer: Pick<Viewer, "accessRole"> | null,
+  member: Pick<TeamMember, "logViewer"> | null
+) {
+  if (!viewer) {
+    return false;
+  }
+  return (
+    viewer.accessRole === "manager" ||
+    policy.logVisibility === "team" ||
+    (policy.logVisibility === "selected" && Boolean(member?.logViewer))
+  );
+}
+
+// Null when a log may be written for `date`, otherwise the reason it can't.
+export function logDateError(date: string, today: string, policy: TeamPolicy) {
+  if (!policy.logBackdateDays) {
+    return null;
+  }
+  if (date > today) {
+    return "미래 날짜의 업무일지는 작성할 수 없습니다.";
+  }
+  if (daysBetween(date, today) > policy.logBackdateDays) {
+    return `지난 업무일지는 ${policy.logBackdateDays}일 전까지만 작성·수정할 수 있습니다.`;
+  }
+  return null;
+}
+
+// ------------------------------------------------------------- calendars
+
+/** Monday-start week containing `anchor`. */
+export function weekDates(anchor: string, includeWeekend = true) {
+  const [year, month, day] = anchor.split("-").map(Number);
+  const weekday = new Date(Date.UTC(year, month - 1, day)).getUTCDay();
+  const monday = shiftDate(anchor, weekday === 0 ? -6 : 1 - weekday);
+  const dates = Array.from({ length: 7 }, (_, index) => shiftDate(monday, index));
+  return includeWeekend ? dates : dates.slice(0, 5);
+}
+
+/** Calendar weeks (Monday start) covering the month of `anchor`. */
+export function monthGrid(anchor: string) {
+  const range = monthRange(anchor.slice(0, 7));
+  if (!range) {
+    return [];
+  }
+  const weeks: string[][] = [];
+  for (let start = weekDates(range.from)[0]; start <= range.to; start = shiftDate(start, 7)) {
+    weeks.push(Array.from({ length: 7 }, (_, index) => shiftDate(start, index)));
+  }
+  return weeks;
+}
+
+export function shiftMonth(anchor: string, months: number) {
+  const [year, month, day] = anchor.split("-").map(Number);
+  const target = new Date(Date.UTC(year, month - 1 + months, 1));
+  const lastDay = new Date(
+    Date.UTC(target.getUTCFullYear(), target.getUTCMonth() + 1, 0)
+  ).getUTCDate();
+  target.setUTCDate(Math.min(day, lastDay));
+  return target.toISOString().slice(0, 10);
+}
+
+export function weekdaysBetween(from: string, to: string) {
+  const days: string[] = [];
+  for (let day = from; day <= to; day = shiftDate(day, 1)) {
+    if (!isWeekend(day)) {
+      days.push(day);
+    }
+  }
+  return days;
 }
 
 export const MEMBER_NAME_MAX = 40;

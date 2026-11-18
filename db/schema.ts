@@ -227,6 +227,8 @@ export const workspaceMembers = sqliteTable(
     userId: integer("user_id"),
     // 'manager' (부서장) or 'member' (구성원).
     accessRole: text("access_role").notNull().default("member"),
+    // 1 = may read everyone's 업무일지 when the board's visibility is "selected".
+    logViewer: integer("log_viewer").notNull().default(0),
     createdAt: text("created_at").notNull(),
     updatedAt: text("updated_at").notNull(),
   },

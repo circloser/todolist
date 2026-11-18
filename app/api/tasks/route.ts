@@ -8,7 +8,7 @@ import {
   type WorkspaceRow,
   workspaceLabel,
 } from "../workspace-auth";
-import { prepareTeamTables } from "../team-store";
+import { getTeamPolicy, prepareTeamTables } from "../team-store";
 import {
   forbidden,
   getSessionUser,
@@ -1262,7 +1262,7 @@ async function copyWorkspaceData({
   await prepareTeamTables();
   const sourceMembers = await d1
     .prepare(
-      `SELECT name, role, color, active, position, user_id, access_role
+      `SELECT name, role, color, active, position, user_id, access_role, log_viewer
        FROM workspace_members WHERE workspace_id = ? ORDER BY position, id`
     )
     .bind(sourceWorkspaceId)
@@ -1274,13 +1274,14 @@ async function copyWorkspaceData({
       position: number;
       user_id: number | null;
       access_role: string;
+      log_viewer: number;
     }>();
   // Accounts and roles carry over so the same team can sign straight in.
   const memberStatements = (sourceMembers.results ?? []).map((member) =>
     d1
       .prepare(`INSERT OR IGNORE INTO workspace_members (
-        workspace_id, name, role, color, active, position, user_id, access_role, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+        workspace_id, name, role, color, active, position, user_id, access_role, log_viewer, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
       .bind(
         targetWorkspaceId,
         member.name,
@@ -1290,6 +1291,7 @@ async function copyWorkspaceData({
         member.position,
         member.user_id,
         member.access_role === "manager" ? "manager" : "member",
+        member.log_viewer ? 1 : 0,
         now,
         now
       )
@@ -1892,7 +1894,14 @@ async function authorizeTaskMutation(
   }
 
   if (method === "POST") {
-    if (action === "duplicate-item" || action === "create-subtask") {
+    if (action === "create-subtask") {
+      return itemEditDenied(access, Number(payload.itemId));
+    }
+    // Everything else creates a work item (new or duplicated).
+    if (!access.isManager && !(await getTeamPolicy(workspaceId)).memberCanCreateItems) {
+      return forbidden("이 보드는 부서장만 새 업무를 등록할 수 있습니다.");
+    }
+    if (action === "duplicate-item") {
       return itemEditDenied(access, Number(payload.itemId));
     }
     return null; // new items are assigned to the creator (see below)
@@ -1924,6 +1933,13 @@ async function authorizeTaskMutation(
   }
 
   if (Number.isFinite(Number(payload.itemId))) {
+    if (
+      method === "DELETE" &&
+      !access.isManager &&
+      !(await getTeamPolicy(workspaceId)).memberCanDeleteItems
+    ) {
+      return forbidden("이 보드는 부서장만 업무를 삭제할 수 있습니다.");
+    }
     return itemEditDenied(
       access,
       Number(payload.itemId),
