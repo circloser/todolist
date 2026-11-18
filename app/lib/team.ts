@@ -333,7 +333,8 @@ export const MEMBER_NAME_MAX = 40;
 export const MEMBER_ROLE_MAX = 40;
 export const WORK_LOG_TEXT_MAX = 4000;
 export const WORK_LOG_ITEM_MAX = 30;
-export const WORK_LOG_RANGE_MAX_DAYS = 93;
+// One year, for annual reports (fetched one member at a time).
+export const WORK_LOG_RANGE_MAX_DAYS = 366;
 export const DEFAULT_MEMBER_COLOR = "#e6f4ef";
 
 // Soft palette for new members; matches the existing assignee row tints.

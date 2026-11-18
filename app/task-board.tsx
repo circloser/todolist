@@ -36,6 +36,7 @@ import {
 import { WETLAND_PRESETS } from "./lib/wetlands";
 import ManualContent from "./manual-content";
 import AuthScreen from "./auth-screen";
+import { BRAND, CompassMark } from "./brand";
 import MembersPanel from "./members-panel";
 import WorkLogPanel from "./work-log-panel";
 import {
@@ -3756,12 +3757,22 @@ export default function TaskBoard() {
                   </span>
                 </div>
               ) : null}
+              <div className="mb-1 flex items-center gap-1.5 text-xs font-semibold text-[var(--accent)]">
+                <CompassMark size={18} />
+                <span>{BRAND.name}</span>
+                <span className="font-medium text-[var(--text-faint)]">· {organizationName}</span>
+              </div>
               <input
                 value={boardTitle}
+                readOnly={!isManager}
+                title={isManager ? "보드 제목 (부서장만 바꿀 수 있습니다)" : undefined}
+                aria-label="보드 제목"
                 onChange={(event) => setBoardTitle(event.target.value)}
-                onBlur={(event) =>
-                  void saveBoardSettings({ boardTitle: event.target.value })
-                }
+                onBlur={(event) => {
+                  if (isManager) {
+                    void saveBoardSettings({ boardTitle: event.target.value });
+                  }
+                }}
                 className="tb-title-field tb-ghost text-2xl font-bold tracking-tight sm:text-[28px]"
               />
             </div>

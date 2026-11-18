@@ -38,7 +38,7 @@ export const defaultTemplates: TemplateOption[] = [
 
 export const defaultSettings: AppSettings = {
   organizationName: "습지복원팀",
-  boardTitle: "Workflow Command Center",
+  boardTitle: "업무나침반",
 };
 
 export const DASHBOARD_WIDGETS: Array<{ key: string; label: string }> = [

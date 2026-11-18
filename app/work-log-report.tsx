@@ -18,8 +18,10 @@ import {
 import { categoryName, itemProgress, type WorkflowItem } from "./lib/workflow";
 import {
   DEFAULT_REPORT_OPTIONS,
+  renderAnnualReport,
   renderPersonalReport,
   renderTeamSummary,
+  yearRange,
   type ReportFormat,
   type ReportItemInfo,
   type ReportOptions,
@@ -36,14 +38,25 @@ const PRESETS: Array<[Preset, string]> = [
   ["custom", "직접 지정"],
 ];
 
-const OPTION_LABELS: Array<[keyof ReportOptions, string]> = [
-  ["summary", "요약 통계"],
-  ["items", "관련 업무 요약"],
-  ["issues", "특이사항 모음"],
-  ["signature", "결재란"],
-  ["showMissing", "미작성 평일 표시"],
-  ["approvedOnly", "승인된 일지만"],
-];
+const OPTION_LABELS: Record<keyof ReportOptions, string> = {
+  summary: "요약 통계",
+  items: "관련 업무 요약",
+  issues: "특이사항 모음",
+  signature: "결재란",
+  showMissing: "미작성 평일 표시",
+  approvedOnly: "승인된 일지만",
+  includeDaily: "일자별 상세 포함",
+  teamOverview: "팀 연간 개요 페이지",
+};
+
+const OPTIONS_BY_FORMAT: Record<ReportFormat, Array<keyof ReportOptions>> = {
+  personal: ["summary", "items", "issues", "signature", "showMissing", "approvedOnly"],
+  team: ["issues", "approvedOnly"],
+  annual: ["items", "issues", "signature", "includeDaily", "teamOverview", "approvedOnly"],
+};
+
+// Ranges longer than this are fetched one member at a time.
+const BULK_FETCH_DAYS = 93;
 
 function presetRange(preset: Exclude<Preset, "custom">, today: string) {
   if (preset === "thisWeek" || preset === "lastWeek") {
@@ -76,23 +89,44 @@ export default function WorkLogReport({
   fetchLogs,
 }: WorkLogReportProps) {
   const today = kstToday();
+  const thisYear = Number(today.slice(0, 4));
   const frameRef = useRef<HTMLIFrameElement | null>(null);
   const [format, setFormat] = useState<ReportFormat>("personal");
   const [preset, setPreset] = useState<Preset>("thisMonth");
   const [custom, setCustom] = useState(() => presetRange("thisMonth", today));
+  const [year, setYear] = useState(thisYear);
   const [picked, setPicked] = useState<number[]>([viewer.memberId]);
   const [options, setOptions] = useState<ReportOptions>(DEFAULT_REPORT_OPTIONS);
   const [logs, setLogs] = useState<WorkLog[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
-  const range = preset === "custom" ? custom : presetRange(preset, today);
+  const range =
+    format === "annual"
+      ? yearRange(year)
+      : preset === "custom"
+        ? custom
+        : presetRange(preset, today);
   const rangeError =
     range.from > range.to
       ? "시작일이 종료일보다 늦습니다."
       : daysBetween(range.from, range.to) >= WORK_LOG_RANGE_MAX_DAYS
-        ? `보고서 기간은 ${WORK_LOG_RANGE_MAX_DAYS}일 이내로 지정해 주세요.`
+        ? "보고서 기간은 1년 이내로 지정해 주세요. 1년 단위는 '연간 보고서'를 쓰세요."
         : "";
+
+  const reportMembers = useMemo(() => {
+    const pool = canSeeAll ? members : members.filter((member) => member.id === viewer.memberId);
+    const chosen =
+      canSeeAll && picked.length
+        ? pool.filter((member) => picked.includes(member.id))
+        : canSeeAll
+          ? pool.filter((member) => member.active)
+          : pool;
+    return chosen.map((member) => ({ id: member.id, name: member.name, role: member.role }));
+  }, [canSeeAll, members, picked, viewer.memberId]);
+
+  const memberKey = reportMembers.map((member) => member.id).join(",");
+  const perMember = canSeeAll && daysBetween(range.from, range.to) > BULK_FETCH_DAYS;
 
   useEffect(() => {
     if (rangeError) {
@@ -102,7 +136,12 @@ export default function WorkLogReport({
     const timer = window.setTimeout(() => {
       setLoading(true);
       setError("");
-      fetchLogs(`from=${range.from}&to=${range.to}`)
+      const query = `from=${range.from}&to=${range.to}`;
+      const ids = memberKey ? memberKey.split(",") : [];
+      const load = perMember
+        ? Promise.all(ids.map((id) => fetchLogs(`${query}&memberId=${id}`))).then((lists) => lists.flat())
+        : fetchLogs(query);
+      load
         .then((result) => {
           if (!cancelled) {
             setLogs(result);
@@ -123,17 +162,7 @@ export default function WorkLogReport({
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [fetchLogs, range.from, range.to, rangeError]);
-
-  const reportMembers = useMemo(() => {
-    const pool = canSeeAll ? members : members.filter((member) => member.id === viewer.memberId);
-    const chosen = canSeeAll && picked.length
-      ? pool.filter((member) => picked.includes(member.id))
-      : canSeeAll
-        ? pool.filter((member) => member.active)
-        : pool;
-    return chosen.map((member) => ({ id: member.id, name: member.name, role: member.role }));
-  }, [canSeeAll, members, picked, viewer.memberId]);
+  }, [fetchLogs, memberKey, perMember, range.from, range.to, rangeError]);
 
   const html = useMemo(() => {
     const info = new Map<number, ReportItemInfo>(
@@ -152,10 +181,13 @@ export default function WorkLogReport({
       generatedBy: viewer.name,
       approval: policy.logApproval,
     };
+    if (format === "annual") {
+      return renderAnnualReport(context, year, reportMembers, logs, info, options);
+    }
     return format === "team"
       ? renderTeamSummary(context, reportMembers, logs, info, options)
       : renderPersonalReport(context, reportMembers, logs, info, options);
-  }, [boardTitle, format, items, logs, options, organizationName, policy.logApproval, range.from, range.to, reportMembers, today, viewer.name]);
+  }, [boardTitle, format, items, logs, options, organizationName, policy.logApproval, range.from, range.to, reportMembers, today, viewer.name, year]);
 
   function print() {
     const frame = frameRef.current?.contentWindow;
@@ -165,87 +197,109 @@ export default function WorkLogReport({
     }
   }
 
+  const formats: Array<[ReportFormat, string]> = canSeeAll
+    ? [
+        ["personal", "개인 상세"],
+        ["team", "팀 요약표"],
+        ["annual", "연간 보고서"],
+      ]
+    : [
+        ["personal", "개인 상세"],
+        ["annual", "연간 보고서"],
+      ];
+
   return (
     <div className="grid gap-4 lg:grid-cols-[280px_minmax(0,1fr)]">
       <div className="space-y-4">
-        {canSeeAll ? (
-          <div>
-            <span className="tb-label">형식</span>
-            <div className="tb-seg w-full" role="tablist" aria-label="보고서 형식">
-              {(
-                [
-                  ["personal", "개인 상세"],
-                  ["team", "팀 요약표"],
-                ] as const
-              ).map(([key, label]) => (
-                <button
-                  key={key}
-                  type="button"
-                  role="tab"
-                  aria-selected={format === key}
-                  data-active={format === key}
-                  onClick={() => {
-                    setFormat(key);
-                    setPicked(key === "team" ? [] : [viewer.memberId]);
-                  }}
-                  className="tb-seg-btn flex-1"
-                >
-                  {label}
-                </button>
-              ))}
-            </div>
-          </div>
-        ) : null}
-
         <div>
-          <span className="tb-label">기간</span>
-          <div className="flex flex-wrap gap-1.5">
-            {PRESETS.map(([key, label]) => (
+          <span className="tb-label">형식</span>
+          <div className="tb-seg w-full" role="tablist" aria-label="보고서 형식">
+            {formats.map(([key, label]) => (
               <button
                 key={key}
                 type="button"
-                aria-pressed={preset === key}
+                role="tab"
+                aria-selected={format === key}
+                data-active={format === key}
                 onClick={() => {
-                  if (key === "custom") {
-                    setCustom(range);
-                  }
-                  setPreset(key);
+                  setFormat(key);
+                  setPicked(key === "team" ? [] : [viewer.memberId]);
                 }}
-                className={`rounded-full border px-2.5 py-1 text-xs font-medium ${
-                  preset === key
-                    ? "border-[var(--accent)] bg-[var(--accent-soft)] text-[var(--accent)]"
-                    : "border-[var(--border)] text-[var(--text-muted)]"
-                }`}
+                className="tb-seg-btn flex-1 !px-2"
               >
                 {label}
               </button>
             ))}
           </div>
-          <div className="mt-2 grid grid-cols-2 gap-2">
-            <input
-              type="date"
-              value={range.from}
-              disabled={preset !== "custom"}
-              onChange={(event) => setCustom((current) => ({ ...current, from: event.target.value }))}
-              className="tb-field !py-1.5 text-sm"
-              aria-label="보고서 시작일"
-            />
-            <input
-              type="date"
-              value={range.to}
-              disabled={preset !== "custom"}
-              onChange={(event) => setCustom((current) => ({ ...current, to: event.target.value }))}
-              className="tb-field !py-1.5 text-sm"
-              aria-label="보고서 종료일"
-            />
-          </div>
-          {rangeError ? <p className="mt-1 text-xs text-[var(--danger)]">{rangeError}</p> : null}
         </div>
+
+        {format === "annual" ? (
+          <div>
+            <span className="tb-label">연도</span>
+            <select
+              value={year}
+              onChange={(event) => setYear(Number(event.target.value))}
+              className="tb-field !py-1.5 text-sm"
+              aria-label="보고서 연도"
+            >
+              {[thisYear, thisYear - 1, thisYear - 2, thisYear - 3].map((option) => (
+                <option key={option} value={option}>
+                  {option}년{option === thisYear ? " (올해, 오늘까지)" : ""}
+                </option>
+              ))}
+            </select>
+          </div>
+        ) : (
+          <div>
+            <span className="tb-label">기간</span>
+            <div className="flex flex-wrap gap-1.5">
+              {PRESETS.map(([key, label]) => (
+                <button
+                  key={key}
+                  type="button"
+                  aria-pressed={preset === key}
+                  onClick={() => {
+                    if (key === "custom") {
+                      setCustom(range);
+                    }
+                    setPreset(key);
+                  }}
+                  className={`rounded-full border px-2.5 py-1 text-xs font-medium ${
+                    preset === key
+                      ? "border-[var(--accent)] bg-[var(--accent-soft)] text-[var(--accent)]"
+                      : "border-[var(--border)] text-[var(--text-muted)]"
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+            <div className="mt-2 grid grid-cols-2 gap-2">
+              <input
+                type="date"
+                value={range.from}
+                disabled={preset !== "custom"}
+                onChange={(event) => setCustom((current) => ({ ...current, from: event.target.value }))}
+                className="tb-field !py-1.5 text-sm"
+                aria-label="보고서 시작일"
+              />
+              <input
+                type="date"
+                value={range.to}
+                disabled={preset !== "custom"}
+                onChange={(event) => setCustom((current) => ({ ...current, to: event.target.value }))}
+                className="tb-field !py-1.5 text-sm"
+                aria-label="보고서 종료일"
+              />
+            </div>
+            {rangeError ? <p className="mt-1 text-xs text-[var(--danger)]">{rangeError}</p> : null}
+          </div>
+        )}
 
         {canSeeAll ? (
           <div>
             <span className="tb-label">
-              대상 구성원{format === "personal" ? " (선택한 사람마다 한 부씩)" : ""}
+              대상 구성원{format === "team" ? "" : " (선택한 사람마다 한 부씩)"}
             </span>
             <MemberPicker members={members} selected={picked} onChange={setPicked} />
           </div>
@@ -254,9 +308,10 @@ export default function WorkLogReport({
         <div>
           <span className="tb-label">포함 항목</span>
           <div className="grid grid-cols-2 gap-1.5">
-            {OPTION_LABELS.filter(([key]) => format === "personal" || key === "issues" || key === "approvedOnly")
-              .filter(([key]) => policy.logApproval || key !== "approvedOnly")
-              .map(([key, label]) => (
+            {OPTIONS_BY_FORMAT[format]
+              .filter((key) => policy.logApproval || key !== "approvedOnly")
+              .filter((key) => canSeeAll || key !== "teamOverview")
+              .map((key) => (
                 <label key={key} className="flex items-center gap-1.5 text-sm">
                   <input
                     type="checkbox"
@@ -264,7 +319,7 @@ export default function WorkLogReport({
                     onChange={(event) => setOptions((current) => ({ ...current, [key]: event.target.checked }))}
                     className="h-4 w-4 accent-[var(--accent)]"
                   />
-                  {label}
+                  {OPTION_LABELS[key]}
                 </label>
               ))}
           </div>
@@ -294,7 +349,14 @@ export default function WorkLogReport({
       <div className="min-w-0">
         <div className="mb-1.5 flex items-center justify-between text-xs text-[var(--text-muted)]">
           <span>미리보기 — 인쇄 결과와 같습니다</span>
-          {loading ? <span>불러오는 중…</span> : <span>{reportMembers.length}명 · 일지 {logs.filter((log) => reportMembers.some((member) => member.id === log.memberId)).length}건</span>}
+          {loading ? (
+            <span>불러오는 중…</span>
+          ) : (
+            <span>
+              {reportMembers.length}명 · 일지{" "}
+              {logs.filter((log) => reportMembers.some((member) => member.id === log.memberId)).length}건
+            </span>
+          )}
         </div>
         <iframe
           ref={frameRef}

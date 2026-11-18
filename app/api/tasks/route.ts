@@ -17,6 +17,7 @@ import {
   type BoardAccess,
 } from "../auth-store";
 import { pickMemberColor, sameMemberName } from "../../lib/team";
+import { displayBoardTitle } from "../../brand";
 
 type StepStatus = "todo" | "done";
 
@@ -351,7 +352,7 @@ const seedTemplates: ResolvedTemplate[] = rawTemplates.map((template) => ({
 
 const defaultAppSettings = {
   organizationName: "습지복원팀",
-  boardTitle: "Workflow Command Center",
+  boardTitle: "업무나침반",
 };
 
 
@@ -1742,12 +1743,14 @@ async function getAppSettings(workspaceId: string) {
     .bind(workspaceId)
     .all<AppSettingRow>();
 
-  return {
+  const merged = {
     ...defaultAppSettings,
     ...Object.fromEntries(
       (settings.results ?? []).map((setting) => [setting.key, setting.value])
     ),
   };
+  // Boards created before the rename still store the old default title.
+  return { ...merged, boardTitle: displayBoardTitle(merged.boardTitle) };
 }
 
 // Saved display order for 대분류(그룹) sections (a preference list of names).

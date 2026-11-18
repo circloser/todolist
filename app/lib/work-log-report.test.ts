@@ -3,6 +3,10 @@ import type { WorkLog } from "./team";
 import {
   DEFAULT_REPORT_OPTIONS,
   esc,
+  monthlyBreakdown,
+  monthlyChart,
+  renderAnnualReport,
+  yearRange,
   renderPersonalReport,
   renderTeamSummary,
   summarizeMember,
@@ -122,5 +126,52 @@ describe("report html", () => {
     expect(html).toContain("일자별 작성 현황");
     expect(html).toContain("드론 고장");
     expect((html.match(/class="dot"/g) ?? []).length).toBe(4);
+  });
+});
+
+describe("annual report", () => {
+  const yearLogs = [
+    log({ id: 11, logDate: "2026-01-05", content: "1월", itemIds: [7], status: "approved" }),
+    log({ id: 12, logDate: "2026-01-06", content: "1월 둘째", itemIds: [7], issues: "한파" }),
+    log({ id: 13, logDate: "2026-03-02", content: "3월", status: "rejected" }),
+    log({ id: 14, logDate: "2026-11-18", content: "11월", itemIds: [7] }),
+  ];
+  const yearContext = { ...context, ...yearRange(2026), today: "2026-11-19" };
+
+  it("breaks a year down by month and leaves future months empty", () => {
+    const summary = summarizeMember(minji, yearLogs, yearContext, items);
+    const months = monthlyBreakdown(summary, 2026, "2026-11-19");
+    expect(months).toHaveLength(12);
+    expect(months[0]).toMatchObject({ label: "1월", written: 2, workdays: 22, approved: 1, issues: 1, top: ["습지 조사"] });
+    expect(months[0].rate).toBe(9);
+    expect(months[2]).toMatchObject({ written: 1, rejected: 1 });
+    expect(months[10].workdays).toBe(14);
+    expect(months[11].rate).toBeNull();
+    expect(summary.items[0]).toMatchObject({ title: "습지 조사", days: 3, firstDate: "2026-01-05", lastDate: "2026-11-18" });
+  });
+
+  it("draws a bar per month", () => {
+    const summary = summarizeMember(minji, yearLogs, yearContext, items);
+    const svg = monthlyChart(monthlyBreakdown(summary, 2026, "2026-11-19"));
+    expect((svg.match(/<rect /g) ?? []).length).toBe(12);
+    expect(svg).toContain(">9%</text>");
+    expect(svg).toContain('aria-label="월별 평일 작성률"');
+  });
+
+  it("adds a team overview page only for several members", () => {
+    const one = renderAnnualReport(context, 2026, [minji], yearLogs, items);
+    expect(one).toContain("연간 업무일지 보고서");
+    expect(one).not.toContain("팀 업무일지 연간 개요");
+    expect(one.match(/<section class="page">/g)).toHaveLength(1);
+    expect(one).not.toContain("<h2>일자별 업무 내용</h2>");
+
+    const team = renderAnnualReport(context, 2026, [minji, { id: 3, name: "박서준", role: "" }], yearLogs, items, {
+      ...DEFAULT_REPORT_OPTIONS,
+      includeDaily: true,
+    });
+    expect(team).toContain("2026년 팀 업무일지 연간 개요");
+    expect(team.match(/<section class="page">/g)).toHaveLength(3);
+    expect(team).toContain("<h2>일자별 업무 내용</h2>");
+    expect(team).not.toContain(">미작성</td>");
   });
 });

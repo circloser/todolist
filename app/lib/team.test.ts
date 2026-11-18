@@ -130,10 +130,10 @@ describe("log dates", () => {
       to: "2026-11-18",
     });
     expect(normalizeLogRange("2026-11-18", "2026-11-01")).toHaveProperty("error");
-    expect(normalizeLogRange("2026-01-01", "2026-12-31")).toHaveProperty("error");
-    expect(normalizeLogRange("2026-10-01", "2026-12-31")).toEqual({
-      from: "2026-10-01",
-      to: "2026-12-31",
+    expect(normalizeLogRange("2025-01-01", "2026-12-31")).toHaveProperty("error");
+    expect(normalizeLogRange("2028-01-01", "2028-12-31")).toEqual({
+      from: "2028-01-01",
+      to: "2028-12-31",
     });
   });
 

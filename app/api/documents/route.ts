@@ -46,7 +46,7 @@ async function prepareDocuments() {
     .run();
   await ensureWorkspaceTables({
     defaultTeamName: "습지복원팀",
-    defaultBoardTitle: "Workflow Command Center",
+    defaultBoardTitle: "업무나침반",
   });
   documentsReady = true;
 }

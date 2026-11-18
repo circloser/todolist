@@ -72,7 +72,7 @@ export async function prepareTeamTables() {
 
   await ensureWorkspaceTables({
     defaultTeamName: "습지복원팀",
-    defaultBoardTitle: "Workflow Command Center",
+    defaultBoardTitle: "업무나침반",
   });
   await d1.batch([
     d1.prepare(`CREATE TABLE IF NOT EXISTS workspace_members (

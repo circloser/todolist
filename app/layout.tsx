@@ -1,13 +1,19 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "연도/팀 업무 진행 보드",
-  description: "여러 연도와 팀이 함께 쓰는 암호 기반 업무 진행 보드입니다.",
+  title: "업무나침반 · 팀 업무 진행·업무일지·보고서",
+  description:
+    "단계별 업무 진행 보드, 업무일지와 결재, 주간·월간 모아보기, 개인·연간 보고서 인쇄까지 한 곳에서 관리하는 팀 업무 플랫폼입니다.",
+  applicationName: "업무나침반",
   icons: {
     icon: "/favicon.svg",
     shortcut: "/favicon.svg",
   },
+};
+
+export const viewport: Viewport = {
+  themeColor: "#18786f",
 };
 
 export default function RootLayout({
