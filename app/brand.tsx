@@ -6,12 +6,19 @@ export const BRAND = {
   tagline: "팀 업무 진행 · 업무일지 · 보고서를 한 곳에서",
 } as const;
 
-/** Board titles saved before the rename are shown as the new default. */
-export const LEGACY_BOARD_TITLES = ["Workflow Command Center"];
+/**
+ * Default titles that never named a team: the old placeholder and the product
+ * name itself. A board showing one of these displays its team name instead,
+ * so each board keeps its own identity (e.g. "습지복원팀").
+ */
+export const PLACEHOLDER_BOARD_TITLES: string[] = ["Workflow Command Center", BRAND.name];
 
-export function displayBoardTitle(title: string | null | undefined) {
+export function displayBoardTitle(title: string | null | undefined, teamName?: string | null) {
   const value = (title ?? "").trim();
-  return !value || LEGACY_BOARD_TITLES.includes(value) ? BRAND.name : value;
+  if (value && !PLACEHOLDER_BOARD_TITLES.includes(value)) {
+    return value;
+  }
+  return (teamName ?? "").trim() || BRAND.name;
 }
 
 export function CompassMark({ size = 32, className = "" }: { size?: number; className?: string }) {
