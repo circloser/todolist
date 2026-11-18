@@ -215,6 +215,11 @@ const STYLES = `
   }
 `;
 
+/** "조직 · 보드" without repeating a name when both are the same. */
+export function orgLine(context: Pick<ReportContext, "organizationName" | "boardTitle">) {
+  return [...new Set([context.organizationName.trim(), context.boardTitle.trim()].filter(Boolean))].join(" · ");
+}
+
 function documentShell(title: string, body: string, landscape = false) {
   return `<!doctype html><html lang="ko"><head><meta charset="utf-8"><title>${esc(title)}</title><style>${STYLES}${
     landscape ? "@page { size: A4 landscape; }" : ""
@@ -228,9 +233,7 @@ function signatureBox(summary: MemberSummary, context: ReportContext) {
 }
 
 function headerBlock(title: string, summary: MemberSummary, context: ReportContext, options: ReportOptions) {
-  return `<div class="head"><div><h1>${esc(title)}</h1><div class="sub">${esc(
-    context.organizationName
-  )} · ${esc(context.boardTitle)}</div></div>${options.signature ? signatureBox(summary, context) : ""}</div>`;
+  return `<div class="head"><div><h1>${esc(title)}</h1><div class="sub">${esc(orgLine(context))}</div></div>${options.signature ? signatureBox(summary, context) : ""}</div>`;
 }
 
 function metaBlock(member: ReportMember, periodLabel: string, period: string) {
@@ -366,9 +369,7 @@ export function renderTeamSummary(
   const matrix = days.length <= 31;
   const parts: string[] = [];
 
-  parts.push(`<div class="head"><div><h1>팀 업무일지 요약</h1><div class="sub">${esc(
-    context.organizationName
-  )} · ${esc(context.boardTitle)} · ${esc(periodText(context))}</div></div></div>`);
+  parts.push(`<div class="head"><div><h1>팀 업무일지 요약</h1><div class="sub">${esc(orgLine(context))} · ${esc(periodText(context))}</div></div></div>`);
 
   parts.push(`<h2>구성원별 현황</h2><table><thead><tr><th>구성원</th><th class="num">일지</th><th class="num">평일 작성률</th>${
     context.approval ? '<th class="num">승인</th><th class="num">대기</th><th class="num">반려</th>' : ""
@@ -584,9 +585,7 @@ function annualTeamPage(summaries: MemberSummary[], year: number, context: Repor
     rows.reduce((sum, row) => sum + row.months[index].written, 0)
   );
 
-  return `<section class="page"><div class="head"><div><h1>${year}년 팀 업무일지 연간 개요</h1><div class="sub">${esc(
-    context.organizationName
-  )} · ${esc(context.boardTitle)} · 구성원 ${summaries.length}명</div></div></div>
+  return `<section class="page"><div class="head"><div><h1>${year}년 팀 업무일지 연간 개요</h1><div class="sub">${esc(orgLine(context))} · 구성원 ${summaries.length}명</div></div></div>
   <h2>구성원 × 월 작성 현황</h2>
   <table class="heat" style="font-size:8.5pt"><thead><tr><th style="text-align:left">구성원</th>${Array.from(
     { length: 12 },

@@ -4,7 +4,9 @@ import {
   ensureWorkspaceTables,
   hashWorkspacePassword,
   listWorkspaces,
+  getWorkspaceById,
   makeWorkspacePassword,
+  toWorkspaceSummary,
   type WorkspaceRow,
   workspaceLabel,
 } from "../workspace-auth";
@@ -1750,8 +1752,15 @@ async function getAppSettings(workspaceId: string) {
       (settings.results ?? []).map((setting) => [setting.key, setting.value])
     ),
   };
-  // Boards created before the rename still store the old default title.
-  return { ...merged, boardTitle: displayBoardTitle(merged.boardTitle) };
+  const workspace = await getD1()
+    .prepare("SELECT team_name FROM workspaces WHERE id = ?")
+    .bind(workspaceId)
+    .first<{ team_name: string }>();
+  // A board without a title of its own is titled with its team name.
+  return {
+    ...merged,
+    boardTitle: displayBoardTitle(merged.boardTitle, workspace?.team_name || merged.organizationName),
+  };
 }
 
 // Saved display order for 대분류(그룹) sections (a preference list of names).
@@ -2127,7 +2136,7 @@ export async function POST(request: Request) {
             `INSERT INTO workspace_settings (workspace_id, key, value, updated_at)
              VALUES (?, 'boardTitle', ?, ?)`
           )
-          .bind(workspaceId, defaultAppSettings.boardTitle, now),
+          .bind(workspaceId, teamName, now),
       ]);
       let copiedItemCount = 0;
 
@@ -2158,15 +2167,17 @@ export async function POST(request: Request) {
         actor,
       });
 
-      const workspace = await requireWorkspaceAccess(request, { workspaceId });
+      // Describe the board just created (not whichever board the request
+      // header names).
+      const created = await getWorkspaceById(workspaceId);
 
-      if ("response" in workspace) {
-        return workspace.response;
+      if (!created) {
+        throw new Error("보드를 만들지 못했습니다.");
       }
 
       return Response.json(
         {
-          workspace: workspace.summary,
+          workspace: toWorkspaceSummary(created),
           workspaces: await listWorkspaces(),
           settings: await getAppSettings(workspaceId),
           items: await getItems(workspaceId),

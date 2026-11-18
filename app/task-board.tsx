@@ -672,6 +672,13 @@ export default function TaskBoard() {
     return true;
   }
 
+  // Browser tab: the board's own name first, then the product.
+  useEffect(() => {
+    document.title = landingOpen
+      ? `${BRAND.name} · 팀 업무 진행·업무일지·보고서`
+      : `${boardTitle || BRAND.name} · ${BRAND.name}`;
+  }, [boardTitle, landingOpen]);
+
   async function enterBoard(workspaceId: string) {
     setLandingMessage("");
     const ok = await loadTasks(workspaceId);
@@ -3760,7 +3767,6 @@ export default function TaskBoard() {
               <div className="mb-1 flex items-center gap-1.5 text-xs font-semibold text-[var(--accent)]">
                 <CompassMark size={18} />
                 <span>{BRAND.name}</span>
-                <span className="font-medium text-[var(--text-faint)]">· {organizationName}</span>
               </div>
               <input
                 value={boardTitle}
