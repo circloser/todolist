@@ -5,7 +5,9 @@ import {
   eventTimeLabel,
   normalizeEventInput,
   type CalendarEvent,
+  type EventInput,
 } from "../../lib/schedule";
+import { MAX_BULK_EVENTS } from "../../lib/calendar-layout";
 import { daysBetween, normalizeLogDate } from "../../lib/team";
 import { forbidden, requireWorkspaceAccess, type BoardAccess } from "../auth-store";
 import { eventsBetween, toEvent, type EventRow } from "../schedule-store";
@@ -43,6 +45,37 @@ function editDenied(access: BoardAccess, row: EventRow) {
   return access.isManager || row.created_by_member_id === access.member.id
     ? null
     : forbidden("일정은 등록한 사람 또는 부서장만 수정·삭제할 수 있습니다.");
+}
+
+function insertEvent(access: BoardAccess, value: EventInput, now: string) {
+  return getD1()
+    .prepare(
+      `INSERT INTO calendar_events
+         (workspace_id, title, category, start_date, end_date, all_day, start_time, end_time, location,
+          description, attendee_ids, reminder_minutes, created_by_member_id, created_by_name, updated_by,
+          created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       RETURNING *`
+    )
+    .bind(
+      access.workspace.id,
+      value.title,
+      value.category,
+      value.startDate,
+      value.endDate,
+      value.allDay ? 1 : 0,
+      value.startTime,
+      value.endTime,
+      value.location,
+      value.description,
+      JSON.stringify(value.attendeeIds),
+      value.reminderMinutes,
+      access.member.id,
+      access.actor,
+      access.actor,
+      now,
+      now
+    );
 }
 
 function describe(event: Pick<CalendarEvent, "title" | "category" | "startDate" | "endDate" | "allDay" | "startTime" | "endTime">) {
@@ -104,6 +137,39 @@ export async function POST(request: Request) {
       return access.response;
     }
 
+    // Several at once ({events: [...]}): 반복 or 여러 날짜 from the calendar.
+    if (Array.isArray(payload.events)) {
+      const raws = payload.events as Record<string, unknown>[];
+      if (!raws.length || raws.length > MAX_BULK_EVENTS) {
+        return Response.json({ error: `한 번에 1~${MAX_BULK_EVENTS}개까지 등록할 수 있습니다.` }, { status: 400 });
+      }
+      const values = [];
+      for (const [index, raw] of raws.entries()) {
+        const input = normalizeEventInput(raw ?? {});
+        if ("error" in input) {
+          return Response.json({ error: raws.length > 1 ? `${index + 1}번째 일정: ${input.error}` : input.error }, { status: 400 });
+        }
+        values.push({ ...input.value, attendeeIds: await boardAttendeeIds(access.workspace.id, input.value.attendeeIds) });
+      }
+      const now = new Date().toISOString();
+      const results = await getD1().batch(values.map((value) => insertEvent(access, value, now)));
+      const events = results.flatMap((result) => ((result.results ?? []) as EventRow[]).map(toEvent));
+      const firstValue = values[0];
+      const lastValue = values[values.length - 1];
+      await logTeamHistory({
+        workspaceId: access.workspace.id,
+        entityType: "event",
+        entityId: events.length === 1 ? events[0].id : null,
+        action: "create",
+        summary:
+          values.length === 1
+            ? `${access.actor}님이 일정 ${describe(firstValue)}을 등록함`
+            : `${access.actor}님이 일정 ‘${firstValue.title}’ 등 ${values.length}개(${firstValue.startDate}~${lastValue.startDate})를 등록함`,
+        actor: access.actor,
+      });
+      return Response.json({ events, event: events[0] ?? null }, { status: 201 });
+    }
+
     const input = normalizeEventInput(payload);
     if ("error" in input) {
       return Response.json({ error: input.error }, { status: 400 });
@@ -113,36 +179,7 @@ export async function POST(request: Request) {
       ...input.value,
       attendeeIds: await boardAttendeeIds(access.workspace.id, input.value.attendeeIds),
     };
-    const now = new Date().toISOString();
-    const row = await getD1()
-      .prepare(
-        `INSERT INTO calendar_events
-           (workspace_id, title, category, start_date, end_date, all_day, start_time, end_time, location,
-            description, attendee_ids, reminder_minutes, created_by_member_id, created_by_name, updated_by,
-            created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-         RETURNING *`
-      )
-      .bind(
-        access.workspace.id,
-        value.title,
-        value.category,
-        value.startDate,
-        value.endDate,
-        value.allDay ? 1 : 0,
-        value.startTime,
-        value.endTime,
-        value.location,
-        value.description,
-        JSON.stringify(value.attendeeIds),
-        value.reminderMinutes,
-        access.member.id,
-        access.actor,
-        access.actor,
-        now,
-        now
-      )
-      .first<EventRow>();
+    const row = await insertEvent(access, value, new Date().toISOString()).first<EventRow>();
 
     await logTeamHistory({
       workspaceId: access.workspace.id,
