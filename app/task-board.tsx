@@ -36,7 +36,7 @@ import {
   summarizeBranch,
 } from "./lib/board-config";
 import { WETLAND_PRESETS } from "./lib/wetlands";
-import ManualContent from "./manual-content";
+import ManualContent, { revealManualSection } from "./manual-content";
 import AuthScreen from "./auth-screen";
 import { BRAND, CompassMark } from "./brand";
 import CalendarView, { EventList } from "./calendar-view";
@@ -3360,7 +3360,7 @@ export default function TaskBoard() {
   function openManualSection(sectionId: string) {
     setManualOpen(true);
     window.setTimeout(() => {
-      document.getElementById(sectionId)?.scrollIntoView({ behavior: "smooth", block: "start" });
+      revealManualSection(sectionId);
     }, 80);
   }
 
@@ -4172,15 +4172,15 @@ export default function TaskBoard() {
             {widgetPrefs.schedule !== false ? (
             <div className="grid gap-4 lg:grid-cols-[1.4fr_1fr]">
               <div className="tb-card tb-section p-5" data-testid="dashboard-schedule">
-                <div className="mb-3 flex items-center gap-2">
-                  <h2 className="text-sm font-semibold">다가오는 일정</h2>
+                <div className="mb-3 flex flex-wrap items-center gap-x-2 gap-y-1">
+                  <h2 className="whitespace-nowrap text-sm font-semibold">다가오는 일정</h2>
                   <span className="text-[11px] text-[var(--text-faint)]">
                     오늘 {scheduleFeed.summary.today.length}건 · 2주{" "}
                     {scheduleFeed.summary.upcoming.length}건
                   </span>
                   <button
                     type="button"
-                    className="tb-btn ml-auto"
+                    className="tb-btn ml-auto whitespace-nowrap !px-3 !py-1.5 text-xs sm:text-sm"
                     onClick={() => openView("calendar")}
                   >
                     업무일정 열기
@@ -4194,8 +4194,8 @@ export default function TaskBoard() {
                 />
               </div>
               <div className="tb-card tb-section p-5">
-                <div className="mb-3 flex items-center gap-2">
-                  <h2 className="text-sm font-semibold">회의록</h2>
+                <div className="mb-3 flex flex-wrap items-center gap-x-2 gap-y-1">
+                  <h2 className="whitespace-nowrap text-sm font-semibold">회의록</h2>
                   {scheduleFeed.summary.unreadMinutes.length ? (
                     <span className="tb-badge tb-badge-warning">
                       확인 필요 {scheduleFeed.summary.unreadMinutes.length}
@@ -4203,7 +4203,7 @@ export default function TaskBoard() {
                   ) : null}
                   <button
                     type="button"
-                    className="tb-btn ml-auto"
+                    className="tb-btn ml-auto whitespace-nowrap !px-3 !py-1.5 text-xs sm:text-sm"
                     onClick={() => openView("minutes")}
                   >
                     회의록 열기
@@ -6877,9 +6877,9 @@ export default function TaskBoard() {
             </div>
 
             <div className="overflow-x-auto">
-              <div className="min-w-[760px]">
-                <div className="grid grid-cols-[230px_1fr] border-b border-[var(--border)] bg-[var(--surface-2)]">
-                  <div className="px-3 py-2 text-[11px] font-semibold text-[var(--text-muted)]">
+              <div className="min-w-[620px] sm:min-w-[760px]">
+                <div className="grid grid-cols-[124px_1fr] border-b border-[var(--border)] bg-[var(--surface-2)] sm:grid-cols-[230px_1fr]">
+                  <div className="sticky left-0 z-10 bg-[var(--surface-2)] px-3 py-2 text-[11px] font-semibold text-[var(--text-muted)]">
                     업무
                   </div>
                   <div className="relative h-8">
@@ -6905,12 +6905,12 @@ export default function TaskBoard() {
                     return (
                       <div
                         key={item.id}
-                        className="grid grid-cols-[230px_1fr] border-b border-[var(--border)] last:border-b-0 hover:bg-[var(--surface-2)]"
+                        className="grid grid-cols-[124px_1fr] border-b border-[var(--border)] last:border-b-0 hover:bg-[var(--surface-2)] sm:grid-cols-[230px_1fr]"
                       >
                         <button
                           type="button"
                           onClick={() => openItem(item.id)}
-                          className="min-w-0 px-3 py-2 text-left"
+                          className="sticky left-0 z-10 min-w-0 bg-[var(--surface)] px-3 py-2 text-left"
                           style={{ boxShadow: `inset 3px 0 0 ${rowColor}` }}
                           title="목록에서 열기"
                         >

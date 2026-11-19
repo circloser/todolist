@@ -179,7 +179,7 @@ export function ScheduleToasts({
   }
   return (
     <div
-      className="pointer-events-none fixed bottom-4 left-4 right-4 z-[60] flex flex-col items-end gap-2 sm:left-auto sm:w-[360px]"
+      className="pointer-events-none fixed bottom-[max(12px,env(safe-area-inset-bottom))] left-3 right-3 z-[60] flex flex-col items-end gap-2 sm:bottom-4 sm:left-auto sm:right-4 sm:w-[360px]"
       aria-live="polite"
       data-testid="schedule-toasts"
     >
@@ -188,7 +188,7 @@ export function ScheduleToasts({
           key={toast.id}
           role="status"
           // On a phone only the newest pop-up shows; the rest stay in 알림.
-          className={`pointer-events-auto w-full rounded-[var(--radius-lg)] border bg-[var(--surface)] p-3 shadow-[var(--shadow-lg)] ${
+          className={`pointer-events-auto w-full rounded-[var(--radius-lg)] border bg-[var(--surface)] px-3 py-2 shadow-[var(--shadow-lg)] sm:p-3 ${
             index < toasts.length - 1 ? "hidden sm:block" : ""
           } ${
             toast.kind === "reminder"
@@ -214,7 +214,7 @@ export function ScheduleToasts({
               }}
             >
               <div className="text-sm font-semibold">{toast.title}</div>
-              <div className="mt-0.5 whitespace-pre-line text-xs leading-5 text-[var(--text-muted)]">{toast.body}</div>
+              <div className="mt-0.5 line-clamp-2 whitespace-pre-line text-xs leading-5 text-[var(--text-muted)] sm:line-clamp-none">{toast.body}</div>
             </button>
             <button type="button" className="tb-iconbtn h-7 w-7 shrink-0" aria-label="알림 닫기" onClick={() => dismissToast(toast.id)}>
               ×

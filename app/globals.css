@@ -1784,6 +1784,7 @@ body {
   .tb-cal-week {
     position: relative;
     display: grid;
+    min-height: var(--cal-min, 0);
     grid-template-columns: repeat(7, minmax(0, 1fr));
     border-bottom: 1px solid var(--border);
   }
@@ -1994,5 +1995,57 @@ body {
     font-size: 13px;
     transform: translateX(-50%);
     box-shadow: var(--shadow-lg);
+  }
+}
+
+@layer components {
+  /* Calendar filter chips: one row (scrolls sideways on phones). */
+  .tb-cal-filters {
+    flex-wrap: wrap;
+  }
+  @media (max-width: 640px) {
+    .tb-cal-filters {
+      flex-wrap: nowrap;
+      overflow-x: auto;
+      scrollbar-width: none;
+      margin: 0 -2px;
+      padding: 0 2px 2px;
+    }
+    .tb-cal-filters::-webkit-scrollbar {
+      display: none;
+    }
+    .tb-cal-filters > * {
+      flex: none;
+    }
+    .tb-cal-month .tb-cal-week {
+      min-height: 68px;
+    }
+    .tb-cal-chip {
+      margin: 1px 1px;
+      padding: 0 3px;
+      font-size: 10px;
+    }
+    .tb-cal-dayhead {
+      padding: 2px 2px 0;
+    }
+    .tb-cal-more {
+      margin: 0 2px;
+      font-size: 10px;
+    }
+  }
+}
+
+/* Phones: text fields at 16px so iOS does not zoom in while typing
+   (unlayered so it wins over size utilities; the big title keeps its size). */
+@media (max-width: 640px) {
+  input:not([type="checkbox"]):not([type="radio"]):not([type="color"]):not([type="range"]):not(.tb-title-field),
+  select,
+  textarea {
+    font-size: 16px !important;
+  }
+  /* Comfortable tap targets for icon buttons. */
+  .tb-iconbtn {
+    min-width: 34px;
+    min-height: 34px;
   }
 }

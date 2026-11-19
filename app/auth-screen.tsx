@@ -4,7 +4,7 @@ import { FormEvent, useEffect, useMemo, useState } from "react";
 
 import { BRAND, CompassMark } from "./brand";
 import CompassArt from "./compass-art";
-import ManualContent, { MANUAL_SECTIONS } from "./manual-content";
+import ManualContent, { MANUAL_SECTIONS, revealManualSection } from "./manual-content";
 import type { AuthResponse } from "./lib/team";
 import type { WorkspaceSummary } from "./lib/workflow";
 
@@ -231,7 +231,7 @@ export default function AuthScreen({ auth, message, onAuth, onEnter, onBack }: A
   return (
     <main className="tb-landing relative min-h-dvh overflow-x-hidden">
       <section className="relative grid lg:min-h-dvh lg:grid-cols-[minmax(0,1.12fr)_minmax(440px,0.88fr)]">
-        <div className="tb-hero-art relative flex flex-col overflow-hidden px-5 pb-10 pt-6 text-white sm:px-8 lg:px-14 lg:py-12">
+        <div className="tb-hero-art relative flex flex-col overflow-hidden px-5 pb-6 pt-5 text-white sm:px-8 sm:pb-10 sm:pt-6 lg:px-14 lg:py-12">
           <div className="relative z-10 flex items-center gap-2.5">
             <CompassMark size={34} className="rounded-[9px] ring-1 ring-white/25" />
             <div className="leading-tight">
@@ -248,25 +248,25 @@ export default function AuthScreen({ auth, message, onAuth, onEnter, onBack }: A
             </a>
           </div>
 
-          <div className="relative flex flex-1 items-center justify-center py-5 lg:py-6">
+          <div className="relative hidden flex-1 items-center justify-center py-5 sm:flex lg:py-6">
             <CompassArt className="h-auto w-[min(56vw,220px)] sm:w-[300px] lg:w-[min(40vw,50vh,520px)]" />
           </div>
 
-          <div className="relative z-10">
+          <div className="relative z-10 mt-6 sm:mt-0">
             <p className="text-[12px] font-semibold tracking-[0.18em] text-[#a7f0e0]">
               진행 · 일정 · 회의록 · 일지 · 보고서
             </p>
-            <h1 className="mt-2 text-[28px] font-bold leading-[1.18] tracking-tight sm:text-[36px] lg:text-[44px]">
+            <h1 className="mt-1.5 text-[26px] font-bold leading-[1.18] tracking-tight sm:mt-2 sm:text-[36px] lg:text-[44px]">
               팀의 방향을, 한눈에.
             </h1>
-            <p className="mt-3 max-w-[460px] text-[14px] leading-6 text-white/70 sm:text-[15px]">
+            <p className="mt-2 max-w-[460px] text-[14px] leading-6 text-white/70 sm:mt-3 sm:text-[15px]">
               업무 진행부터 일정·회의록·업무일지·보고서까지, {BRAND.name} 하나로.
             </p>
           </div>
         </div>
 
-        <div className="tb-hero-side relative flex items-center justify-center px-4 py-10 sm:px-8 lg:py-12">
-          <section aria-label={user ? "보드 선택" : "로그인"} className="relative w-full max-w-[420px]">
+        <div className="tb-hero-side relative flex items-start justify-center px-4 pb-8 pt-0 sm:items-center sm:px-8 sm:py-10 lg:py-12">
+          <section aria-label={user ? "보드 선택" : "로그인"} className="relative -mt-3 w-full max-w-[420px] sm:mt-0">
         <div className="tb-card tb-landing-card space-y-4 p-5 sm:p-6">
           <div>
             <h2 className="text-lg font-semibold tracking-tight">
@@ -615,14 +615,14 @@ export default function AuthScreen({ auth, message, onAuth, onEnter, onBack }: A
       <section
         id="manual"
         aria-labelledby="manual-title"
-        className="tb-landing-manual relative mx-auto max-w-[1180px] scroll-mt-4 px-4 pb-14 sm:px-6 lg:px-8"
+        className="tb-landing-manual relative mx-auto max-w-[1180px] scroll-mt-4 px-4 pb-10 sm:px-6 sm:pb-14 lg:px-8"
       >
-        <div className="tb-no-print mb-6 flex flex-wrap items-end justify-between gap-3 border-t border-[var(--border)] pt-10">
+        <div className="tb-no-print mb-4 flex flex-wrap items-end justify-between gap-3 border-t border-[var(--border)] pt-7 sm:mb-6 sm:pt-10">
           <div>
             <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--accent)]">
               User guide
             </p>
-            <h2 id="manual-title" className="mt-1 text-2xl font-bold tracking-tight sm:text-[28px]">
+            <h2 id="manual-title" className="mt-1 text-xl font-bold tracking-tight sm:text-[28px]">
               사용자 매뉴얼
             </h2>
             <p className="mt-1 text-sm text-[var(--text-muted)]">
@@ -630,17 +630,21 @@ export default function AuthScreen({ auth, message, onAuth, onEnter, onBack }: A
               있습니다.
             </p>
           </div>
-          <button type="button" onClick={printManual} className="tb-btn">
+          <button type="button" onClick={printManual} className="tb-btn hidden sm:inline-flex">
             🖨 매뉴얼 인쇄
           </button>
         </div>
         <div className="grid gap-6 lg:grid-cols-[230px_minmax(0,1fr)]">
-          <nav aria-label="매뉴얼 목차" className="tb-no-print lg:sticky lg:top-6 lg:self-start">
+          <nav aria-label="매뉴얼 목차" className="tb-no-print hidden lg:sticky lg:top-6 lg:block lg:self-start">
             <ul className="flex flex-wrap gap-1.5 lg:flex-col lg:gap-0.5">
               {MANUAL_SECTIONS.map((section) => (
                 <li key={section.id}>
                   <a
                     href={`#${section.id}`}
+                    onClick={(event) => {
+                      event.preventDefault();
+                      revealManualSection(section.id);
+                    }}
                     className="inline-flex items-center gap-1.5 rounded-full border border-[var(--border)] bg-[var(--surface)] px-2.5 py-1 text-xs text-[var(--text-muted)] hover:border-[var(--accent)] hover:text-[var(--accent)] lg:flex lg:rounded-[var(--radius)] lg:border-transparent lg:bg-transparent lg:py-1.5 lg:text-[13px]"
                   >
                     <span aria-hidden="true">{section.icon}</span>
@@ -650,7 +654,7 @@ export default function AuthScreen({ auth, message, onAuth, onEnter, onBack }: A
               ))}
             </ul>
           </nav>
-          <div id="manual-print" className="tb-card min-w-0 p-5 shadow-[var(--shadow-md)] sm:p-7">
+          <div id="manual-print" className="tb-card min-w-0 px-4 py-3 shadow-[var(--shadow-md)] sm:px-7 sm:py-5">
             <ManualContent />
           </div>
         </div>
