@@ -1,5 +1,10 @@
+"use client";
+
+import { useEffect, useRef } from "react";
+
 // 사용자 매뉴얼 본문. 랜딩 페이지(로그인 전)와 보드 안의 매뉴얼 모달에서 함께
-// 렌더링되며, #manual-print 인쇄 영역 안에 들어가므로 정적 JSX만 사용한다.
+// 렌더링된다. 항목은 접어 두고(누르면 펼침), 목차·검색·#manual-… 링크로 가면
+// 그 항목이 펼쳐지며, 인쇄할 때는 모두 펼친다.
 
 export const MANUAL_SECTIONS = [
   { id: "manual-start", icon: "🧭", title: "처음 시작하기" },
@@ -33,17 +38,47 @@ type SectionId = (typeof MANUAL_SECTIONS)[number]["id"];
 function Section({ id, children }: { id: SectionId; children: React.ReactNode }) {
   const meta = MANUAL_SECTIONS.find((section) => section.id === id)!;
   return (
-    <section
-      id={id}
-      className="scroll-mt-6 border-b border-[var(--border)] pb-5 last:border-b-0 last:pb-0"
-    >
-      <h3 className="mb-2.5 flex items-center gap-2 text-[15px] font-bold">
-        <span aria-hidden="true">{meta.icon}</span>
-        {meta.title}
-      </h3>
-      <div className="space-y-2 text-[13px] leading-6 text-[var(--text-muted)]">{children}</div>
+    <section id={id} className="tb-manual-section scroll-mt-4 border-b border-[var(--border)] last:border-b-0">
+      <details className="group">
+        <summary className="flex cursor-pointer list-none items-center gap-2 py-3 [&::-webkit-details-marker]:hidden">
+          <h3 className="flex flex-1 items-center gap-2 text-[15px] font-bold">
+            <span aria-hidden="true">{meta.icon}</span>
+            {meta.title}
+          </h3>
+          <span
+            aria-hidden="true"
+            className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-[var(--text-faint)] transition group-open:rotate-180 group-hover:bg-[var(--surface-3)]"
+          >
+            ▾
+          </span>
+        </summary>
+        <div className="space-y-2 pb-4 text-[14px] leading-[1.7] text-[var(--text-muted)] sm:text-[13px] sm:leading-6">{children}</div>
+      </details>
     </section>
   );
+}
+
+/** Opens (and scrolls to) a manual section wherever the manual is shown. */
+export function revealManualSection(id: string, scroll = true) {
+  let target: HTMLElement | null = null;
+  document.querySelectorAll<HTMLElement>(`section[id="${CSS.escape(id)}"]`).forEach((section) => {
+    const details = section.querySelector("details");
+    if (details) {
+      details.open = true;
+    }
+    if (section.offsetParent !== null && !target) {
+      target = section;
+    }
+  });
+  if (scroll && target) {
+    (target as HTMLElement).scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+}
+
+function setAllSections(root: HTMLElement | null, open: boolean) {
+  root?.querySelectorAll<HTMLDetailsElement>(".tb-manual-section details").forEach((details) => {
+    details.open = open;
+  });
 }
 
 function Key({ children }: { children: React.ReactNode }) {
@@ -84,8 +119,40 @@ function Steps({ items }: { items: React.ReactNode[] }) {
 }
 
 export default function ManualContent() {
+  const rootRef = useRef<HTMLDivElement | null>(null);
+
+  // Links to a section (#manual-…) open it; printing opens everything.
+  useEffect(() => {
+    const root = rootRef.current;
+    const onClick = (event: MouseEvent) => {
+      const link = (event.target as HTMLElement | null)?.closest<HTMLAnchorElement>('a[href^="#manual-"]');
+      if (link) {
+        revealManualSection(link.getAttribute("href")!.slice(1), false);
+      }
+    };
+    const onPrint = () => setAllSections(root, true);
+    document.addEventListener("click", onClick, true);
+    window.addEventListener("beforeprint", onPrint);
+    if (window.location.hash.startsWith("#manual-")) {
+      revealManualSection(window.location.hash.slice(1));
+    }
+    return () => {
+      document.removeEventListener("click", onClick, true);
+      window.removeEventListener("beforeprint", onPrint);
+    };
+  }, []);
+
   return (
-    <div className="space-y-5">
+    <div ref={rootRef} className="space-y-3">
+      <div className="tb-no-print flex items-center justify-end gap-3 text-xs">
+        <span className="mr-auto text-[var(--text-faint)]">항목을 누르면 펼쳐집니다</span>
+        <button type="button" className="font-semibold text-[var(--accent)] hover:underline" onClick={() => setAllSections(rootRef.current, true)}>
+          모두 펼치기
+        </button>
+        <button type="button" className="font-semibold text-[var(--accent)] hover:underline" onClick={() => setAllSections(rootRef.current, false)}>
+          모두 접기
+        </button>
+      </div>
       <div className="rounded-[var(--radius)] bg-[var(--accent-soft)] p-4 text-[13px] leading-6 text-[var(--text-muted)]">
         <strong className="text-[var(--text)]">업무나침반</strong>은 팀 업무를{" "}
         <strong>업무 위계</strong>로 묶고 업무 유형별 <strong>진행 단계</strong>를 순서대로

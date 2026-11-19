@@ -952,7 +952,7 @@ export default function CalendarView({
       <div
         key={days[0]}
         className="tb-cal-week"
-        style={{ gridTemplateRows: `24px ${lanes ? `repeat(${lanes}, 21px) ` : ""}18px 1fr`, minHeight }}
+        style={{ gridTemplateRows: `24px ${lanes ? `repeat(${lanes}, 21px) ` : ""}18px 1fr`, ["--cal-min" as string]: `${minHeight}px` }}
       >
         {days.map((day, index) => {
           const outside = month !== null && day.slice(0, 7) !== month;
@@ -1384,7 +1384,7 @@ export default function CalendarView({
         <button type="button" className="tb-btn tb-btn-primary" onClick={() => openEditor(newDraft(cursor))} title="일정 만들기 (C)">
           + 만들기
         </button>
-        <div className="flex w-full flex-wrap items-center gap-1">
+        <div className="tb-cal-filters flex w-full items-center gap-1">
           {EVENT_CATEGORIES.map((category) => {
             const off = hidden.has(category.key);
             return (
