@@ -1618,6 +1618,16 @@ body {
     transform: translateX(-50%);
     box-shadow: var(--shadow-md);
   }
+  /* 구역 그리기: orange, wraps on narrow screens. */
+  .tb-map-banner.tb-map-banner-draw {
+    flex-wrap: wrap;
+    justify-content: center;
+    border-color: #fdba74;
+    background: #fff7ed;
+    color: #9a3412;
+    border-radius: 14px;
+    width: max-content;
+  }
   .tb-map-menu {
     position: absolute;
     z-index: 1200;

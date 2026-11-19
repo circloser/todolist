@@ -407,3 +407,25 @@ export const mapPlaces = sqliteTable(
   },
   (table) => [index("map_places_workspace_idx").on(table.workspaceId)]
 );
+
+// 구역: polygons on the board map (drawn or imported from Shapefiles).
+export const mapAreas = sqliteTable(
+  "map_areas",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    workspaceId: text("workspace_id").notNull(),
+    name: text("name").notNull(),
+    color: text("color").notNull().default("#18786f"),
+    memo: text("memo").notNull().default(""),
+    geometry: text("geometry").notNull(),
+    areaM2: real("area_m2").notNull(),
+    perimeterM: real("perimeter_m").notNull(),
+    source: text("source").notNull().default("draw"),
+    createdByMemberId: integer("created_by_member_id").notNull(),
+    createdByName: text("created_by_name").notNull(),
+    updatedBy: text("updated_by").notNull().default(""),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (table) => [index("map_areas_workspace_idx").on(table.workspaceId)]
+);

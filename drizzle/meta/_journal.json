@@ -92,6 +92,13 @@
       "when": 1795045380276,
       "tag": "0012_map_places",
       "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "6",
+      "when": 1795067354209,
+      "tag": "0013_map_areas",
+      "breakpoints": true
     }
   ]
 }

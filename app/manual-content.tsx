@@ -12,7 +12,7 @@ export const MANUAL_SECTIONS = [
   { id: "manual-dashboard", icon: "📊", title: "대시보드" },
   { id: "manual-calendar", icon: "🗓", title: "업무일정 (두 달 보기)" },
   { id: "manual-minutes", icon: "🗒", title: "회의록과 미참석자 확인" },
-  { id: "manual-map", icon: "🗺", title: "지도와 장소" },
+  { id: "manual-map", icon: "🗺", title: "지도·장소·구역(면적)" },
   { id: "manual-gantt", icon: "📅", title: "간트" },
   { id: "manual-search", icon: "🔍", title: "통합 검색" },
   { id: "manual-filter", icon: "🔎", title: "필터·검색·정렬" },
@@ -337,23 +337,23 @@ export default function ManualContent() {
         <p>
           <Key>지도</Key>는 일반 지도 앱처럼 씁니다. 끌어서 이동, 휠·두 손가락으로 확대하고, 오른쪽
           위에서 <Key>일반</Key> <Key>위성</Key> <Key>하이브리드</Key>를 바로 바꿉니다. 오른쪽 버튼은{" "}
-          <Key>📌</Key> 장소 추가, <Key>＋</Key> 업무 추가, <Key>◎</Key> 내 위치,{" "}
+          <Key>📌</Key> 장소 추가, <Key>⬠</Key> 구역 그리기, <Key>＋</Key> 업무 추가, <Key>◎</Key> 내 위치,{" "}
           <Key>⤢</Key> 모든 핀이 보이게, <Key>⚙</Key> 지도 설정(지도 제공자·API 키)입니다.
         </p>
         <p>
           <strong>지도를 더블클릭</strong>(또는 마우스 오른쪽 클릭, 휴대폰은{" "}
           <strong>길게 누르기</strong>)하면 그 자리에 <Key>여기에 장소 추가</Key>{" "}
-          <Key>여기에 업무 추가</Key> <Key>좌표 복사</Key> <Key>여기로 확대</Key> 메뉴가 뜹니다.{" "}
+          <Key>여기에 업무 추가</Key> <Key>여기서 구역 그리기</Key> <Key>좌표 복사</Key> <Key>여기로 확대</Key> 메뉴가 뜹니다.{" "}
           <Key>Esc</Key>로 메뉴나 위치 지정 모드를 취소합니다.
         </p>
         <p>
           왼쪽 목록(휴대폰은 위쪽, <Key>▾</Key>로 펼침)의 검색창은 이 보드의 업무·장소를 바로 찾고,{" "}
           <Key>Enter</Key>를 누르면 지명도 찾습니다. 지명 결과를 고르면 그 자리에 핀이 놓이고{" "}
           <Key>장소로 저장</Key> <Key>여기에 업무 추가</Key>를 할 수 있습니다. 목록은{" "}
-          <strong>업무 · 장소 · 위치 미지정</strong> 탭으로 나뉘고, 이름을 누르면 지도에서 그 핀으로
+          <strong>업무 · 장소 · 구역 · 미지정</strong> 탭으로 나뉘고, 이름을 누르면 지도에서 그 핀으로
           이동합니다. 업무 탭에서 각 업무 오른쪽의 <Key>◉</Key>를 누르면 그 업무의 핀만 끄고 켤 수
           있고(<Key>모두 표시</Key> <Key>모두 숨기기</Key>, 이 브라우저에 기억), 아래의{" "}
-          <Key>업무 핀</Key> <Key>장소 핀</Key>으로 종류 전체를 켜고 끕니다.
+          <Key>업무 핀</Key> <Key>장소 핀</Key> <Key>구역</Key>으로 종류 전체를 켜고 끕니다.
         </p>
         <p>
           핀을 누르면 정보 카드가 열립니다. 업무 핀(색: <strong>녹색=진행</strong>,{" "}
@@ -370,6 +370,29 @@ export default function ManualContent() {
           숙소)을 직접 적습니다. 주소와 메모(연락처, 출입·주차 안내)도 남깁니다. 장소 탭의 유형 칩으로
           원하는 유형만 보이게 합니다. 모두가 함께 보며, 업무 위치는 담당자·부서장, 장소는 등록한
           사람·부서장이 옮기거나 고칠 수 있습니다.
+        </p>
+        <p>
+          <strong>구역(폴리곤)과 면적</strong>: <Key>⬠</Key>(또는 구역 탭의 <Key>구역 그리기</Key>)를
+          누르고 지도에서 꼭짓점을 차례로 클릭합니다. 그리는 동안 위쪽 안내줄에 면적과 둘레가 바로
+          표시되고, <Key>↶ 점 취소</Key>(<Key>Backspace</Key>)로 마지막 점을 지웁니다.{" "}
+          <strong>더블클릭</strong>하거나 첫 점을 누르거나 <Key>완료</Key>(<Key>Enter</Key>)를 누르면
+          닫히고, 이름·색·메모를 적어 저장합니다. 면적은 지구 곡률을 반영해 계산하며{" "}
+          <strong>㎡ · ha · 평</strong>(넓으면 ㎢도)으로 보여 줍니다. 구역을 누르면 면적·둘레·꼭짓점
+          수가 나오고 <Key>수정</Key> <Key>삭제</Key> <Key>영역 보기</Key> <Key>GeoJSON</Key>(내려받기)를
+          쓸 수 있습니다. 구역 탭 위쪽에 전체 개수와 합계 면적이 나옵니다.
+        </p>
+        <p>
+          <strong>SHP 올리기</strong>: 구역 탭의 <Key>⇪ SHP 올리기</Key>로 Shapefile을 올리면 면(폴리곤)이
+          구역으로 바뀝니다. <strong>.zip 하나</strong>로 묶어 올리거나 <strong>.shp · .dbf · .prj</strong>(있으면
+          .cpg)를 함께 고르세요. .prj의 좌표계(예: EPSG:5186 중부원점, 5179, UTM-K)를 읽어 지도 좌표로
+          바꾸고, 한글 속성(EUC-KR·UTF-8)도 읽습니다. 미리 보기(주황 점선)에서 개수·합계 면적을 확인하고
+          구역 이름으로 쓸 속성(예: 명칭)과 색을 고른 뒤 <Key>구역 N개 저장</Key>을 누릅니다. 한 번에
+          300개까지, 점·선 도형은 제외되며 아주 복잡한 도형은 자동으로 단순화됩니다. 투영 좌표인데 .prj가
+          없으면 가져올 수 없으니 .prj를 함께 올려 주세요.
+        </p>
+        <p>
+          구역도 모두가 함께 보며 누구나 추가할 수 있고, 고치거나 지우는 것은 등록한 사람과 부서장만
+          할 수 있습니다.
         </p>
       </Section>
 

@@ -1,10 +1,21 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type * as LeafletNS from "leaflet";
 import "leaflet/dist/leaflet.css";
 
+import { AREA_COLORS, MAX_AREAS_PER_IMPORT, type AreasResponse, type MapArea } from "./lib/areas";
 import { escapeHtml } from "./lib/board-config";
+import {
+  formatArea,
+  formatLength,
+  geometryArea,
+  geometryBounds,
+  geometryPerimeter,
+  ringFromPoints,
+  vertexCount,
+  type AreaGeometry,
+} from "./lib/geo";
 import {
   KOREA_CENTER,
   KOREA_ZOOM,
@@ -30,12 +41,15 @@ import {
   nextStep,
   type WorkflowItem,
 } from "./lib/workflow";
+import { AreaEditor, ShpImportDialog, type AreaDraft, type ImportedArea } from "./map-areas";
 import { PlaceEditor, draftFromPlace, newPlaceDraft, placePinHtml, type PlaceDraft } from "./map-places";
 
 // 지도: the board map, built like the everyday map apps.
 // - 더블클릭 · 우클릭 · 길게 누르기 → "여기에 장소 / 업무 추가, 좌표 복사" menu
 // - Search box on the map: this board's 업무·장소 first, then place names
-// - Left panel (bottom sheet on phones): 업무 · 장소 · 위치 미지정
+// - Left panel (bottom sheet on phones): 업무 · 장소 · 구역 · 위치 미지정
+// - 구역: draw a polygon (click corners, double click to finish) or import a
+//   Shapefile; area and perimeter are shown in ㎡ · ha · 평
 // - Pins open an info card (열기·수정, 길찾기, 좌표 복사, 삭제); drag to move
 //   with 되돌리기; 내 위치, 전체 보기, 일반/위성/하이브리드, scale, live coords.
 
@@ -50,13 +64,20 @@ export type MapFocus = { key: number } & (
 type Selection =
   | { kind: "item"; id: number }
   | { kind: "place"; id: number }
+  | { kind: "area"; id: number }
   | { kind: "result"; result: MapSearchResult };
 
-type Mode = null | { kind: "assign"; itemId: number } | { kind: "new-place" } | { kind: "new-item" } | { kind: "repick"; draft: PlaceDraft };
+type Mode =
+  | null
+  | { kind: "assign"; itemId: number }
+  | { kind: "new-place" }
+  | { kind: "new-item" }
+  | { kind: "repick"; draft: PlaceDraft }
+  | { kind: "draw"; points: Array<[number, number]> };
 
 /** Where the "add here" menu opens; flipX/flipY keep it inside the map. */
 type Menu = { lat: number; lng: number; x: number; y: number; flipX: boolean; flipY: boolean };
-type Tab = "items" | "places" | "unplaced";
+type Tab = "items" | "places" | "areas" | "unplaced";
 const HIDDEN_ITEMS_KEY = "wc-map-hidden-items";
 type Toast = { id: number; text: string; undo?: () => void };
 
@@ -73,6 +94,31 @@ function itemColor(item: WorkflowItem) {
 
 function located(item: WorkflowItem): item is WorkflowItem & { lat: number; lng: number } {
   return item.lat !== null && item.lng !== null;
+}
+
+function shortArea(m2: number) {
+  return m2 >= 10_000
+    ? `${(m2 / 10_000).toLocaleString("ko-KR", { maximumFractionDigits: 2 })}ha`
+    : `${Math.round(m2).toLocaleString("ko-KR")}㎡`;
+}
+
+function downloadGeoJson(area: MapArea) {
+  const data = {
+    type: "FeatureCollection",
+    features: [
+      {
+        type: "Feature",
+        properties: { name: area.name, memo: area.memo, area_m2: area.areaM2, perimeter_m: area.perimeterM },
+        geometry: area.geometry,
+      },
+    ],
+  };
+  const url = URL.createObjectURL(new Blob([JSON.stringify(data)], { type: "application/geo+json" }));
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `${area.name.replace(/[\\/:*?"<>|]+/g, "_") || "구역"}.geojson`;
+  link.click();
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 function round(value: number) {
@@ -132,14 +178,20 @@ export default function MapView({
   const labelsRef = useRef<LeafletNS.TileLayer | null>(null);
   const itemLayerRef = useRef<LeafletNS.LayerGroup | null>(null);
   const placeLayerRef = useRef<LeafletNS.LayerGroup | null>(null);
+  const areaLayerRef = useRef<LeafletNS.LayerGroup | null>(null);
+  const drawLayerRef = useRef<LeafletNS.LayerGroup | null>(null);
+  const rubberRef = useRef<LeafletNS.Polyline | null>(null);
+  const shpInputRef = useRef<HTMLInputElement | null>(null);
   const tempLayerRef = useRef<LeafletNS.LayerGroup | null>(null);
   const markersRef = useRef<Map<string, LeafletNS.Marker>>(new Map());
   const fittedRef = useRef(false);
   const handlersRef = useRef<{
     pick: (lat: number, lng: number, x: number, y: number) => void;
     click: (lat: number, lng: number) => void;
+    move: (lat: number, lng: number) => void;
+    area: (id: number, lat: number, lng: number) => void;
     closeMenu: () => void;
-  }>({ pick: () => {}, click: () => {}, closeMenu: () => {} });
+  }>({ pick: () => {}, click: () => {}, move: () => {}, area: () => {}, closeMenu: () => {} });
 
   const [ready, setReady] = useState(0);
   const [selected, setSelected] = useState<Selection | null>(null);
@@ -170,6 +222,15 @@ export default function MapView({
   const [savingPlace, setSavingPlace] = useState(false);
   const [toast, setToast] = useState<Toast | null>(null);
   const [myLocation, setMyLocation] = useState<{ lat: number; lng: number } | null>(null);
+  const [areas, setAreas] = useState<MapArea[]>([]);
+  const [showAreas, setShowAreas] = useState(true);
+  const [areaDraft, setAreaDraft] = useState<AreaDraft | null>(null);
+  const [areaError, setAreaError] = useState("");
+  const [savingArea, setSavingArea] = useState(false);
+  const [shpFiles, setShpFiles] = useState<File[] | null>(null);
+  const [shpPreview, setShpPreview] = useState<AreaGeometry[]>([]);
+  const [shpError, setShpError] = useState("");
+  const [savingShp, setSavingShp] = useState(false);
 
   const pinned = useMemo(() => items.filter(located), [items]);
   const shownPinned = useMemo(() => pinned.filter((item) => !hiddenItemIds.has(item.id)), [hiddenItemIds, pinned]);
@@ -205,9 +266,39 @@ export default function MapView({
   );
   const canEditPlace = (place: Pick<MapPlace, "createdByMemberId">) =>
     isManager || (me !== null && place.createdByMemberId === me.memberId);
+  const canEditArea = canEditPlace;
+  const sortedAreas = useMemo(() => areas.slice().sort((a, b) => a.name.localeCompare(b.name, "ko-KR") || a.id - b.id), [areas]);
+  const areaTotal = useMemo(() => areas.reduce((sum, area) => sum + area.areaM2, 0), [areas]);
 
+  // 구역 are loaded here (the rest of the board does not need them).
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const response = await request("/api/areas", { cache: "no-store" });
+        const data = (await response.json().catch(() => ({}))) as AreasResponse;
+        if (!cancelled && response.ok) {
+          const loaded = data.areas ?? [];
+          setAreas(loaded);
+          // A board with 구역 but no pins opens on its 구역.
+          if (loaded.length && !focus && !items.some(located) && !places.length) {
+            window.setTimeout(() => fitGeometries(loaded.map((area) => area.geometry)), 0);
+          }
+        }
+      } catch {
+        // 구역 are optional; the map works without them.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [request]);
+
+  const toastSeq = useRef(0);
   function say(text: string, undo?: () => void) {
-    setToast({ id: Date.now(), text, undo });
+    toastSeq.current += 1;
+    setToast({ id: toastSeq.current, text, undo });
   }
 
   // ------------------------------------------------------------ map setup
@@ -224,6 +315,8 @@ export default function MapView({
       const map = L.map(containerRef.current, { doubleClickZoom: false, zoomControl: false }).setView(KOREA_CENTER, KOREA_ZOOM);
       L.control.zoom({ position: "bottomright", zoomInTitle: "확대", zoomOutTitle: "축소" }).addTo(map);
       L.control.scale({ position: "bottomleft", imperial: false }).addTo(map);
+      areaLayerRef.current = L.layerGroup().addTo(map);
+      drawLayerRef.current = L.layerGroup().addTo(map);
       itemLayerRef.current = L.layerGroup().addTo(map);
       placeLayerRef.current = L.layerGroup().addTo(map);
       tempLayerRef.current = L.layerGroup().addTo(map);
@@ -240,6 +333,7 @@ export default function MapView({
       map.on("click", (event: LeafletNS.LeafletMouseEvent) => handlersRef.current.click(event.latlng.lat, event.latlng.lng));
       map.on("movestart zoomstart", () => handlersRef.current.closeMenu());
       map.on("mousemove", (event: LeafletNS.LeafletMouseEvent) => {
+        handlersRef.current.move(event.latlng.lat, event.latlng.lng);
         if (coordsRef.current) {
           coordsRef.current.textContent = formatCoordinates(event.latlng.lat, event.latlng.lng);
         }
@@ -268,6 +362,9 @@ export default function MapView({
       mapRef.current = null;
       itemLayerRef.current = null;
       placeLayerRef.current = null;
+      areaLayerRef.current = null;
+      drawLayerRef.current = null;
+      rubberRef.current = null;
       tempLayerRef.current = null;
       tileRef.current = null;
       labelsRef.current = null;
@@ -384,6 +481,143 @@ export default function MapView({
     }
   }
 
+  // ------------------------------------------------------------ 구역
+
+  async function areaRequest(method: "POST" | "PATCH" | "DELETE", body: Record<string, unknown>) {
+    const response = await request("/api/areas", {
+      method,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const data = (await response.json().catch(() => ({}))) as AreasResponse;
+    if (!response.ok) {
+      throw new Error(data.error ?? "구역을 저장하지 못했습니다.");
+    }
+    return data;
+  }
+
+  function startDraw(first?: [number, number]) {
+    setMenu(null);
+    setSelected(null);
+    setMode({ kind: "draw", points: first ? [first] : [] });
+  }
+
+  function finishDraw(points: Array<[number, number]>) {
+    const ring = ringFromPoints(points);
+    if (ring.length < 4) {
+      say("꼭짓점을 3개 이상 찍어 주세요.");
+      return;
+    }
+    setMode(null);
+    setAreaError("");
+    setAreaDraft({
+      id: null,
+      name: "",
+      color: AREA_COLORS[0],
+      memo: "",
+      geometry: { type: "Polygon", coordinates: [ring] },
+      createdByMemberId: null,
+      createdByName: "",
+    });
+  }
+
+  async function saveArea() {
+    if (!areaDraft) {
+      return;
+    }
+    setSavingArea(true);
+    setAreaError("");
+    try {
+      const body = areaDraft.id
+        ? { id: areaDraft.id, name: areaDraft.name, color: areaDraft.color, memo: areaDraft.memo }
+        : { name: areaDraft.name, color: areaDraft.color, memo: areaDraft.memo, geometry: areaDraft.geometry, source: "draw" };
+      const data = await areaRequest(areaDraft.id ? "PATCH" : "POST", body);
+      const saved = data.area;
+      if (saved) {
+        setAreas((current) => [...current.filter((area) => area.id !== saved.id), saved]);
+        setSelected({ kind: "area", id: saved.id });
+        setShowAreas(true);
+        if (!areaDraft.id) {
+          say(`‘${saved.name}’ 구역을 저장했습니다 (${shortArea(saved.areaM2)}).`);
+        }
+      }
+      setAreaDraft(null);
+    } catch (saveError) {
+      setAreaError(saveError instanceof Error ? saveError.message : "구역을 저장하지 못했습니다.");
+    } finally {
+      setSavingArea(false);
+    }
+  }
+
+  async function deleteArea(area: MapArea) {
+    if (!window.confirm(`'${area.name}' 구역을 삭제할까요?`)) {
+      return;
+    }
+    try {
+      await areaRequest("DELETE", { id: area.id });
+      setAreas((current) => current.filter((entry) => entry.id !== area.id));
+      setSelected(null);
+      setAreaDraft((current) => (current?.id === area.id ? null : current));
+      say(`‘${area.name}’ 구역을 삭제했습니다.`);
+    } catch (deleteError) {
+      say(deleteError instanceof Error ? deleteError.message : "구역을 삭제하지 못했습니다.");
+    }
+  }
+
+  function fitGeometries(geometries: AreaGeometry[]) {
+    const L = leafletRef.current;
+    const map = mapRef.current;
+    if (!L || !map || !geometries.length) {
+      return;
+    }
+    const bounds = L.latLngBounds(geometries.flatMap((geometry) => geometryBounds(geometry)));
+    map.fitBounds(bounds, { padding: [60, 60], maxZoom: 17 });
+  }
+
+  function chooseArea(area: MapArea) {
+    setMenu(null);
+    setShowAreas(true);
+    setSelected({ kind: "area", id: area.id });
+    fitGeometries([area.geometry]);
+  }
+
+  const previewShp = useCallback((geometries: AreaGeometry[]) => {
+    setShpPreview(geometries);
+    const L = leafletRef.current;
+    const map = mapRef.current;
+    if (L && map && geometries.length) {
+      map.fitBounds(L.latLngBounds(geometries.flatMap((geometry) => geometryBounds(geometry))), { padding: [60, 60], maxZoom: 17 });
+    }
+  }, []);
+
+  const closeShp = useCallback(() => {
+    setShpFiles(null);
+    setShpPreview([]);
+    setShpError("");
+  }, []);
+
+  async function importShp(imported: ImportedArea[]) {
+    setSavingShp(true);
+    setShpError("");
+    try {
+      const saved: MapArea[] = [];
+      for (let start = 0; start < imported.length; start += MAX_AREAS_PER_IMPORT) {
+        const data = await areaRequest("POST", { areas: imported.slice(start, start + MAX_AREAS_PER_IMPORT) });
+        saved.push(...(data.areas ?? []));
+      }
+      setAreas((current) => [...current, ...saved]);
+      setShowAreas(true);
+      setTab("areas");
+      closeShp();
+      say(`SHP에서 구역 ${saved.length}개를 가져왔습니다 (합계 ${shortArea(saved.reduce((sum, area) => sum + area.areaM2, 0))}).`);
+      fitGeometries(saved.map((area) => area.geometry));
+    } catch (importError) {
+      setShpError(importError instanceof Error ? importError.message : "구역을 저장하지 못했습니다.");
+    } finally {
+      setSavingShp(false);
+    }
+  }
+
   function startNewPlace(lat: number, lng: number, overrides: Partial<PlaceDraft> = {}) {
     setMenu(null);
     setMode(null);
@@ -423,6 +657,7 @@ export default function MapView({
     const points: Array<[number, number]> = [
       ...(showItems ? shownPinned.map((item) => [item.lat, item.lng] as [number, number]) : []),
       ...(showPlaces ? visiblePlaces.map((place) => [place.lat, place.lng] as [number, number]) : []),
+      ...(showAreas ? areas.flatMap((area) => geometryBounds(area.geometry)) : []),
     ];
     if (!points.length) {
       map.setView(KOREA_CENTER, KOREA_ZOOM);
@@ -457,6 +692,11 @@ export default function MapView({
   useEffect(() => {
     handlersRef.current = {
       pick: (lat, lng, x, y) => {
+        if (mode?.kind === "draw") {
+          // Double click (or right click) finishes the shape.
+          finishDraw([...mode.points, [lat, lng]]);
+          return;
+        }
         if (mode) {
           handlersRef.current.click(lat, lng);
           return;
@@ -473,6 +713,10 @@ export default function MapView({
         });
       },
       click: (lat, lng) => {
+        if (mode?.kind === "draw") {
+          setMode({ kind: "draw", points: [...mode.points, [lat, lng]] });
+          return;
+        }
         if (mode?.kind === "assign") {
           const item = items.find((entry) => entry.id === mode.itemId);
           setMode(null);
@@ -499,19 +743,47 @@ export default function MapView({
         setMenu(null);
         setSelected(null);
       },
+      move: (lat, lng) => {
+        const rubber = rubberRef.current;
+        if (rubber && mode?.kind === "draw" && mode.points.length) {
+          const points = mode.points;
+          rubber.setLatLngs(points.length > 1 ? [points[points.length - 1], [lat, lng], points[0]] : [points[0], [lat, lng]]);
+        }
+      },
+      area: (id, lat, lng) => {
+        if (mode) {
+          handlersRef.current.click(lat, lng);
+          return;
+        }
+        setMenu(null);
+        setSelected({ kind: "area", id });
+      },
       closeMenu: () => setMenu(null),
     };
   });
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape" && !placeDraft) {
+      if (event.key === "Escape" && !placeDraft && !areaDraft && !shpFiles) {
         cancelAll();
+        return;
+      }
+      const target = event.target as HTMLElement | null;
+      const typing = target && /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName);
+      if (!typing && mode?.kind === "draw") {
+        if (event.key === "Backspace") {
+          event.preventDefault();
+          setMode({ kind: "draw", points: mode.points.slice(0, -1) });
+        } else if (event.key === "Enter") {
+          event.preventDefault();
+          finishDraw(mode.points);
+        }
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [placeDraft]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [placeDraft, areaDraft, shpFiles, mode]);
 
   useEffect(() => {
     if (!toast) {
@@ -593,6 +865,83 @@ export default function MapView({
     markersRef.current = markers;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [shownPinned, visiblePlaces, showItems, showPlaces, selected, ready, isManager, me]);
+
+  // 구역 polygons.
+  useEffect(() => {
+    const L = leafletRef.current;
+    const layer = areaLayerRef.current;
+    if (!L || !layer) {
+      return;
+    }
+    layer.clearLayers();
+    if (!showAreas) {
+      return;
+    }
+    for (const area of areas) {
+      const isSelected = selected?.kind === "area" && selected.id === area.id;
+      const shape = L.geoJSON(area.geometry as unknown as GeoJSON.GeoJsonObject, {
+        style: {
+          color: area.color,
+          weight: isSelected ? 3.5 : 2,
+          opacity: 0.95,
+          fillColor: area.color,
+          fillOpacity: isSelected ? 0.32 : 0.16,
+        },
+      }).addTo(layer);
+      shape.bindTooltip(`${escapeHtml(area.name)} · ${shortArea(area.areaM2)}`, { sticky: true });
+      shape.on("click", (event: LeafletNS.LeafletMouseEvent) => {
+        L.DomEvent.stopPropagation(event);
+        handlersRef.current.area(area.id, event.latlng.lat, event.latlng.lng);
+      });
+      if (isSelected) {
+        shape.bringToFront();
+      }
+    }
+  }, [areas, ready, selected, showAreas]);
+
+  // Shape being drawn, and the SHP import preview.
+  useEffect(() => {
+    const L = leafletRef.current;
+    const layer = drawLayerRef.current;
+    if (!L || !layer) {
+      return;
+    }
+    layer.clearLayers();
+    rubberRef.current = null;
+    for (const geometry of shpPreview) {
+      L.geoJSON(geometry as unknown as GeoJSON.GeoJsonObject, {
+        interactive: false,
+        style: { color: "#ea580c", weight: 2, dashArray: "6 4", fillColor: "#ea580c", fillOpacity: 0.12 },
+      }).addTo(layer);
+    }
+    if (mode?.kind !== "draw") {
+      return;
+    }
+    const style = { color: "#ea580c", weight: 2.5, interactive: false };
+    if (mode.points.length >= 3) {
+      L.polygon(mode.points, { ...style, fillColor: "#ea580c", fillOpacity: 0.15 }).addTo(layer);
+    } else if (mode.points.length === 2) {
+      L.polyline(mode.points, style).addTo(layer);
+    }
+    rubberRef.current = L.polyline([], { ...style, dashArray: "5 5", weight: 1.5 }).addTo(layer);
+    mode.points.forEach((point, index) => {
+      L.circleMarker(point, {
+        radius: index === 0 ? 6 : 4.5,
+        color: "#ea580c",
+        weight: 2,
+        fillColor: "#fff",
+        fillOpacity: 1,
+        interactive: index === 0 && mode.points.length >= 3,
+      })
+        .on("click", (event: LeafletNS.LeafletMouseEvent) => {
+          // Clicking the first corner closes the shape.
+          L.DomEvent.stopPropagation(event);
+          finishDraw(mode.points);
+        })
+        .addTo(layer);
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mode, ready, shpPreview]);
 
   // Temporary markers: the spot of the open menu, a search result, my location.
   useEffect(() => {
@@ -691,8 +1040,9 @@ export default function MapView({
             `${place.name} ${place.address} ${placeKindOf(place).label}`.toLocaleLowerCase("ko-KR").includes(needle)
           )
           .slice(0, 6),
+        areas: areas.filter((area) => `${area.name} ${area.memo}`.toLocaleLowerCase("ko-KR").includes(needle)).slice(0, 6),
       }
-    : { items: [], places: [] };
+    : { items: [], places: [], areas: [] };
 
   async function runGeoSearch() {
     const text = query.trim();
@@ -744,6 +1094,9 @@ export default function MapView({
 
   const selectedItem = selected?.kind === "item" ? items.find((item) => item.id === selected.id) ?? null : null;
   const selectedPlace = selected?.kind === "place" ? places.find((place) => place.id === selected.id) ?? null : null;
+  const selectedArea = selected?.kind === "area" ? areas.find((area) => area.id === selected.id) ?? null : null;
+  const drawRing = mode?.kind === "draw" ? ringFromPoints(mode.points) : [];
+  const drawGeometry: AreaGeometry | null = drawRing.length >= 4 ? { type: "Polygon", coordinates: [drawRing] } : null;
   const assigningItem = mode?.kind === "assign" ? items.find((item) => item.id === mode.itemId) ?? null : null;
   const modeText =
     mode?.kind === "assign"
@@ -914,6 +1267,49 @@ export default function MapView({
           </div>
         ) : null}
       </div>
+    ) : tab === "areas" ? (
+      <div className="space-y-0.5">
+        <div className="flex gap-1.5 px-1 pb-1.5">
+          <button type="button" className="tb-btn flex-1 !px-2 !py-1.5 text-xs" onClick={() => startDraw()}>
+            ⬠ 구역 그리기
+          </button>
+          <button type="button" className="tb-btn flex-1 !px-2 !py-1.5 text-xs" onClick={() => shpInputRef.current?.click()}>
+            ⇪ SHP 올리기
+          </button>
+        </div>
+        {areas.length ? (
+          <div className="px-2 pb-1 text-[11px] text-[var(--text-faint)]">
+            {areas.length}개 · 합계 {formatArea(areaTotal)}
+          </div>
+        ) : null}
+        {sortedAreas.map((area) => (
+          <button
+            key={area.id}
+            type="button"
+            onClick={() => chooseArea(area)}
+            data-active={selected?.kind === "area" && selected.id === area.id}
+            className="tb-map-row"
+          >
+            <span className="tb-map-row-icon" style={{ borderColor: area.color, background: `${area.color}2e` }} aria-hidden="true">
+              ⬠
+            </span>
+            <span className="min-w-0 flex-1">
+              <span className="block truncate text-sm font-medium">{area.name}</span>
+              <span className="block truncate text-[11px] text-[var(--text-faint)]">
+                {formatArea(area.areaM2).split(" · ").slice(0, 3).join(" · ")}
+                {area.source === "shp" ? " · SHP" : ""}
+              </span>
+            </span>
+          </button>
+        ))}
+        {!areas.length ? (
+          <div className="px-2 py-6 text-center text-sm text-[var(--text-faint)]">
+            등록된 구역이 없습니다.
+            <br />
+            ‘구역 그리기’로 지도에 꼭짓점을 찍거나, Shapefile(.zip 또는 .shp·.dbf·.prj)을 올리세요.
+          </div>
+        ) : null}
+      </div>
     ) : (
       <div className="space-y-0.5">
         {unplaced.map((item) => (
@@ -1016,7 +1412,7 @@ export default function MapView({
           <>
             {needle ? (
               <div className="tb-map-panel-body" data-testid="map-search-results">
-                {localMatches.items.length || localMatches.places.length ? (
+                {localMatches.items.length || localMatches.places.length || localMatches.areas.length ? (
                   <div className="pb-1">
                     <div className="px-3 pb-1 text-[11px] font-semibold text-[var(--text-faint)]">이 보드</div>
                     {localMatches.places.map((place) => (
@@ -1027,6 +1423,17 @@ export default function MapView({
                         <span className="min-w-0 flex-1">
                           <span className="block truncate text-sm font-medium">{place.name}</span>
                           <span className="block truncate text-[11px] text-[var(--text-faint)]">장소 · {placeKindOf(place).label}</span>
+                        </span>
+                      </button>
+                    ))}
+                    {localMatches.areas.map((area) => (
+                      <button key={`a${area.id}`} type="button" className="tb-map-row" onClick={() => chooseArea(area)}>
+                        <span className="tb-map-row-icon" style={{ borderColor: area.color }} aria-hidden="true">
+                          ⬠
+                        </span>
+                        <span className="min-w-0 flex-1">
+                          <span className="block truncate text-sm font-medium">{area.name}</span>
+                          <span className="block truncate text-[11px] text-[var(--text-faint)]">구역 · {shortArea(area.areaM2)}</span>
                         </span>
                       </button>
                     ))}
@@ -1084,7 +1491,8 @@ export default function MapView({
                     [
                       ["items", `업무 ${pinned.length}`],
                       ["places", `장소 ${places.length}`],
-                      ["unplaced", `위치 미지정 ${unplaced.length}`],
+                      ["areas", `구역 ${areas.length}`],
+                      ["unplaced", `미지정 ${unplaced.length}`],
                     ] as Array<[Tab, string]>
                   ).map(([key, label]) => (
                     <button
@@ -1108,6 +1516,10 @@ export default function MapView({
                   <label className="inline-flex items-center gap-1.5">
                     <input type="checkbox" checked={showPlaces} onChange={(event) => setShowPlaces(event.target.checked)} />
                     장소 핀
+                  </label>
+                  <label className="inline-flex items-center gap-1.5">
+                    <input type="checkbox" checked={showAreas} onChange={(event) => setShowAreas(event.target.checked)} />
+                    구역
                   </label>
                   <span className="ml-auto text-[11px] text-[var(--text-faint)]">더블클릭으로 추가</span>
                 </div>
@@ -1145,6 +1557,18 @@ export default function MapView({
         >
           📌
         </button>
+        <button
+          type="button"
+          className="tb-map-fab"
+          onClick={() => {
+            cancelAll();
+            startDraw();
+          }}
+          title="구역 그리기: 꼭짓점을 클릭하고 더블클릭으로 완료 (면적 자동 계산)"
+          aria-label="구역 그리기"
+        >
+          ⬠
+        </button>
         {canCreateItems ? (
           <button
             type="button"
@@ -1167,7 +1591,45 @@ export default function MapView({
         </button>
       </div>
 
-      {modeText ? (
+      {mode?.kind === "draw" ? (
+        <div className="tb-map-banner tb-map-banner-draw" role="status" data-testid="draw-banner">
+          <span className="min-w-0">
+            <b>구역 그리기</b> · 클릭으로 꼭짓점 {mode.points.length}개
+            {drawGeometry ? (
+              <>
+                {" · "}
+                <b data-testid="draw-area">{formatArea(geometryArea(drawGeometry)).split(" · ").slice(0, 2).join(" · ")}</b>
+                {" · 둘레 "}
+                {formatLength(geometryPerimeter(drawGeometry))}
+              </>
+            ) : (
+              " · 더블클릭(또는 첫 점 클릭)으로 완료"
+            )}
+          </span>
+          <span className="flex shrink-0 gap-1">
+            <button
+              type="button"
+              className="tb-btn tb-btn-primary !px-2 !py-0.5 text-xs"
+              disabled={!drawGeometry}
+              onClick={() => finishDraw(mode.points)}
+            >
+              완료
+            </button>
+            <button
+              type="button"
+              className="tb-btn !px-2 !py-0.5 text-xs"
+              disabled={!mode.points.length}
+              onClick={() => setMode({ kind: "draw", points: mode.points.slice(0, -1) })}
+              title="마지막 점 취소 (Backspace)"
+            >
+              ↶ 점 취소
+            </button>
+            <button type="button" className="tb-btn !px-2 !py-0.5 text-xs" onClick={() => setMode(null)}>
+              취소
+            </button>
+          </span>
+        </div>
+      ) : modeText ? (
         <div className="tb-map-banner" role="status">
           <span>🖱 {modeText}</span>
           <button type="button" className="tb-btn !px-2 !py-0.5 text-xs" onClick={() => setMode(null)}>
@@ -1198,6 +1660,9 @@ export default function MapView({
               <span className="w-5 text-center">📋</span>여기에 업무 추가
             </button>
           ) : null}
+          <button type="button" role="menuitem" className="tb-menu-item" onClick={() => startDraw([menu.lat, menu.lng])}>
+            <span className="w-5 text-center">⬠</span>여기서 구역 그리기
+          </button>
           <button type="button" role="menuitem" className="tb-menu-item" onClick={() => void copyCoordinates(menu.lat, menu.lng)}>
             <span className="w-5 text-center">⧉</span>좌표 복사
           </button>
@@ -1311,6 +1776,60 @@ export default function MapView({
             <DirectionLinks name={selectedPlace.name} lat={selectedPlace.lat} lng={selectedPlace.lng} onCopy={copyCoordinates} />
           </div>
         </div>
+      ) : selectedArea ? (
+        <div className="tb-map-card" role="dialog" aria-label={`구역 ${selectedArea.name}`} data-testid="map-card">
+          <div className="flex items-start gap-2">
+            <span className="tb-map-row-icon mt-0.5" style={{ borderColor: selectedArea.color, background: `${selectedArea.color}2e` }} aria-hidden="true">
+              ⬠
+            </span>
+            <div className="min-w-0 flex-1">
+              <div className="truncate text-[15px] font-semibold">{selectedArea.name}</div>
+              <div className="text-sm font-semibold" style={{ color: selectedArea.color }} data-testid="area-size">
+                {formatArea(selectedArea.areaM2)}
+              </div>
+              <div className="text-xs text-[var(--text-muted)]">
+                둘레 {formatLength(selectedArea.perimeterM)} · 꼭짓점 {vertexCount(selectedArea.geometry).toLocaleString("ko-KR")}개
+                {selectedArea.source === "shp" ? " · SHP" : ""}
+              </div>
+              {selectedArea.memo ? <div className="mt-1 whitespace-pre-wrap text-xs">{selectedArea.memo}</div> : null}
+              <div className="mt-0.5 text-[11px] text-[var(--text-faint)]">등록 {selectedArea.createdByName}</div>
+            </div>
+            <button type="button" className="tb-iconbtn h-7 w-7 shrink-0" aria-label="닫기" onClick={() => setSelected(null)}>
+              ×
+            </button>
+          </div>
+          <div className="mt-2.5 flex flex-wrap gap-1.5">
+            <button
+              type="button"
+              className="tb-btn tb-btn-primary !px-3 !py-1 text-xs"
+              onClick={() => {
+                setAreaError("");
+                setAreaDraft({
+                  id: selectedArea.id,
+                  name: selectedArea.name,
+                  color: selectedArea.color,
+                  memo: selectedArea.memo,
+                  geometry: selectedArea.geometry,
+                  createdByMemberId: selectedArea.createdByMemberId,
+                  createdByName: selectedArea.createdByName,
+                });
+              }}
+            >
+              {canEditArea(selectedArea) ? "수정" : "자세히"}
+            </button>
+            {canEditArea(selectedArea) ? (
+              <button type="button" className="tb-btn !px-3 !py-1 text-xs text-[var(--danger)]" onClick={() => void deleteArea(selectedArea)}>
+                삭제
+              </button>
+            ) : null}
+            <button type="button" className="tb-btn !px-3 !py-1 text-xs" onClick={() => fitGeometries([selectedArea.geometry])}>
+              영역 보기
+            </button>
+            <button type="button" className="tb-btn !px-3 !py-1 text-xs" onClick={() => downloadGeoJson(selectedArea)}>
+              GeoJSON
+            </button>
+          </div>
+        </div>
       ) : selected?.kind === "result" ? (
         <div className="tb-map-card" role="dialog" aria-label="검색한 위치" data-testid="map-card">
           <div className="flex items-start gap-2">
@@ -1403,6 +1922,51 @@ export default function MapView({
             setPlaceDraft(null);
           }}
           onClose={() => setPlaceDraft(null)}
+        />
+      ) : null}
+
+      <input
+        ref={shpInputRef}
+        type="file"
+        multiple
+        accept=".zip,.shp,.dbf,.prj,.cpg"
+        className="hidden"
+        data-testid="shp-input"
+        onChange={(event) => {
+          const files = [...(event.target.files ?? [])];
+          event.target.value = "";
+          if (files.length) {
+            cancelAll();
+            setShpError("");
+            setShpFiles(files);
+          }
+        }}
+      />
+      {shpFiles ? (
+        <ShpImportDialog
+          files={shpFiles}
+          saving={savingShp}
+          error={shpError}
+          onPreview={previewShp}
+          onImport={(imported) => void importShp(imported)}
+          onClose={closeShp}
+        />
+      ) : null}
+      {areaDraft ? (
+        <AreaEditor
+          draft={areaDraft}
+          editable={areaDraft.id === null || canEditArea({ createdByMemberId: areaDraft.createdByMemberId ?? -1 })}
+          saving={savingArea}
+          error={areaError}
+          onChange={setAreaDraft}
+          onSave={() => void saveArea()}
+          onDelete={() => {
+            const area = areas.find((entry) => entry.id === areaDraft.id);
+            if (area) {
+              void deleteArea(area);
+            }
+          }}
+          onClose={() => setAreaDraft(null)}
         />
       ) : null}
     </div>
