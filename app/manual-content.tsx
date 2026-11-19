@@ -613,7 +613,7 @@ export default function ManualContent() {
           <br />· 색상 규칙: 파랑=완료, 녹색=진행, 주황=임박·승인 대기, 빨강=지연·반려,
           회색=잠김/보조 정보.
           <br />· 이 매뉴얼은 로그인 전 첫 화면 아래와 보드의 <Key>메뉴</Key> → &lsquo;사용자
-          매뉴얼&rsquo;(또는 화면 맨 아래 링크)에서
+          매뉴얼&rsquo;에서
           언제든 볼 수 있습니다.
         </p>
       </Section>
