@@ -177,7 +177,7 @@ export default function ManualContent() {
       <Section id="manual-screen">
         <p>
           상단 첫 줄에는 보드 제목과 연도·팀, 전체 진행률(넓은 화면), 그리고 오른쪽에{" "}
-          <Key>검색</Key> <Key>🔔 알림</Key> <Key>⚙ 설정</Key>(부서장) <Key>☰ 메뉴</Key>{" "}
+          <Key>🔍 검색</Key> <Key>🔔 알림</Key> <Key>⚙ 설정</Key>(부서장) <Key>☰ 메뉴</Key>{" "}
           <Key>내 이름</Key> 버튼이 있습니다. <Key>메뉴</Key>에는 구성원, 양식함, 월간 보고서,
           업무 유형·단계(부서장), 변경 이력, 사용자 매뉴얼이 있고, <Key>내 이름</Key>에는
           보드 전환·계정과 로그아웃이 있습니다. 둘째 줄의 탭으로 화면을
@@ -191,7 +191,7 @@ export default function ManualContent() {
           올린 일정, 회의록은 내가 아직 확인하지 않은 회의록, 업무일지는 승인 대기(부서장) 건수.
           목록 검색·필터 줄은 <strong>목록·간트</strong>에서만 보입니다(지도는 지도 안의 검색창을
           씁니다). 어느 화면에서든 상단의{" "}
-          <Key>검색</Key>(단축키 <Key>Ctrl</Key>+<Key>K</Key>)으로 보드 전체를 찾을 수 있습니다.
+          <Key>🔍</Key> 검색(단축키 <Key>Ctrl</Key>+<Key>K</Key>)으로 보드 전체를 찾을 수 있습니다.
         </p>
         <p>
           <Key>메뉴</Key> → <Key>변경 이력</Key>에서 보드에서 일어난 일을 종류별(업무·업무일지·
@@ -382,7 +382,7 @@ export default function ManualContent() {
 
       <Section id="manual-search">
         <p>
-          상단의 <Key>검색</Key>(통합 검색)을 누르거나 <Key>Ctrl</Key>+<Key>K</Key>(맥은{" "}
+          상단의 <Key>🔍</Key>(통합 검색)을 누르거나 <Key>Ctrl</Key>+<Key>K</Key>(맥은{" "}
           <Key>⌘</Key>+<Key>K</Key>), 글을 입력하는 중이 아닐 때는 <Key>/</Key>를 누르면 검색
           창이 열립니다. 검색어를 넣으면 보드 전체에서 찾아 종류별로 보여 줍니다.
         </p>

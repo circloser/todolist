@@ -3541,8 +3541,6 @@ export default function TaskBoard() {
                 <circle cx="11" cy="11" r="8" />
                 <path d="m21 21-4.3-4.3" />
               </svg>
-              <span className="hidden md:inline">검색</span>
-              <kbd className="tb-kbd hidden lg:inline-flex">Ctrl K</kbd>
             </button>
 
             <button
