@@ -1599,6 +1599,16 @@ body {
   .tb-map-fab:hover {
     background: var(--surface-3);
   }
+  /* Picking a spot / drawing a 구역: precise crosshair instead of the hand,
+     also over pins and shapes (they forward clicks in these modes). */
+  .tb-map-picking.leaflet-container,
+  .tb-map-picking .leaflet-interactive,
+  .tb-map-picking.leaflet-grab {
+    cursor: crosshair !important;
+  }
+  .tb-map-picking.leaflet-dragging .leaflet-grab {
+    cursor: grabbing !important;
+  }
   .tb-map-banner {
     position: absolute;
     z-index: 1150;
