@@ -1,5 +1,6 @@
 "use client";
 
+import { AssigneeSelect } from "./assignee-select";
 import {
   type CSSProperties,
   DragEvent,
@@ -359,6 +360,17 @@ export default function TaskBoard() {
   const [templateFilter, setTemplateFilter] = useState("all");
   const [stageFilter, setStageFilter] = useState("all");
   const [keyword, setKeyword] = useState("");
+
+  function resetListFilters() {
+    setKeyword("");
+    setFilter("all");
+    setAssigneeFilter("all");
+    setSortMode("manual");
+    setTemplateFilter("all");
+    setCategoryFilter("all");
+    setStageFilter("all");
+    setDueFilter("all");
+  }
   const [newTitle, setNewTitle] = useState("");
   const [newAssignee, setNewAssignee] = useState("");
   const [newMemo, setNewMemo] = useState("");
@@ -3929,12 +3941,7 @@ export default function TaskBoard() {
 
                 <button
                   type="button"
-                  onClick={() => {
-                    setTemplateFilter("all");
-                    setCategoryFilter("all");
-                    setStageFilter("all");
-                    setDueFilter("all");
-                  }}
+                  onClick={resetListFilters}
                   className="tb-btn ml-auto"
                 >
                   초기화
@@ -5147,20 +5154,13 @@ export default function TaskBoard() {
                               </label>
                               <label className="block">
                                 <span className="tb-label">담당자</span>
-                                <input
+                                <AssigneeSelect
                                   value={item.assignee}
-                                  list="member-list"
-                                  onChange={(event) =>
-                                    updateLocalItem(item.id, {
-                                      assignee: event.target.value,
-                                    })
-                                  }
-                                  onBlur={(event) =>
-                                    updateItem(item.id, {
-                                      assignee: event.target.value,
-                                    })
-                                  }
-                                  className="tb-field"
+                                  members={members}
+                                  onChange={(assignee) => {
+                                    updateLocalItem(item.id, { assignee });
+                                    void updateItem(item.id, { assignee });
+                                  }}
                                 />
                               </label>
                               <label className="block">
@@ -5705,20 +5705,13 @@ export default function TaskBoard() {
                               <label className="block">
                                 <span className="tb-label">담당자</span>
                                 <div className="flex items-center gap-2">
-                                  <input
+                                  <AssigneeSelect
                                     value={item.assignee}
-                                    list="member-list"
-                                    onChange={(event) =>
-                                      updateLocalItem(item.id, {
-                                        assignee: event.target.value,
-                                      })
-                                    }
-                                    onBlur={(event) =>
-                                      updateItem(item.id, {
-                                        assignee: event.target.value,
-                                      })
-                                    }
-                                    className="tb-field"
+                                    members={members}
+                                    onChange={(assignee) => {
+                                      updateLocalItem(item.id, { assignee });
+                                      void updateItem(item.id, { assignee });
+                                    }}
                                   />
                                   <input
                                     type="color"
@@ -6109,13 +6102,11 @@ export default function TaskBoard() {
                             className="tb-field"
                             placeholder="새 업무명"
                           />
-                          <input
+                          <AssigneeSelect
                             value={isManager ? newAssignee : currentActor}
                             disabled={!isManager}
-                            list="member-list"
-                            onChange={(event) => setNewAssignee(event.target.value)}
-                            className="tb-field"
-                            placeholder="담당자"
+                            members={members}
+                            onChange={setNewAssignee}
                           />
                           <input
                             type="date"
@@ -6381,20 +6372,14 @@ export default function TaskBoard() {
                               </div>
                             </td>
                             <td className="px-2 py-2.5 align-top">
-                              <input
+                              <AssigneeSelect
                                 value={item.assignee}
-                                list="member-list"
-                                onChange={(event) =>
-                                  updateLocalItem(item.id, {
-                                    assignee: event.target.value,
-                                  })
-                                }
-                                onBlur={(event) =>
-                                  updateItem(item.id, {
-                                    assignee: event.target.value,
-                                  })
-                                }
+                                members={members}
                                 className="tb-ghost text-xs"
+                                onChange={(assignee) => {
+                                  updateLocalItem(item.id, { assignee });
+                                  void updateItem(item.id, { assignee });
+                                }}
                               />
                               <input
                                 type="color"
@@ -6823,13 +6808,11 @@ export default function TaskBoard() {
                   className="tb-field"
                   placeholder="새 업무명"
                 />
-                <input
+                <AssigneeSelect
                   value={isManager ? newAssignee : currentActor}
                   disabled={!isManager}
-                  list="member-list"
-                  onChange={(event) => setNewAssignee(event.target.value)}
-                  className="tb-field"
-                  placeholder="담당자"
+                  members={members}
+                  onChange={setNewAssignee}
                 />
                 <input
                   type="date"
@@ -7659,13 +7642,11 @@ export default function TaskBoard() {
                 </label>
                 <label className="block">
                   <span className="tb-label">담당자</span>
-                  <input
+                  <AssigneeSelect
                     value={isManager ? mapNewAssignee : currentActor}
                     disabled={!isManager}
-                    list="member-list"
-                    onChange={(event) => setMapNewAssignee(event.target.value)}
-                    className="tb-field"
-                    placeholder="담당자"
+                    members={members}
+                    onChange={setMapNewAssignee}
                   />
                 </label>
                 <label className="block">
@@ -7875,15 +7856,7 @@ export default function TaskBoard() {
               ) : null}
               <button
                 type="button"
-                onClick={() => {
-                  setFilter("all");
-                  setAssigneeFilter("all");
-                  setSortMode("manual");
-                  setTemplateFilter("all");
-                  setCategoryFilter("all");
-                  setStageFilter("all");
-                  setDueFilter("all");
-                }}
+                onClick={resetListFilters}
                 className="tb-btn"
               >
                 초기화
@@ -8574,15 +8547,6 @@ export default function TaskBoard() {
         onOpenCalendar={() => openView("calendar")}
       />
 
-      <datalist id="member-list">
-        {members
-          .filter((member) => member.active)
-          .map((member) => (
-            <option key={member.id} value={member.name}>
-              {member.role}
-            </option>
-          ))}
-      </datalist>
 
       <datalist id="wetland-presets">
         {WETLAND_PRESETS.map((preset) => (
