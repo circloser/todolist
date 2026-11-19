@@ -1,11 +1,11 @@
 "use client";
 
-import { useEffect, useMemo } from "react";
+import { useEffect } from "react";
 
-import { PLACE_KINDS, placeKindOf, placeKindsInUse, type MapPlace, type PlaceKind } from "./lib/places";
+import { PLACE_KINDS, placeKindOf, type MapPlace, type PlaceKind } from "./lib/places";
 
-// 지도 장소 UI: the side-panel list with 유형 filters, and the editor dialog.
-// The Leaflet layer itself lives with the rest of the map in the board.
+// 지도 장소 UI helpers: the editor dialog, drafts and the pin markup. The
+// map itself (layers, panel, info card) lives in map-view.tsx.
 
 export type PlaceDraft = {
   id: number | null;
@@ -55,112 +55,6 @@ export function draftFromPlace(place: MapPlace): PlaceDraft {
 export function placePinHtml(place: Pick<MapPlace, "kind" | "customKind">) {
   const kind = placeKindOf(place);
   return `<span style="--place-color:${kind.color}"><i>${kind.icon}</i></span>`;
-}
-
-export function PlacesCard({
-  places,
-  hiddenKinds,
-  canEdit,
-  adding,
-  onToggleKind,
-  onAdd,
-  onFocus,
-  onEdit,
-}: {
-  places: MapPlace[];
-  hiddenKinds: Set<string>;
-  canEdit: (place: MapPlace) => boolean;
-  adding: boolean;
-  onToggleKind: (label: string) => void;
-  onAdd: () => void;
-  onFocus: (place: MapPlace) => void;
-  onEdit: (place: MapPlace) => void;
-}) {
-  const kinds = useMemo(() => placeKindsInUse(places), [places]);
-  const shown = places
-    .filter((place) => !hiddenKinds.has(placeKindOf(place).label))
-    .sort(
-      (first, second) =>
-        PLACE_KINDS.findIndex((kind) => kind.key === first.kind) - PLACE_KINDS.findIndex((kind) => kind.key === second.kind) ||
-        first.name.localeCompare(second.name, "ko-KR")
-    );
-
-  return (
-    <div className="tb-card p-4" data-testid="map-places">
-      <div className="flex items-center gap-2">
-        <h2 className="text-sm font-semibold">
-          장소 <span className="text-[var(--text-faint)]">{places.length}</span>
-        </h2>
-        <button type="button" onClick={onAdd} disabled={adding} className="tb-btn ml-auto !px-2.5 !py-1 text-xs">
-          + 장소 추가
-        </button>
-      </div>
-      <p className="mt-1 text-[11px] leading-4 text-[var(--text-faint)]">
-        사무실·현장·회의 장소 등 업무가 아닌 곳을 핀으로 표시합니다.
-      </p>
-      {kinds.length ? (
-        <div className="mt-2 flex flex-wrap gap-1" aria-label="장소 유형 표시">
-          {kinds.map((kind) => {
-            const off = hiddenKinds.has(kind.label);
-            return (
-              <button
-                key={kind.label}
-                type="button"
-                aria-pressed={!off}
-                onClick={() => onToggleKind(kind.label)}
-                title={off ? `${kind.label} 표시` : `${kind.label} 숨기기`}
-                className="tb-chip tb-chip-btn !text-[11px]"
-                style={off ? { opacity: 0.45 } : { borderColor: kind.color }}
-              >
-                <span aria-hidden="true">{kind.icon}</span>
-                {kind.label}
-                <span className="text-[var(--text-faint)]">{kind.count}</span>
-              </button>
-            );
-          })}
-        </div>
-      ) : null}
-      <div className="mt-2 max-h-[26vh] space-y-1 overflow-auto">
-        {shown.map((place) => {
-          const kind = placeKindOf(place);
-          return (
-            <div key={place.id} className="flex items-center gap-1">
-              <button
-                type="button"
-                onClick={() => onFocus(place)}
-                className="min-w-0 flex-1 rounded-[var(--radius-sm)] px-2 py-1.5 text-left text-sm transition hover:bg-[var(--surface-3)]"
-              >
-                <div className="flex items-center gap-1.5 truncate font-medium">
-                  <span aria-hidden="true">{kind.icon}</span>
-                  <span className="truncate">{place.name}</span>
-                </div>
-                <div className="truncate text-[11px] text-[var(--text-faint)]">
-                  {kind.label}
-                  {place.address ? ` · ${place.address}` : ""}
-                </div>
-              </button>
-              <button
-                type="button"
-                onClick={() => onEdit(place)}
-                className="tb-iconbtn h-7 w-7 shrink-0 text-xs"
-                title={canEdit(place) ? "장소 수정" : "장소 보기"}
-                aria-label={`${place.name} ${canEdit(place) ? "수정" : "보기"}`}
-              >
-                {canEdit(place) ? "✎" : "ⓘ"}
-              </button>
-            </div>
-          );
-        })}
-        {!places.length ? (
-          <div className="py-3 text-sm text-[var(--text-faint)]">
-            등록된 장소가 없습니다. ‘+ 장소 추가’를 누른 뒤 지도를 클릭하세요.
-          </div>
-        ) : !shown.length ? (
-          <div className="py-3 text-sm text-[var(--text-faint)]">모든 유형이 숨겨져 있습니다.</div>
-        ) : null}
-      </div>
-    </div>
-  );
 }
 
 export function PlaceEditor({

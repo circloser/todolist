@@ -12,8 +12,6 @@ import {
   useRef,
   useState,
 } from "react";
-import type * as LeafletNS from "leaflet";
-import "leaflet/dist/leaflet.css";
 
 import {
   DASHBOARD_WIDGETS,
@@ -29,7 +27,6 @@ import {
   defaultTemplates,
   defaultWidgetPrefs,
   dueFilters,
-  escapeHtml,
   filters,
   isoDate,
   periodRange,
@@ -49,15 +46,17 @@ import { ScheduleNotices, ScheduleToasts } from "./schedule-notices";
 import SearchPalette from "./search-palette";
 import HeaderMenu, { MenuItem } from "./header-menu";
 import HistoryPanel from "./history-panel";
+import MapView, { type MapFocus } from "./map-view";
 import {
-  PlaceEditor,
-  PlacesCard,
-  draftFromPlace,
-  newPlaceDraft,
-  placePinHtml,
-  type PlaceDraft,
-} from "./map-places";
-import { placeKindOf, type MapPlace, type PlacesResponse } from "./lib/places";
+  MAP_PROVIDER_LABELS,
+  MAP_STYLE_LABELS,
+  mapTileConfig,
+  readMapPrefs,
+  saveMapPrefs,
+  type MapProvider,
+  type MapStyle,
+} from "./lib/map-config";
+import type { MapPlace, PlacesResponse } from "./lib/places";
 import SettingsPanel, { type SettingsTab } from "./settings-panel";
 import WorkLogPanel from "./work-log-panel";
 import type { CalendarEvent } from "./lib/schedule";
@@ -130,14 +129,6 @@ type ReportSortKey =
   | "dueDate"
   | "status";
 type SortDirection = "asc" | "desc";
-type MapProvider = "osm" | "google" | "vworld";
-type MapStyle = "road" | "satellite" | "hybrid";
-type MapSearchResult = {
-  label: string;
-  lat: number;
-  lng: number;
-  source: string;
-};
 type DropEdge = "before" | "after";
 type DropIndicator =
   | {
@@ -170,18 +161,6 @@ const CATEGORY_COLORS = [
   "#6f7b2d",
   "#9a6a3a",
 ];
-
-const MAP_PROVIDER_LABELS: Record<MapProvider, string> = {
-  osm: "Leaflet / OSM",
-  google: "Google",
-  vworld: "VWorld",
-};
-
-const MAP_STYLE_LABELS: Record<MapStyle, string> = {
-  road: "일반",
-  satellite: "위성",
-  hybrid: "하이브리드",
-};
 
 function colorHash(value: string) {
   return Array.from(value).reduce(
@@ -233,103 +212,6 @@ function replaceCategoryPrefix(value: string, source: string, target: string) {
 function storedCategoryName(value: string) {
   const key = categoryKey(value);
   return key === categoryKey("") ? "" : key;
-}
-
-function mapTileConfig(
-  provider: MapProvider,
-  style: MapStyle,
-  keys: { google: string; vworld: string }
-) {
-  if (provider === "vworld" && keys.vworld.trim()) {
-    const layer =
-      style === "satellite" ? "Satellite" : style === "hybrid" ? "Hybrid" : "Base";
-
-    return {
-      url: `https://api.vworld.kr/req/wmts/1.0.0/${encodeURIComponent(
-        keys.vworld.trim()
-      )}/${layer}/{z}/{y}/{x}.png`,
-      attribution: "VWorld",
-      maxZoom: 19,
-      notice: "",
-    };
-  }
-
-  if (provider === "google") {
-    const layer = style === "satellite" ? "s" : style === "hybrid" ? "y" : "m";
-    const key = keys.google.trim()
-      ? `&key=${encodeURIComponent(keys.google.trim())}`
-      : "";
-
-    return {
-      url: `https://mt{s}.google.com/vt/lyrs=${layer}&x={x}&y={y}&z={z}${key}`,
-      attribution: "Google",
-      maxZoom: 20,
-      subdomains: ["0", "1", "2", "3"],
-      notice: keys.google.trim()
-        ? ""
-        : "Google 지도는 공식 사용을 위해 API 키 설정을 권장합니다.",
-    };
-  }
-
-  const notice =
-    provider === "vworld" && !keys.vworld.trim()
-      ? "VWorld 지도를 보려면 VWorld API 키를 입력해 주세요. 키가 없으면 기본 지도로 표시됩니다."
-      : "";
-
-  return {
-    url:
-      style === "satellite"
-        ? "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
-        : "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
-    attribution:
-      style === "satellite"
-        ? "Tiles &copy; Esri"
-        : '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
-    maxZoom: style === "satellite" ? 19 : 19,
-    notice,
-  };
-}
-
-function readMapPrefs() {
-  const fallback = {
-    provider: "osm" as MapProvider,
-    style: "road" as MapStyle,
-    googleKey: "",
-    vworldKey: "",
-  };
-
-  if (typeof window === "undefined") {
-    return fallback;
-  }
-
-  try {
-    const raw = window.localStorage.getItem("team-progress-map");
-    if (!raw) {
-      return fallback;
-    }
-
-    const parsed = JSON.parse(raw) as {
-      provider?: MapProvider;
-      style?: MapStyle;
-      googleKey?: string;
-      vworldKey?: string;
-    };
-
-    return {
-      provider:
-        parsed.provider && parsed.provider in MAP_PROVIDER_LABELS
-          ? parsed.provider
-          : fallback.provider,
-      style:
-        parsed.style && parsed.style in MAP_STYLE_LABELS
-          ? parsed.style
-          : fallback.style,
-      googleKey: parsed.googleKey ?? "",
-      vworldKey: parsed.vworldKey ?? "",
-    };
-  } catch {
-    return fallback;
-  }
 }
 
 const WORKSPACE_STORAGE_KEY = "team-progress-workspace-id";
@@ -420,42 +302,10 @@ export default function TaskBoard() {
   const [widgetMenuOpen, setWidgetMenuOpen] = useState(false);
   const [widgetPrefs, setWidgetPrefs] =
     useState<Record<string, boolean>>(defaultWidgetPrefs);
-  const [mapReady, setMapReady] = useState(0);
-  const mapContainerRef = useRef<HTMLDivElement | null>(null);
-  const leafletLibRef = useRef<typeof LeafletNS | null>(null);
-  const leafletMapRef = useRef<LeafletNS.Map | null>(null);
-  const markerLayerRef = useRef<LeafletNS.LayerGroup | null>(null);
-  const tileLayerRef = useRef<LeafletNS.TileLayer | null>(null);
-  const openItemRef = useRef<(id: number) => void>(() => {});
-  const clearMapPinRef = useRef<(id: number) => void>(() => {});
-  const moveMapPinRef = useRef<(id: number, lat: number, lng: number) => void>(
-    () => {}
-  );
-  const [placingItemId, setPlacingItemId] = useState<number | null>(null);
-  // 지도 장소 (사무실·현장·회의 장소…): pins that are not work items.
+  // 지도 장소 (shared with 통합 검색) and where the map should look next.
   const [mapPlaces, setMapPlaces] = useState<MapPlace[]>([]);
-  const [placeDraft, setPlaceDraft] = useState<PlaceDraft | null>(null);
-  const [placeError, setPlaceError] = useState("");
-  const [savingPlace, setSavingPlace] = useState(false);
-  const [addingPlace, setAddingPlace] = useState(false);
-  const [hiddenPlaceKinds, setHiddenPlaceKinds] = useState<Set<string>>(new Set());
-  const [focusPlaceId, setFocusPlaceId] = useState<number | null>(null);
-  const placeLayerRef = useRef<LeafletNS.LayerGroup | null>(null);
-  const placeMarkersRef = useRef<Map<number, LeafletNS.Marker>>(new Map());
-  const addingPlaceRef = useRef(false);
-  const repickDraftRef = useRef<PlaceDraft | null>(null);
-  const placeAtRef = useRef<(lat: number, lng: number) => void>(() => {});
-  const movePlaceRef = useRef<(id: number, lat: number, lng: number) => void>(() => {});
-  const editPlaceRef = useRef<(id: number) => void>(() => {});
-  const deletePlaceRef = useRef<(id: number) => void>(() => {});
-  const placingItemIdRef = useRef<number | null>(null);
-  const placeItemAtRef = useRef<(id: number, lat: number, lng: number) => void>(
-    () => {}
-  );
-  const pendingFlyToRef = useRef<[number, number] | null>(null);
-  const [creatingOnMap, setCreatingOnMap] = useState(false);
-  const creatingOnMapRef = useRef(false);
-  const mapCreateAtRef = useRef<(lat: number, lng: number) => void>(() => {});
+  const [mapFocus, setMapFocus] = useState<MapFocus | null>(null);
+  const clearMapFocus = useCallback(() => setMapFocus(null), []);
   const [mapDraft, setMapDraft] = useState<{ lat: number; lng: number } | null>(
     null
   );
@@ -469,10 +319,6 @@ export default function TaskBoard() {
   const [mapStyle, setMapStyle] = useState<MapStyle>(initialMapPrefs.style);
   const [googleMapKey, setGoogleMapKey] = useState(initialMapPrefs.googleKey);
   const [vworldMapKey, setVworldMapKey] = useState(initialMapPrefs.vworldKey);
-  const [mapSearchQuery, setMapSearchQuery] = useState("");
-  const [mapSearchResults, setMapSearchResults] = useState<MapSearchResult[]>([]);
-  const [mapSearching, setMapSearching] = useState(false);
-  const [mapSearchError, setMapSearchError] = useState("");
   const [mapSettingsOpen, setMapSettingsOpen] = useState(false);
   const [ganttDrag, setGanttDrag] = useState<{
     itemId: number;
@@ -658,77 +504,6 @@ export default function TaskBoard() {
       setMapPlaces(response.ok ? (data.places ?? []) : []);
     } catch {
       // Places are optional; the map works without them.
-    }
-  }
-
-  function canEditPlace(place: Pick<MapPlace, "createdByMemberId">) {
-    return isManager || (me !== null && place.createdByMemberId === me.memberId);
-  }
-
-  async function placeRequest(method: "POST" | "PATCH" | "DELETE", body: Record<string, unknown>) {
-    const response = await apiRequest("/api/places", {
-      method,
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
-    const data = (await response.json().catch(() => ({}))) as PlacesResponse;
-    if (!response.ok) {
-      throw new Error(data.error ?? "장소를 저장하지 못했습니다.");
-    }
-    return data;
-  }
-
-  async function savePlace() {
-    if (!placeDraft) {
-      return;
-    }
-    setSavingPlace(true);
-    setPlaceError("");
-    try {
-      const data = await placeRequest(placeDraft.id ? "PATCH" : "POST", { ...placeDraft });
-      const saved = data.place;
-      if (saved) {
-        setMapPlaces((current) => [...current.filter((place) => place.id !== saved.id), saved]);
-        setFocusPlaceId(saved.id);
-      }
-      setPlaceDraft(null);
-    } catch (saveError) {
-      setPlaceError(saveError instanceof Error ? saveError.message : "장소를 저장하지 못했습니다.");
-    } finally {
-      setSavingPlace(false);
-    }
-  }
-
-  async function deletePlace(id: number) {
-    const place = mapPlaces.find((entry) => entry.id === id);
-    if (!place || !window.confirm(`'${place.name}' 장소를 지도에서 삭제할까요?`)) {
-      return;
-    }
-    try {
-      await placeRequest("DELETE", { id });
-      setMapPlaces((current) => current.filter((entry) => entry.id !== id));
-      setPlaceDraft((current) => (current?.id === id ? null : current));
-    } catch (deleteError) {
-      setError(deleteError instanceof Error ? deleteError.message : "장소를 삭제하지 못했습니다.");
-    }
-  }
-
-  async function movePlace(id: number, lat: number, lng: number) {
-    const previous = mapPlaces;
-    const nextLat = Number(lat.toFixed(5));
-    const nextLng = Number(lng.toFixed(5));
-    setMapPlaces((current) =>
-      current.map((place) => (place.id === id ? { ...place, lat: nextLat, lng: nextLng } : place))
-    );
-    try {
-      const data = await placeRequest("PATCH", { id, lat: nextLat, lng: nextLng });
-      if (data.place) {
-        const saved = data.place;
-        setMapPlaces((current) => current.map((place) => (place.id === id ? saved : place)));
-      }
-    } catch (moveError) {
-      setMapPlaces(previous);
-      setError(moveError instanceof Error ? moveError.message : "장소 위치를 바꾸지 못했습니다.");
     }
   }
 
@@ -2060,7 +1835,6 @@ export default function TaskBoard() {
       return;
     }
 
-    setPlacingItemId((current) => (current === item.id ? null : current));
     updateLocalItem(item.id, { lat: null, lng: null });
     await updateItem(item.id, { lat: null, lng: null });
   }
@@ -2721,136 +2495,6 @@ export default function TaskBoard() {
       );
     } finally {
       setSendingAlerts(false);
-    }
-  }
-
-  async function searchMapPlaces(event?: FormEvent<HTMLFormElement>) {
-    event?.preventDefault();
-    const query = mapSearchQuery.trim();
-
-    if (!query) {
-      setMapSearchResults([]);
-      setMapSearchError("");
-      return;
-    }
-
-    setMapSearching(true);
-    setMapSearchError("");
-
-    try {
-      const localResults: MapSearchResult[] = WETLAND_PRESETS.filter((preset) =>
-        preset.name.toLocaleLowerCase("ko-KR").includes(
-          query.toLocaleLowerCase("ko-KR")
-        )
-      )
-        .slice(0, 5)
-        .map((preset) => ({
-          label: preset.name,
-          lat: preset.lat,
-          lng: preset.lng,
-          source: "기본 목록",
-        }));
-      let remoteResults: MapSearchResult[] = [];
-
-      if (vworldMapKey.trim()) {
-        type VWorldSearchItem = {
-          title?: string;
-          address?: { parcel?: string; road?: string };
-          point?: { x?: string; y?: string };
-        };
-        const params = new URLSearchParams({
-          service: "search",
-          request: "search",
-          version: "2.0",
-          crs: "EPSG:4326",
-          size: "5",
-          page: "1",
-          type: "PLACE",
-          format: "json",
-          key: vworldMapKey.trim(),
-          query,
-        });
-        const response = await fetch(
-          `https://api.vworld.kr/req/search?${params.toString()}`
-        );
-        const data = (await response.json()) as {
-          response?: { result?: { items?: VWorldSearchItem[] } };
-        };
-        remoteResults =
-          data.response?.result?.items
-            ?.map((item) => {
-              const lat = Number(item.point?.y);
-              const lng = Number(item.point?.x);
-
-              if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
-                return null;
-              }
-
-              return {
-                label:
-                  item.title ??
-                  item.address?.road ??
-                  item.address?.parcel ??
-                  query,
-                lat,
-                lng,
-                source: "VWorld",
-              };
-            })
-            .filter((item): item is MapSearchResult => item !== null) ?? [];
-      } else {
-        type NominatimItem = {
-          display_name?: string;
-          lat?: string;
-          lon?: string;
-        };
-        const params = new URLSearchParams({
-          format: "jsonv2",
-          q: query,
-          limit: "5",
-          countrycodes: "kr",
-          "accept-language": "ko",
-        });
-        const response = await fetch(
-          `https://nominatim.openstreetmap.org/search?${params.toString()}`
-        );
-        const data = (await response.json()) as NominatimItem[];
-        remoteResults = data
-          .map((item) => {
-            const lat = Number(item.lat);
-            const lng = Number(item.lon);
-
-            if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
-              return null;
-            }
-
-            return {
-              label: item.display_name ?? query,
-              lat,
-              lng,
-              source: "OSM",
-            };
-          })
-          .filter((item): item is MapSearchResult => item !== null);
-      }
-
-      const unique = new Map<string, MapSearchResult>();
-      [...localResults, ...remoteResults].forEach((result) => {
-        unique.set(`${result.lat.toFixed(5)},${result.lng.toFixed(5)}`, result);
-      });
-      const results = [...unique.values()].slice(0, 8);
-      setMapSearchResults(results);
-      if (!results.length) {
-        setMapSearchError("검색 결과가 없습니다.");
-      }
-    } catch (searchError) {
-      setMapSearchError(
-        searchError instanceof Error
-          ? searchError.message
-          : "지명을 검색하지 못했습니다."
-      );
-    } finally {
-      setMapSearching(false);
     }
   }
 
@@ -3747,19 +3391,7 @@ export default function TaskBoard() {
   }, []);
 
   useEffect(() => {
-    try {
-      window.localStorage.setItem(
-        "team-progress-map",
-        JSON.stringify({
-          provider: mapProvider,
-          style: mapStyle,
-          googleKey: googleMapKey,
-          vworldKey: vworldMapKey,
-        })
-      );
-    } catch {
-      // ignore local storage failures
-    }
+    saveMapPrefs({ provider: mapProvider, style: mapStyle, googleKey: googleMapKey, vworldKey: vworldMapKey });
   }, [googleMapKey, mapProvider, mapStyle, vworldMapKey]);
 
   function toggleWidget(key: string) {
@@ -3772,321 +3404,6 @@ export default function TaskBoard() {
       return next;
     });
   }
-
-  // Keep the latest callbacks/state reachable from Leaflet event handlers
-  // without re-creating the map on every render.
-  useEffect(() => {
-    addingPlaceRef.current = addingPlace;
-    placeAtRef.current = (lat: number, lng: number) => {
-      const base = repickDraftRef.current;
-      repickDraftRef.current = null;
-      const point = { lat: Number(lat.toFixed(5)), lng: Number(lng.toFixed(5)) };
-      setAddingPlace(false);
-      setPlaceError("");
-      setPlaceDraft(base ? { ...base, ...point } : newPlaceDraft(point.lat, point.lng));
-    };
-    movePlaceRef.current = (id: number, lat: number, lng: number) => {
-      void movePlace(id, lat, lng);
-    };
-    editPlaceRef.current = (id: number) => {
-      const place = mapPlaces.find((entry) => entry.id === id);
-      if (place) {
-        setPlaceError("");
-        setPlaceDraft(draftFromPlace(place));
-      }
-    };
-    deletePlaceRef.current = (id: number) => void deletePlace(id);
-    openItemRef.current = openItem;
-    clearMapPinRef.current = (id: number) => {
-      const item = items.find((candidate) => candidate.id === id);
-      if (item) {
-        void clearMapPin(item);
-      }
-    };
-    moveMapPinRef.current = (id: number, lat: number, lng: number) => {
-      const nextLat = Number(lat.toFixed(5));
-      const nextLng = Number(lng.toFixed(5));
-      updateLocalItem(id, { lat: nextLat, lng: nextLng });
-      void updateItem(id, { lat: nextLat, lng: nextLng });
-    };
-    placingItemIdRef.current = placingItemId;
-    creatingOnMapRef.current = creatingOnMap;
-    placeItemAtRef.current = (id: number, lat: number, lng: number) => {
-      setPlacingItemId(null);
-      void updateItem(id, {
-        lat: Number(lat.toFixed(5)),
-        lng: Number(lng.toFixed(5)),
-      });
-    };
-    mapCreateAtRef.current = (lat: number, lng: number) => {
-      setCreatingOnMap(false);
-      setMapDraft({
-        lat: Number(lat.toFixed(5)),
-        lng: Number(lng.toFixed(5)),
-      });
-    };
-  });
-
-  // Create the Leaflet map when entering the map view; destroy it on leave so
-  // the (conditionally rendered) container never holds a stale instance.
-  useEffect(() => {
-    if (viewMode !== "map") {
-      return;
-    }
-
-    let disposed = false;
-    const container = mapContainerRef.current;
-
-    const handlePopupClick = (event: Event) => {
-      const clearTarget = (event.target as HTMLElement).closest(
-        "[data-clear-pin]"
-      );
-      if (clearTarget) {
-        clearMapPinRef.current(
-          Number(clearTarget.getAttribute("data-clear-pin"))
-        );
-        return;
-      }
-
-      const target = (event.target as HTMLElement).closest("[data-open-item]");
-      if (target) {
-        openItemRef.current(Number(target.getAttribute("data-open-item")));
-        return;
-      }
-
-      const editPlace = (event.target as HTMLElement).closest("[data-edit-place]");
-      if (editPlace) {
-        editPlaceRef.current(Number(editPlace.getAttribute("data-edit-place")));
-        return;
-      }
-      const removePlace = (event.target as HTMLElement).closest("[data-delete-place]");
-      if (removePlace) {
-        deletePlaceRef.current(Number(removePlace.getAttribute("data-delete-place")));
-      }
-    };
-    container?.addEventListener("click", handlePopupClick);
-
-    void (async () => {
-      const leafletModule = await import("leaflet");
-      const L = (leafletModule.default ?? leafletModule) as typeof LeafletNS;
-
-      if (disposed || !mapContainerRef.current || leafletMapRef.current) {
-        return;
-      }
-
-      leafletLibRef.current = L;
-      const map = L.map(mapContainerRef.current).setView([36.2, 127.9], 7);
-      markerLayerRef.current = L.layerGroup().addTo(map);
-      placeLayerRef.current = L.layerGroup().addTo(map);
-      leafletMapRef.current = map;
-
-      // Placement mode: clicking the map assigns coordinates to the task
-      // selected in the side panel.
-      map.on("click", (event: LeafletNS.LeafletMouseEvent) => {
-        const id = placingItemIdRef.current;
-        if (id !== null) {
-          placeItemAtRef.current(id, event.latlng.lat, event.latlng.lng);
-          return;
-        }
-        if (addingPlaceRef.current) {
-          placeAtRef.current(event.latlng.lat, event.latlng.lng);
-          return;
-        }
-        if (creatingOnMapRef.current) {
-          mapCreateAtRef.current(event.latlng.lat, event.latlng.lng);
-        }
-      });
-
-      // A dashboard region row may have queued a fly-to before the map existed.
-      if (pendingFlyToRef.current) {
-        map.setView(pendingFlyToRef.current, 11);
-        pendingFlyToRef.current = null;
-      }
-
-      // Signal the marker effect that the (async-created) map now exists.
-      setMapReady((value) => value + 1);
-    })();
-
-    return () => {
-      disposed = true;
-      container?.removeEventListener("click", handlePopupClick);
-      leafletMapRef.current?.remove();
-      leafletMapRef.current = null;
-      markerLayerRef.current = null;
-      placeLayerRef.current = null;
-      placeMarkersRef.current = new Map();
-      tileLayerRef.current = null;
-      setPlacingItemId(null);
-      setCreatingOnMap(false);
-      setAddingPlace(false);
-    };
-  }, [viewMode]);
-
-  useEffect(() => {
-    const L = leafletLibRef.current;
-    const map = leafletMapRef.current;
-
-    if (viewMode !== "map" || !L || !map) {
-      return;
-    }
-
-    tileLayerRef.current?.remove();
-    const config = mapTileConfig(mapProvider, mapStyle, {
-      google: googleMapKey,
-      vworld: vworldMapKey,
-    });
-    const tileOptions: LeafletNS.TileLayerOptions = {
-      attribution: config.attribution,
-      maxZoom: config.maxZoom,
-    };
-
-    if ("subdomains" in config) {
-      tileOptions.subdomains = config.subdomains;
-    }
-
-    const layer = L.tileLayer(config.url, tileOptions).addTo(map);
-    tileLayerRef.current = layer;
-  }, [googleMapKey, mapProvider, mapReady, mapStyle, viewMode, vworldMapKey]);
-
-  // Redraw markers whenever the filtered items change while the map is open.
-  useEffect(() => {
-    const L = leafletLibRef.current;
-    const layer = markerLayerRef.current;
-
-    if (viewMode !== "map" || !L || !layer || !leafletMapRef.current) {
-      return;
-    }
-
-    layer.clearLayers();
-
-    for (const item of visibleItems) {
-      if (item.lat === null || item.lng === null) {
-        continue;
-      }
-
-      const color = isItemDone(item)
-        ? COMPLETE_COLOR
-        : itemHasOverdueDate(item)
-          ? "#dc2626"
-          : itemHasUrgentDate(item)
-            ? "#d97706"
-            : "#18786f";
-      const editable = canEditItem(me, item);
-      const marker = L.marker([item.lat, item.lng], {
-        draggable: editable,
-        icon: L.divIcon({
-          className: "tb-map-pin",
-          html: `<span style="--pin-color:${color}">${escapeHtml(
-            String(itemProgress(item))
-          )}</span>`,
-          iconSize: [34, 34],
-          iconAnchor: [17, 17],
-        }),
-      }).addTo(layer);
-      const locationLabel = item.location || item.title || "이름 없는 위치";
-      marker.bindTooltip(editable ? `${locationLabel} · 드래그로 위치 이동` : locationLabel);
-      marker.on("dragend", () => {
-        const next = marker.getLatLng();
-        moveMapPinRef.current(item.id, next.lat, next.lng);
-      });
-
-      marker.bindPopup(
-        `<div style="min-width:190px;max-width:240px;font-size:13px;line-height:1.5">
-          <div style="font-weight:700">📍 ${escapeHtml(locationLabel)}</div>
-          <div style="margin-top:7px;display:flex;align-items:center;gap:8px">
-            <div style="min-width:0;flex:1">
-              <div style="font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escapeHtml(item.title || "제목 없음")}</div>
-              <div style="color:#61667a;font-size:12px">${escapeHtml(
-                assigneeName(item.assignee)
-              )} · ${itemProgress(item)}%</div>
-            </div>
-            <button type="button" data-open-item="${item.id}" style="flex-shrink:0;white-space:nowrap;padding:3px 9px;border-radius:8px;border:1px solid #18786f;background:#e4f2ef;color:#18786f;font-weight:600;cursor:pointer">열기</button>
-            ${editable ? `<button type="button" data-clear-pin="${item.id}" style="flex-shrink:0;white-space:nowrap;padding:3px 8px;border-radius:8px;border:1px solid #edbeb8;background:#fbecea;color:#c44232;font-weight:600;cursor:pointer">핀 삭제</button>` : ""}
-          </div>
-          <div style="margin-top:7px;color:#61667a;font-size:12px">${editable ? "핀을 드래그하면 좌표가 바로 저장됩니다." : "담당자 또는 부서장만 위치를 바꿀 수 있습니다."}</div>
-        </div>`
-      );
-    }
-  }, [viewMode, visibleItems, mapReady, me]);
-
-  // 지도 장소 markers (typed icons), drawn above the work-item pins.
-  useEffect(() => {
-    const L = leafletLibRef.current;
-    const layer = placeLayerRef.current;
-
-    if (viewMode !== "map" || !L || !layer || !leafletMapRef.current) {
-      return;
-    }
-
-    layer.clearLayers();
-    const markers = new Map<number, LeafletNS.Marker>();
-
-    for (const place of mapPlaces) {
-      const kind = placeKindOf(place);
-      if (hiddenPlaceKinds.has(kind.label)) {
-        continue;
-      }
-      const editable = isManager || (me !== null && place.createdByMemberId === me.memberId);
-      const marker = L.marker([place.lat, place.lng], {
-        draggable: editable,
-        zIndexOffset: 500,
-        icon: L.divIcon({
-          className: "tb-place-pin",
-          html: placePinHtml(place),
-          iconSize: [32, 32],
-          // The rotated square's tip sits about 21px below its centre.
-          iconAnchor: [16, 37],
-          popupAnchor: [0, -34],
-        }),
-      }).addTo(layer);
-      marker.bindTooltip(`${kind.label} · ${place.name}${editable ? " · 드래그로 이동" : ""}`);
-      marker.on("dragend", () => {
-        const next = marker.getLatLng();
-        movePlaceRef.current(place.id, next.lat, next.lng);
-      });
-      marker.bindPopup(
-        `<div style="min-width:190px;max-width:250px;font-size:13px;line-height:1.5">
-          <div style="display:flex;align-items:center;gap:6px;font-weight:700">${kind.icon} ${escapeHtml(place.name)}</div>
-          <div style="margin-top:2px;color:${kind.color};font-size:12px;font-weight:600">${escapeHtml(kind.label)}</div>
-          ${place.address ? `<div style="margin-top:4px;color:#61667a;font-size:12px">${escapeHtml(place.address)}</div>` : ""}
-          ${place.memo ? `<div style="margin-top:4px;white-space:pre-wrap;font-size:12px">${escapeHtml(place.memo)}</div>` : ""}
-          <div style="margin-top:8px;display:flex;align-items:center;gap:6px">
-            <span style="flex:1;color:#8b9790;font-size:11px">등록 ${escapeHtml(place.createdByName)}</span>
-            <button type="button" data-edit-place="${place.id}" style="padding:3px 9px;border-radius:8px;border:1px solid #18786f;background:#e4f2ef;color:#18786f;font-weight:600;cursor:pointer">${editable ? "수정" : "보기"}</button>
-            ${editable ? `<button type="button" data-delete-place="${place.id}" style="padding:3px 8px;border-radius:8px;border:1px solid #edbeb8;background:#fbecea;color:#c44232;font-weight:600;cursor:pointer">삭제</button>` : ""}
-          </div>
-        </div>`
-      );
-      markers.set(place.id, marker);
-    }
-    placeMarkersRef.current = markers;
-  }, [hiddenPlaceKinds, isManager, mapPlaces, mapReady, me, viewMode]);
-
-  // Fly to a place picked in the side panel, 통합 검색 or just saved.
-  useEffect(() => {
-    if (focusPlaceId === null || viewMode !== "map" || !leafletMapRef.current) {
-      return;
-    }
-    const timer = window.setTimeout(() => {
-      const place = mapPlaces.find((entry) => entry.id === focusPlaceId);
-      const map = leafletMapRef.current;
-      setFocusPlaceId(null);
-      if (!place || !map) {
-        return;
-      }
-      const label = placeKindOf(place).label;
-      if (hiddenPlaceKinds.has(label)) {
-        setHiddenPlaceKinds((current) => {
-          const next = new Set(current);
-          next.delete(label);
-          return next;
-        });
-      }
-      map.setView([place.lat, place.lng], Math.max(map.getZoom(), 14));
-      window.setTimeout(() => placeMarkersRef.current.get(place.id)?.openPopup(), 120);
-    }, 0);
-    return () => window.clearTimeout(timer);
-  }, [focusPlaceId, hiddenPlaceKinds, mapPlaces, mapReady, viewMode]);
 
   // Drag a gantt bar's end handle to move the item's final due date.
   function startGanttDrag(
@@ -5217,7 +4534,7 @@ export default function TaskBoard() {
                           type="button"
                           onClick={() => {
                             if (region.lat !== null && region.lng !== null) {
-                              pendingFlyToRef.current = [region.lat, region.lng];
+                              setMapFocus({ key: Date.now(), lat: region.lat, lng: region.lng, zoom: 11 });
                             }
                             setViewMode("map");
                           }}
@@ -6851,320 +6168,34 @@ export default function TaskBoard() {
             ) : null}
           </div>
         ) : viewMode === "map" ? (
-          <div className="grid items-stretch gap-4 lg:grid-cols-[minmax(0,1fr)_300px]">
-            <div className="tb-card tb-map-shell min-h-[560px] overflow-hidden lg:min-h-[calc(100dvh-220px)]">
-              {placingItemId !== null || creatingOnMap || addingPlace ? (
-                <div className="flex items-center justify-between gap-3 border-b border-[var(--warning-border)] bg-[var(--warning-soft)] px-4 py-2 text-sm font-medium text-[var(--warning)]">
-                  <span>
-                    {placingItemId !== null ? (
-                      <>
-                        🖱 지도를 클릭해{" "}
-                        <strong>
-                          {items.find((item) => item.id === placingItemId)
-                            ?.title ?? "업무"}
-                        </strong>
-                        의 위치를 지정하세요
-                      </>
-                    ) : addingPlace ? (
-                      <>🖱 지도를 클릭해 장소(사무실·현장 등)의 위치를 선택하세요</>
-                    ) : (
-                      <>🖱 지도를 클릭해 새 업무의 위치를 선택하세요</>
-                    )}
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setPlacingItemId(null);
-                      setCreatingOnMap(false);
-                      setAddingPlace(false);
-                      repickDraftRef.current = null;
-                    }}
-                    className="tb-btn shrink-0 !py-1 text-xs"
-                  >
-                    취소
-                  </button>
-                </div>
-              ) : null}
-              <div
-                ref={mapContainerRef}
-                className="tb-map-canvas h-full min-h-[560px] w-full lg:min-h-[calc(100dvh-220px)]"
-              />
-            </div>
-
-            <div className="space-y-3">
-              <div className="grid grid-cols-3 gap-2">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setPlacingItemId(null);
-                    setAddingPlace(false);
-                    setCreatingOnMap(true);
-                  }}
-                  disabled={creatingOnMap || !canCreateItems}
-                  title={canCreateItems ? undefined : "이 보드는 부서장만 새 업무를 등록할 수 있습니다"}
-                  className="tb-btn tb-btn-primary justify-center whitespace-nowrap !px-2 text-sm"
-                >
-                  + 새 업무
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setPlacingItemId(null);
-                    setCreatingOnMap(false);
-                    repickDraftRef.current = null;
-                    setAddingPlace(true);
-                  }}
-                  disabled={addingPlace}
-                  className="tb-btn justify-center whitespace-nowrap !px-2 text-sm"
-                  title="사무실·현장·회의 장소 등을 지도에 표시"
-                >
-                  + 장소
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setMapSettingsOpen(true)}
-                  className="tb-btn justify-center whitespace-nowrap !px-2 text-sm"
-                >
-                  지도 설정
-                </button>
-              </div>
-              <div className="text-center text-[11px] text-[var(--text-faint)]">
-                {MAP_PROVIDER_LABELS[mapProvider]} · {MAP_STYLE_LABELS[mapStyle]}
-              </div>
-
-              <div className="tb-card p-4">
-                <h2 className="text-sm font-semibold">지명 검색</h2>
-                <form
-                  onSubmit={(event) => void searchMapPlaces(event)}
-                  className="mt-3 flex gap-2"
-                >
-                  <input
-                    value={mapSearchQuery}
-                    onChange={(event) => setMapSearchQuery(event.target.value)}
-                    className="tb-field min-w-0 flex-1"
-                    placeholder="예: 우포늪, 순천만"
-                  />
-                  <button
-                    type="submit"
-                    disabled={!mapSearchQuery.trim() || mapSearching}
-                    className="tb-btn tb-btn-primary shrink-0 !px-3"
-                  >
-                    {mapSearching ? "검색 중" : "검색"}
-                  </button>
-                </form>
-                {mapSearchError ? (
-                  <p className="mt-2 text-[11px] text-[var(--danger)]">
-                    {mapSearchError}
-                  </p>
-                ) : null}
-                {mapSearchResults.length ? (
-                  <div className="mt-2 max-h-40 space-y-1 overflow-auto">
-                    {mapSearchResults.map((result) => (
-                      <div
-                        key={`${result.source}-${result.lat}-${result.lng}-${result.label}`}
-                        className="flex items-start gap-1"
-                      >
-                      <button
-                        type="button"
-                        onClick={() => {
-                          leafletMapRef.current?.setView(
-                            [result.lat, result.lng],
-                            13
-                          );
-                          setMapNewLocation(result.label);
-                        }}
-                        className="min-w-0 flex-1 rounded-[var(--radius-sm)] px-2 py-1.5 text-left text-xs transition hover:bg-[var(--surface-3)]"
-                      >
-                        <div className="line-clamp-2 font-medium">
-                          {result.label}
-                        </div>
-                        <div className="text-[10px] text-[var(--text-faint)]">
-                          {result.source} · {result.lat.toFixed(4)},{" "}
-                          {result.lng.toFixed(4)}
-                        </div>
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          leafletMapRef.current?.setView([result.lat, result.lng], 14);
-                          setPlaceError("");
-                          setPlaceDraft(
-                            newPlaceDraft(Number(result.lat.toFixed(5)), Number(result.lng.toFixed(5)), {
-                              name: result.label.split(",")[0].trim().slice(0, 80),
-                              address: result.label.slice(0, 200),
-                              kind: "site",
-                            })
-                          );
-                        }}
-                        className="tb-chip tb-chip-btn mt-1 shrink-0 !px-2 !text-[10.5px]"
-                        title="이 위치를 장소로 등록"
-                      >
-                        ＋장소
-                      </button>
-                      </div>
-                    ))}
-                  </div>
-                ) : null}
-              </div>
-
-              <PlacesCard
-                places={mapPlaces}
-                hiddenKinds={hiddenPlaceKinds}
-                canEdit={canEditPlace}
-                adding={addingPlace}
-                onToggleKind={(label) =>
-                  setHiddenPlaceKinds((current) => {
-                    const next = new Set(current);
-                    if (next.has(label)) {
-                      next.delete(label);
-                    } else {
-                      next.add(label);
-                    }
-                    return next;
-                  })
-                }
-                onAdd={() => {
-                  setPlacingItemId(null);
-                  setCreatingOnMap(false);
-                  repickDraftRef.current = null;
-                  setAddingPlace(true);
-                }}
-                onFocus={(place) => setFocusPlaceId(place.id)}
-                onEdit={(place) => {
-                  setPlaceError("");
-                  setPlaceDraft(draftFromPlace(place));
-                }}
-              />
-
-              <div className="tb-card p-4">
-                <h2 className="text-sm font-semibold">범례</h2>
-                <div className="mt-2.5 space-y-1.5 text-sm">
-                  {[
-                    { color: "#18786f", label: "진행 중" },
-                    { color: "#d97706", label: "마감 임박 (D-3 이내)" },
-                    { color: "#dc2626", label: "지연" },
-                    { color: COMPLETE_COLOR, label: "완료" },
-                  ].map((entry) => (
-                    <div key={entry.label} className="flex items-center gap-2">
-                      <span
-                        className="h-3 w-3 rounded-full border-2 border-white shadow"
-                        style={{ background: entry.color }}
-                      />
-                      <span className="text-[var(--text-muted)]">
-                        {entry.label}
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              <div className="tb-card p-4">
-                <h2 className="text-sm font-semibold">
-                  지도 표시 업무{" "}
-                  <span className="text-[var(--text-faint)]">
-                    {
-                      visibleItems.filter(
-                        (item) => item.lat !== null && item.lng !== null
-                      ).length
-                    }
-                  </span>
-                </h2>
-                <div className="mt-2 max-h-[26vh] space-y-1 overflow-auto">
-                  {visibleItems
-                    .filter((item) => item.lat !== null && item.lng !== null)
-                    .map((item) => (
-                      <div key={item.id} className="flex items-center gap-1">
-                        <button
-                          type="button"
-                          onClick={() =>
-                            leafletMapRef.current?.setView(
-                              [item.lat as number, item.lng as number],
-                              11
-                            )
-                          }
-                          className="min-w-0 flex-1 rounded-[var(--radius-sm)] px-2 py-1.5 text-left text-sm transition hover:bg-[var(--surface-3)]"
-                        >
-                          <div className="truncate font-medium">
-                            {item.title || "제목 없음"}
-                          </div>
-                          <div className="truncate text-[11px] text-[var(--text-faint)]">
-                            📍 {item.location || "이름 없는 위치"} ·{" "}
-                            {itemProgress(item)}%
-                          </div>
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setPlacingItemId(item.id)}
-                          disabled={!canEdit(item)}
-                          className="tb-iconbtn h-7 w-7 shrink-0 text-xs disabled:cursor-not-allowed disabled:opacity-30"
-                          title="지도를 클릭해 위치 다시 지정"
-                        >
-                          📍
-                        </button>
-                        <button
-                          type="button"
-                          disabled={savingItemIds.has(item.id)}
-                          onClick={() => void clearMapPin(item)}
-                          className="tb-iconbtn tb-iconbtn-danger h-7 w-7 shrink-0 text-xs disabled:cursor-not-allowed disabled:opacity-40"
-                          title="지도 핀 삭제"
-                        >
-                          ×
-                        </button>
-                      </div>
-                    ))}
-                  {!visibleItems.some(
-                    (item) => item.lat !== null && item.lng !== null
-                  ) ? (
-                    <div className="py-4 text-sm text-[var(--text-faint)]">
-                      좌표가 지정된 업무가 없습니다.
-                    </div>
-                  ) : null}
-                </div>
-              </div>
-
-              <div className="tb-card p-4">
-                <h2 className="text-sm font-semibold">
-                  위치 미지정{" "}
-                  <span className="text-[var(--text-faint)]">
-                    {
-                      visibleItems.filter(
-                        (item) => item.lat === null || item.lng === null
-                      ).length
-                    }
-                  </span>
-                </h2>
-                <div className="mt-2 max-h-[22vh] space-y-1 overflow-auto">
-                  {visibleItems
-                    .filter((item) => item.lat === null || item.lng === null)
-                    .map((item) => (
-                      <div key={item.id} className="flex items-center gap-1">
-                        <button
-                          type="button"
-                          onClick={() => openItem(item.id)}
-                          className="min-w-0 flex-1 truncate rounded-[var(--radius-sm)] px-2 py-1.5 text-left text-sm transition hover:bg-[var(--surface-3)]"
-                          title="클릭해 상세에서 위치를 지정하세요"
-                        >
-                          {item.title || "제목 없음"}
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setPlacingItemId(item.id)}
-                          disabled={!canEdit(item)}
-                          className="tb-iconbtn h-7 w-7 shrink-0 text-xs disabled:cursor-not-allowed disabled:opacity-30"
-                          title="지도를 클릭해 위치 지정"
-                        >
-                          📍
-                        </button>
-                      </div>
-                    ))}
-                </div>
-                <p className="mt-2 text-[11px] leading-4 text-[var(--text-faint)]">
-                  📍 버튼을 누른 뒤 지도를 클릭하면 그 지점이 위치로 저장됩니다.
-                  이름은 상세 패널의 &lsquo;위치&rsquo;에서 지정할 수 있습니다.
-                </p>
-              </div>
-            </div>
-          </div>
+          <MapView
+            items={visibleItems}
+            places={mapPlaces}
+            onPlacesChange={setMapPlaces}
+            me={me}
+            isManager={isManager}
+            canCreateItems={canCreateItems}
+            canEditItem={canEdit}
+            provider={mapProvider}
+            mapStyle={mapStyle}
+            googleKey={googleMapKey}
+            vworldKey={vworldMapKey}
+            onStyleChange={setMapStyle}
+            onOpenSettings={() => setMapSettingsOpen(true)}
+            request={apiRequest}
+            focus={mapFocus}
+            onFocusHandled={clearMapFocus}
+            onOpenItem={openItem}
+            onMoveItem={(id, lat, lng) => {
+              updateLocalItem(id, { lat, lng });
+              void updateItem(id, { lat, lng });
+            }}
+            onClearItemPin={(item) => void clearMapPin(item)}
+            onCreateItemAt={({ lat, lng, location }) => {
+              setMapNewLocation(location);
+              setMapDraft({ lat, lng });
+            }}
+          />
         ) : viewMode === "grid" ? (
           <div className="space-y-4">
             {loading ? (
@@ -9554,28 +8585,6 @@ export default function TaskBoard() {
         />
       ) : null}
 
-      {placeDraft ? (
-        <PlaceEditor
-          draft={placeDraft}
-          editable={placeDraft.id === null || canEditPlace({ createdByMemberId: placeDraft.createdByMemberId ?? -1 })}
-          saving={savingPlace}
-          error={placeError}
-          customKinds={[
-            ...new Set(mapPlaces.map((place) => place.customKind).filter(Boolean)),
-          ]}
-          onChange={setPlaceDraft}
-          onSave={() => void savePlace()}
-          onDelete={() => placeDraft.id !== null && void deletePlace(placeDraft.id)}
-          onRepick={() => {
-            // Pick a new spot, then come back to this draft (saved on 저장).
-            repickDraftRef.current = placeDraft;
-            setAddingPlace(true);
-            setPlaceDraft(null);
-          }}
-          onClose={() => setPlaceDraft(null)}
-        />
-      ) : null}
-
       {historyOpen ? <HistoryPanel history={history} onClose={() => setHistoryOpen(false)} /> : null}
 
       {searchOpen ? (
@@ -9593,7 +8602,7 @@ export default function TaskBoard() {
           }}
           onOpenWorkLog={openWorkLog}
           onOpenPlace={(id) => {
-            setFocusPlaceId(id);
+            setMapFocus({ key: Date.now(), placeId: id });
             openView("map");
           }}
           onOpenMembers={() => setMembersOpen(true)}
