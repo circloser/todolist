@@ -161,7 +161,6 @@ export default function MapView({
   const [toast, setToast] = useState<Toast | null>(null);
   const [myLocation, setMyLocation] = useState<{ lat: number; lng: number } | null>(null);
 
-  const tile = mapTileConfig(provider, mapStyle, { google: googleKey, vworld: vworldKey });
   const pinned = useMemo(() => items.filter(located), [items]);
   const unplaced = useMemo(() => items.filter((item) => !located(item)), [items]);
   const kinds = useMemo(() => placeKindsInUse(places), [places]);
@@ -1096,8 +1095,6 @@ export default function MapView({
             취소 (Esc)
           </button>
         </div>
-      ) : tile.notice ? (
-        <div className="tb-map-banner !bg-[var(--surface)] !text-[var(--text-muted)]">{tile.notice}</div>
       ) : null}
 
       {/* "Add here" menu: double click, right click or long press. */}

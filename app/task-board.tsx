@@ -50,7 +50,6 @@ import MapView, { type MapFocus } from "./map-view";
 import {
   MAP_PROVIDER_LABELS,
   MAP_STYLE_LABELS,
-  mapTileConfig,
   readMapPrefs,
   saveMapPrefs,
   type MapProvider,
@@ -3320,12 +3319,10 @@ export default function TaskBoard() {
 
   // Jump from a dashboard widget straight to a task: switch to the list,
   // expand it, and scroll it into view with a brief highlight.
-  // Search and filters only change what 목록·지도·간트 show.
+  // Search and filters only change what 목록·간트 show. The map has its own
+  // search box (업무·장소·지명) and always shows every pinned task.
   const showItemFilters =
-    viewMode === "list" ||
-    viewMode === "map" ||
-    viewMode === "gantt" ||
-    viewMode === "grid";
+    viewMode === "list" || viewMode === "gantt" || viewMode === "grid";
 
   function openView(mode: ViewMode) {
     setViewMode(mode);
@@ -3458,10 +3455,6 @@ export default function TaskBoard() {
     return "#18786f";
   }
 
-  const activeMapTileNotice = mapTileConfig(mapProvider, mapStyle, {
-    google: googleMapKey,
-    vworld: vworldMapKey,
-  }).notice;
 
   if (landingOpen) {
     return (
@@ -6169,7 +6162,7 @@ export default function TaskBoard() {
           </div>
         ) : viewMode === "map" ? (
           <MapView
-            items={visibleItems}
+            items={items}
             places={mapPlaces}
             onPlacesChange={setMapPlaces}
             me={me}
@@ -7604,12 +7597,6 @@ export default function TaskBoard() {
                   placeholder="Google 지도 API 키"
                 />
               </label>
-
-              {activeMapTileNotice ? (
-                <p className="text-xs leading-5 text-[var(--text-faint)]">
-                  {activeMapTileNotice}
-                </p>
-              ) : null}
 
               <div className="flex justify-end pt-1">
                 <button

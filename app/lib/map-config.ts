@@ -36,7 +36,6 @@ export function mapTileConfig(provider: MapProvider, style: MapStyle, keys: { go
       url: `https://api.vworld.kr/req/wmts/1.0.0/${encodeURIComponent(keys.vworld.trim())}/${layer}/{z}/{y}/{x}.png`,
       attribution: "VWorld",
       maxZoom: 19,
-      notice: "",
     };
   }
 
@@ -48,14 +47,10 @@ export function mapTileConfig(provider: MapProvider, style: MapStyle, keys: { go
       attribution: "Google",
       maxZoom: 20,
       subdomains: ["0", "1", "2", "3"],
-      notice: keys.google.trim() ? "" : "Google 지도는 공식 사용을 위해 API 키 설정을 권장합니다.",
     };
   }
 
-  const notice =
-    provider === "vworld" && !keys.vworld.trim()
-      ? "VWorld 지도를 보려면 VWorld API 키를 입력해 주세요. 키가 없으면 기본 지도로 표시됩니다."
-      : "";
+  // VWorld without a key falls back to the default map quietly.
   const imagery = style === "satellite" || style === "hybrid";
   return {
     url: imagery
@@ -65,7 +60,6 @@ export function mapTileConfig(provider: MapProvider, style: MapStyle, keys: { go
       ? "Tiles &copy; Esri"
       : '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
     maxZoom: 19,
-    notice,
   };
 }
 
