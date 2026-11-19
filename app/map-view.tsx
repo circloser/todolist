@@ -80,6 +80,7 @@ type Menu = { lat: number; lng: number; x: number; y: number; flipX: boolean; fl
 type Tab = "items" | "places" | "areas" | "unplaced";
 const HIDDEN_ITEMS_KEY = "wc-map-hidden-items";
 const HIDDEN_AREAS_KEY = "wc-map-hidden-areas";
+const HIDDEN_PLACES_KEY = "wc-map-hidden-places";
 
 function readHiddenIds(key: string) {
   try {
@@ -249,6 +250,8 @@ export default function MapView({
   const [showAreas, setShowAreas] = useState(true);
   // 구역 switched off one by one (remembered in this browser).
   const [hiddenAreaIds, setHiddenAreaIds] = useState<Set<number>>(() => readHiddenIds(HIDDEN_AREAS_KEY));
+  // Place pins switched off one by one (remembered in this browser).
+  const [hiddenPlaceIds, setHiddenPlaceIds] = useState<Set<number>>(() => readHiddenIds(HIDDEN_PLACES_KEY));
   const [areaDraft, setAreaDraft] = useState<AreaDraft | null>(null);
   const [areaError, setAreaError] = useState("");
   const [savingArea, setSavingArea] = useState(false);
@@ -277,6 +280,21 @@ export default function MapView({
     }
   }, [hiddenAreaIds]);
 
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(HIDDEN_PLACES_KEY, JSON.stringify([...hiddenPlaceIds]));
+    } catch {
+      // Not remembered; fine.
+    }
+  }, [hiddenPlaceIds]);
+
+  function setPlaceHidden(id: number, hidden: boolean) {
+    setHiddenPlaceIds((current) => toggledSet(current, id, hidden));
+    if (hidden) {
+      setSelected((current) => (current?.kind === "place" && current.id === id ? null : current));
+    }
+  }
+
   function setAreaHidden(id: number, hidden: boolean) {
     setHiddenAreaIds((current) => toggledSet(current, id, hidden));
     if (hidden) {
@@ -304,6 +322,9 @@ export default function MapView({
     () => places.filter((place) => !hiddenKinds.has(placeKindOf(place).label)),
     [hiddenKinds, places]
   );
+  // On the map: the shown kinds minus places switched off one by one.
+  const shownPlaces = useMemo(() => visiblePlaces.filter((place) => !hiddenPlaceIds.has(place.id)), [hiddenPlaceIds, visiblePlaces]);
+  const hiddenPlaceCount = places.filter((place) => hiddenPlaceIds.has(place.id)).length;
   const canEditPlace = (place: Pick<MapPlace, "createdByMemberId">) =>
     isManager || (me !== null && place.createdByMemberId === me.memberId);
   const canEditArea = canEditPlace;
@@ -488,6 +509,7 @@ export default function MapView({
       const saved = data.place;
       if (saved) {
         onPlacesChange((current) => [...current.filter((place) => place.id !== saved.id), saved]);
+        setPlaceHidden(saved.id, false);
         setSelected({ kind: "place", id: saved.id });
         setHiddenKinds((current) => {
           const label = placeKindOf(saved).label;
@@ -700,7 +722,7 @@ export default function MapView({
     }
     const points: Array<[number, number]> = [
       ...(showItems ? shownPinned.map((item) => [item.lat, item.lng] as [number, number]) : []),
-      ...(showPlaces ? visiblePlaces.map((place) => [place.lat, place.lng] as [number, number]) : []),
+      ...(showPlaces ? shownPlaces.map((place) => [place.lat, place.lng] as [number, number]) : []),
       ...(showAreas ? shownAreas.flatMap((area) => geometryBounds(area.geometry)) : []),
     ];
     if (!points.length) {
@@ -880,7 +902,7 @@ export default function MapView({
     }
 
     if (showPlaces) {
-      for (const place of visiblePlaces) {
+      for (const place of shownPlaces) {
         const isSelected = selected?.kind === "place" && selected.id === place.id;
         const marker = L.marker([place.lat, place.lng], {
           draggable: canEditPlace(place),
@@ -908,7 +930,7 @@ export default function MapView({
     }
     markersRef.current = markers;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [shownPinned, visiblePlaces, showItems, showPlaces, selected, ready, isManager, me]);
+  }, [shownPinned, shownPlaces, showItems, showPlaces, selected, ready, isManager, me]);
 
   // 구역 polygons.
   useEffect(() => {
@@ -1043,6 +1065,7 @@ export default function MapView({
         const place = places.find((entry) => entry.id === focus.placeId);
         if (place) {
           setShowPlaces(true);
+          setPlaceHidden(place.id, false);
           setHiddenKinds((current) => {
             const label = placeKindOf(place).label;
             if (!current.has(label)) {
@@ -1060,6 +1083,7 @@ export default function MapView({
         const item = items.find((entry) => entry.id === focus.itemId);
         if (item && located(item)) {
           setShowItems(true);
+          setItemHidden(item.id, false);
           setSelected({ kind: "item", id: item.id });
           flyTo(item.lat, item.lng, 14);
         }
@@ -1126,6 +1150,7 @@ export default function MapView({
   function choosePlace(place: MapPlace) {
     setMenu(null);
     setShowPlaces(true);
+    setPlaceHidden(place.id, false);
     setSelected({ kind: "place", id: place.id });
     flyTo(place.lat, place.lng, 15);
   }
@@ -1271,6 +1296,30 @@ export default function MapView({
             })}
           </div>
         ) : null}
+        {places.length ? (
+          <div className="flex items-center gap-2 px-2 pb-1 text-[11px] text-[var(--text-faint)]">
+            <span>{hiddenPlaceCount ? `${hiddenPlaceCount}개 숨김` : "모든 장소 표시 중"}</span>
+            <button
+              type="button"
+              className="ml-auto font-semibold text-[var(--accent)] hover:underline disabled:opacity-40"
+              disabled={!hiddenPlaceCount}
+              onClick={() => setHiddenPlaceIds(new Set())}
+            >
+              모두 표시
+            </button>
+            <button
+              type="button"
+              className="font-semibold text-[var(--accent)] hover:underline disabled:opacity-40"
+              disabled={hiddenPlaceCount === places.length}
+              onClick={() => {
+                setHiddenPlaceIds(new Set(places.map((place) => place.id)));
+                setSelected((current) => (current?.kind === "place" ? null : current));
+              }}
+            >
+              모두 숨기기
+            </button>
+          </div>
+        ) : null}
         {visiblePlaces
           .slice()
           .sort(
@@ -1280,15 +1329,16 @@ export default function MapView({
           )
           .map((place) => {
             const kind = placeKindOf(place);
+            const hidden = hiddenPlaceIds.has(place.id);
             return (
+              <div key={place.id} className="flex items-center gap-0.5" data-hidden={hidden}>
               <button
-                key={place.id}
                 type="button"
                 onClick={() => choosePlace(place)}
                 onMouseEnter={() => highlight(`place:${place.id}`, true)}
                 onMouseLeave={() => highlight(`place:${place.id}`, false)}
                 data-active={selected?.kind === "place" && selected.id === place.id}
-                className="tb-map-row"
+                className={`tb-map-row min-w-0 flex-1 ${hidden ? "opacity-45" : ""}`}
               >
                 <span className="tb-map-row-icon" style={{ borderColor: kind.color }} aria-hidden="true">
                   {kind.icon}
@@ -1301,6 +1351,17 @@ export default function MapView({
                   </span>
                 </span>
               </button>
+              <button
+                type="button"
+                className="tb-iconbtn h-8 w-8 shrink-0 text-sm"
+                aria-pressed={!hidden}
+                aria-label={`${place.name} 핀 ${hidden ? "켜기" : "끄기"}`}
+                title={hidden ? "지도에 핀 표시" : "지도에서 핀 숨기기"}
+                onClick={() => setPlaceHidden(place.id, !hidden)}
+              >
+                {hidden ? "◌" : "◉"}
+              </button>
+              </div>
             );
           })}
         {!places.length ? (
