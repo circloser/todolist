@@ -4729,7 +4729,7 @@ export default function TaskBoard() {
                       <span className="tb-badge tb-badge-muted hidden shrink-0 sm:inline-flex">
                         {categoryLevelLabel(depth)}
                       </span>
-                      <div className="min-w-0 flex-1">
+                      <div className="tb-list-group-title min-w-0 flex-1">
                         {editingGroup === group.name ? (
                           <form
                             onSubmit={(event) => {
@@ -4766,7 +4766,7 @@ export default function TaskBoard() {
                           <button
                             type="button"
                             onClick={() => toggleGroup(group.name)}
-                            className="block max-w-full truncate text-left text-sm font-semibold hover:text-[var(--accent)]"
+                            className="tb-list-group-name block max-w-full text-left text-sm font-semibold hover:text-[var(--accent)]"
                             title={groupCollapsed ? "눌러서 펼치기" : "눌러서 접기"}
                           >
                             {categoryLeaf(group.name)}
@@ -4847,6 +4847,7 @@ export default function TaskBoard() {
                           </div>
                         ) : null}
                       </div>
+                      <div className="tb-list-group-actions ml-auto flex shrink-0 items-center gap-1.5 sm:gap-2.5">
                       {isManager ? (
                       <button
                         type="button"
@@ -4870,7 +4871,7 @@ export default function TaskBoard() {
                       >
                         {groupDone}/{groupTotal}
                       </span>
-                      <div className="hidden min-w-0 max-w-[220px] flex-1 items-center gap-2 sm:flex">
+                      <div className="hidden w-[200px] min-w-0 items-center gap-2 sm:flex">
                         <div className="tb-progress flex-1">
                           <span
                             style={{
@@ -4887,7 +4888,7 @@ export default function TaskBoard() {
                       <button
                         type="button"
                         onClick={() => openGroupTaskForm(group.name)}
-                        className="tb-btn ml-auto shrink-0 !px-2.5 !py-1 text-xs"
+                        className="tb-btn shrink-0 !px-2.5 !py-1 text-xs"
                         title="이 그룹으로 새 업무 추가"
                         aria-label="이 그룹으로 새 업무 추가"
                       >
@@ -4906,6 +4907,7 @@ export default function TaskBoard() {
                         ×
                       </button>
                       ) : null}
+                      </div>
                     </div>
 
                     {groupCollapsed
@@ -4984,7 +4986,7 @@ export default function TaskBoard() {
                         className="tb-list-content text-left"
                       >
                         <div className="flex flex-wrap items-center gap-2">
-                          <span className="truncate text-sm font-semibold">
+                          <span className="tb-list-item-title text-sm font-semibold">
                             {item.title || "제목 없음"}
                           </span>
                           <span className="tb-chip tb-chip-accent tb-list-type">
