@@ -1009,6 +1009,11 @@ export default function MapView({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mode, ready, shpPreview]);
 
+  // Crosshair pointer while picking a spot or drawing a 구역 (not the hand).
+  useEffect(() => {
+    containerRef.current?.classList.toggle("tb-map-picking", Boolean(mode));
+  }, [mode, ready]);
+
   // Temporary markers: the spot of the open menu, a search result, my location.
   useEffect(() => {
     const L = leafletRef.current;
