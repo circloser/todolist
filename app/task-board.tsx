@@ -3472,7 +3472,11 @@ export default function TaskBoard() {
   }
 
   return (
-    <main className="tb-app min-h-dvh">
+    <main
+      className={`tb-app min-h-dvh ${
+        viewMode === "map" ? "flex h-dvh flex-col overflow-hidden" : ""
+      }`}
+    >
       <header className="tb-topbar relative z-40">
         <div className="mx-auto max-w-[1600px] px-4 sm:px-6 lg:px-8">
           <div className="flex items-center gap-2 py-2.5 sm:gap-3">
@@ -3986,9 +3990,22 @@ export default function TaskBoard() {
         ) : null}
       </header>
 
-      <section className="mx-auto max-w-[1600px] px-4 py-5 sm:px-6 lg:px-8">
+      <section
+        className={
+          // The map fills everything under the header, edge to edge.
+          viewMode === "map"
+            ? "relative min-h-0 flex-1"
+            : "mx-auto max-w-[1600px] px-4 py-5 sm:px-6 lg:px-8"
+        }
+      >
         {error ? (
-          <div className="mb-4 flex items-center gap-2 rounded-[var(--radius)] border border-[var(--danger-border)] bg-[var(--danger-soft)] px-4 py-3 text-sm font-medium text-[var(--danger)]">
+          <div
+            className={`flex items-center gap-2 rounded-[var(--radius)] border border-[var(--danger-border)] bg-[var(--danger-soft)] px-4 py-3 text-sm font-medium text-[var(--danger)] ${
+              viewMode === "map"
+                ? "absolute left-1/2 top-16 z-[1300] max-w-[calc(100%-24px)] -translate-x-1/2 shadow-[var(--shadow-lg)]"
+                : "mb-4"
+            }`}
+          >
             {error}
           </div>
         ) : null}
@@ -7030,58 +7047,6 @@ export default function TaskBoard() {
         )}
 
       </section>
-
-      <footer className="border-t border-[var(--border)] bg-[var(--surface)]">
-        <div className="mx-auto flex max-w-[1600px] flex-wrap items-center justify-between gap-2 px-4 py-4 text-xs text-[var(--text-faint)] sm:px-6 lg:px-8">
-          <span>
-            {organizationName} · {boardTitle}
-          </span>
-          <div className="flex flex-wrap items-center gap-4">
-            <button
-              type="button"
-              onClick={() => setManualOpen(true)}
-              className="font-semibold text-[var(--accent)] hover:underline"
-            >
-              📖 사용자 매뉴얼
-            </button>
-            <button
-              type="button"
-              onClick={() => void openDocuments()}
-              className="hover:text-[var(--text-muted)] hover:underline"
-            >
-              📎 양식함
-            </button>
-            <button
-              type="button"
-              onClick={() => setReportOpen(true)}
-              className="hover:text-[var(--text-muted)] hover:underline"
-            >
-              📄 월간 보고서
-            </button>
-            <button
-              type="button"
-              onClick={() => openView("worklog")}
-              className="hover:text-[var(--text-muted)] hover:underline"
-            >
-              📝 업무일지
-            </button>
-            <button
-              type="button"
-              onClick={() => setMembersOpen(true)}
-              className="hover:text-[var(--text-muted)] hover:underline"
-            >
-              👥 구성원 관리
-            </button>
-            <button
-              type="button"
-              onClick={() => setHistoryOpen(true)}
-              className="hover:text-[var(--text-muted)] hover:underline"
-            >
-              🕘 변경 이력
-            </button>
-          </div>
-        </div>
-      </footer>
 
       {manualOpen ? (
         <div

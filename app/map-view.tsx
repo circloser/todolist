@@ -872,7 +872,7 @@ export default function MapView({
     );
 
   return (
-    <div className="tb-card tb-map-app relative overflow-hidden" data-testid="map-view">
+    <div className="tb-map-app relative h-full overflow-hidden" data-testid="map-view">
       <div ref={containerRef} className="tb-map-canvas absolute inset-0" aria-label="지도" />
 
       {/* Left panel: search + lists (bottom sheet on phones). */}
