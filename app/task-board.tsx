@@ -3479,16 +3479,21 @@ export default function TaskBoard() {
     >
       <header className="tb-topbar relative z-40">
         <div className="mx-auto max-w-[1600px] px-4 sm:px-6 lg:px-8">
-          <div className="flex items-center gap-2 py-2.5 sm:gap-3">
+          <div className="tb-header-row flex flex-wrap items-center gap-x-2 gap-y-0 pt-2 md:flex-nowrap md:py-0 sm:gap-x-3">
             <span className="hidden shrink-0 sm:inline-flex" title={BRAND.name}>
               <CompassMark size={30} />
             </span>
-            <div className="min-w-0 flex-1">
+            <div className="tb-header-title min-w-0 flex-1 md:flex-none">
+              <span className="tb-autosize">
+              <span aria-hidden="true" className="tb-title-field tb-autosize-ghost text-lg font-bold tracking-tight sm:text-xl">
+                {boardTitle || " "}
+              </span>
               <input
                 value={boardTitle}
                 readOnly={!isManager}
                 title={isManager ? "보드 제목 (부서장만 바꿀 수 있습니다)" : undefined}
                 aria-label="보드 제목"
+                size={1}
                 onChange={(event) => setBoardTitle(event.target.value)}
                 onBlur={(event) => {
                   if (isManager) {
@@ -3497,6 +3502,7 @@ export default function TaskBoard() {
                 }}
                 className="tb-title-field tb-ghost w-full truncate text-lg font-bold tracking-tight sm:text-xl"
               />
+              </span>
               <div className="truncate text-[11px] text-[var(--text-faint)]">
                 <span className="font-semibold text-[var(--accent)]">{BRAND.name}</span>
                 {" · "}
@@ -3507,8 +3513,49 @@ export default function TaskBoard() {
               </div>
             </div>
 
+            <nav className="tb-viewnav" aria-label="화면 전환">
+              {VIEW_TABS.map(([mode, label]) => {
+                const badge =
+                  mode === "calendar"
+                    ? scheduleFeed.summary.today.length + scheduleFeed.fresh.length
+                    : mode === "minutes"
+                      ? scheduleFeed.summary.unreadMinutes.length
+                      : mode === "worklog" && isManager && policy.logApproval
+                        ? pendingReview
+                        : 0;
+                return (
+                  <button
+                    key={mode}
+                    type="button"
+                    onClick={() => openView(mode)}
+                    data-active={viewMode === mode}
+                    aria-current={viewMode === mode ? "page" : undefined}
+                    className="tb-viewnav-btn"
+                  >
+                    {label}
+                    {badge ? (
+                      <span
+                        className={`tb-viewnav-badge ${
+                          mode === "calendar" ? "" : "tb-viewnav-badge-warn"
+                        }`}
+                        title={
+                          mode === "calendar"
+                            ? "오늘 일정·새 일정"
+                            : mode === "minutes"
+                              ? "확인하지 않은 회의록"
+                              : "승인 대기 업무일지"
+                        }
+                      >
+                        {badge}
+                      </span>
+                    ) : null}
+                  </button>
+                );
+              })}
+            </nav>
+
             <div
-              className="hidden items-center gap-3 text-xs text-[var(--text-muted)] xl:flex"
+              className="hidden items-center gap-3 text-xs text-[var(--text-muted)] 2xl:flex"
               aria-label="보드 현황"
             >
               <span className="flex items-center gap-2" title="전체 진행률">
@@ -3584,7 +3631,6 @@ export default function TaskBoard() {
                   <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
                     <path d="M4 6h16M4 12h16M4 18h16" />
                   </svg>
-                  <span className="hidden md:inline">메뉴</span>
                   {isManager && joinRequests.length ? (
                     <span className="tb-header-count bg-[var(--warning)]">{joinRequests.length}</span>
                   ) : null}
@@ -3708,46 +3754,6 @@ export default function TaskBoard() {
             </HeaderMenu>
           </div>
 
-            <nav className="tb-viewnav" aria-label="화면 전환">
-              {VIEW_TABS.map(([mode, label]) => {
-                const badge =
-                  mode === "calendar"
-                    ? scheduleFeed.summary.today.length + scheduleFeed.fresh.length
-                    : mode === "minutes"
-                      ? scheduleFeed.summary.unreadMinutes.length
-                      : mode === "worklog" && isManager && policy.logApproval
-                        ? pendingReview
-                        : 0;
-                return (
-                  <button
-                    key={mode}
-                    type="button"
-                    onClick={() => openView(mode)}
-                    data-active={viewMode === mode}
-                    aria-current={viewMode === mode ? "page" : undefined}
-                    className="tb-viewnav-btn"
-                  >
-                    {label}
-                    {badge ? (
-                      <span
-                        className={`tb-viewnav-badge ${
-                          mode === "calendar" ? "" : "tb-viewnav-badge-warn"
-                        }`}
-                        title={
-                          mode === "calendar"
-                            ? "오늘 일정·새 일정"
-                            : mode === "minutes"
-                              ? "확인하지 않은 회의록"
-                              : "승인 대기 업무일지"
-                        }
-                      >
-                        {badge}
-                      </span>
-                    ) : null}
-                  </button>
-                );
-              })}
-            </nav>
         </div>
 
         {showItemFilters ? (
