@@ -2049,3 +2049,66 @@ body {
     min-height: 34px;
   }
 }
+
+@layer components {
+  /* 목록: titles get up to two lines on phones instead of being cut. */
+  .tb-list-group-name,
+  .tb-list-item-title {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  @media (max-width: 640px) {
+    .tb-list-group-name,
+    .tb-list-item-title {
+      display: -webkit-box;
+      -webkit-box-orient: vertical;
+      -webkit-line-clamp: 2;
+      white-space: normal;
+      word-break: keep-all;
+      overflow-wrap: anywhere;
+      line-height: 1.35;
+    }
+    .tb-list-item-title {
+      flex: 1 1 100%;
+    }
+    /* Header: [⋮⋮ ▸ title + 담당·예산] on the first line, the buttons
+       (✎ 0/2 ＋ ×) on their own line at the right. */
+    .tb-list-group-header .tb-list-group-title {
+      flex: 1 1 calc(100% - 72px);
+    }
+    .tb-list-group-header .tb-list-group-actions {
+      flex: 1 1 100%;
+      justify-content: flex-end;
+      margin-top: -2px;
+    }
+    .tb-list-group-header .tb-group-summary > span:first-child {
+      flex-wrap: wrap;
+    }
+    .tb-list-group-header .tb-group-summary span {
+      white-space: nowrap;
+    }
+
+    /* Top view tabs: fit the screen (wrap to a second line if needed)
+       instead of scrolling sideways. */
+    .tb-viewnav {
+      flex-wrap: wrap;
+      overflow-x: visible;
+      gap: 0;
+    }
+    .tb-viewnav .tb-viewnav-btn {
+      flex: 1 1 auto;
+      justify-content: center;
+      gap: 3px;
+      padding: 7px 3px 8px;
+      font-size: 12.5px;
+      letter-spacing: -0.2px;
+    }
+    .tb-viewnav .tb-viewnav-badge {
+      min-width: 16px;
+      height: 16px;
+      font-size: 10px;
+    }
+  }
+}
