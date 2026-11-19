@@ -79,6 +79,29 @@ type Mode =
 type Menu = { lat: number; lng: number; x: number; y: number; flipX: boolean; flipY: boolean };
 type Tab = "items" | "places" | "areas" | "unplaced";
 const HIDDEN_ITEMS_KEY = "wc-map-hidden-items";
+const HIDDEN_AREAS_KEY = "wc-map-hidden-areas";
+
+function readHiddenIds(key: string) {
+  try {
+    const raw = JSON.parse(window.localStorage.getItem(key) ?? "[]");
+    return new Set<number>(Array.isArray(raw) ? raw.filter((id) => Number.isInteger(id)) : []);
+  } catch {
+    return new Set<number>();
+  }
+}
+
+function toggledSet(current: Set<number>, id: number, hidden: boolean) {
+  if (current.has(id) === hidden) {
+    return current;
+  }
+  const next = new Set(current);
+  if (hidden) {
+    next.add(id);
+  } else {
+    next.delete(id);
+  }
+  return next;
+}
 type Toast = { id: number; text: string; undo?: () => void };
 
 const STATUS_COLORS = [
@@ -224,6 +247,8 @@ export default function MapView({
   const [myLocation, setMyLocation] = useState<{ lat: number; lng: number } | null>(null);
   const [areas, setAreas] = useState<MapArea[]>([]);
   const [showAreas, setShowAreas] = useState(true);
+  // 구역 switched off one by one (remembered in this browser).
+  const [hiddenAreaIds, setHiddenAreaIds] = useState<Set<number>>(() => readHiddenIds(HIDDEN_AREAS_KEY));
   const [areaDraft, setAreaDraft] = useState<AreaDraft | null>(null);
   const [areaError, setAreaError] = useState("");
   const [savingArea, setSavingArea] = useState(false);
@@ -243,6 +268,21 @@ export default function MapView({
       // Not remembered; fine.
     }
   }, [hiddenItemIds]);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(HIDDEN_AREAS_KEY, JSON.stringify([...hiddenAreaIds]));
+    } catch {
+      // Not remembered; fine.
+    }
+  }, [hiddenAreaIds]);
+
+  function setAreaHidden(id: number, hidden: boolean) {
+    setHiddenAreaIds((current) => toggledSet(current, id, hidden));
+    if (hidden) {
+      setSelected((current) => (current?.kind === "area" && current.id === id ? null : current));
+    }
+  }
 
   function setItemHidden(id: number, hidden: boolean) {
     setHiddenItemIds((current) => {
@@ -268,6 +308,8 @@ export default function MapView({
     isManager || (me !== null && place.createdByMemberId === me.memberId);
   const canEditArea = canEditPlace;
   const sortedAreas = useMemo(() => areas.slice().sort((a, b) => a.name.localeCompare(b.name, "ko-KR") || a.id - b.id), [areas]);
+  const shownAreas = useMemo(() => areas.filter((area) => !hiddenAreaIds.has(area.id)), [areas, hiddenAreaIds]);
+  const hiddenAreaCount = areas.filter((area) => hiddenAreaIds.has(area.id)).length;
   const areaTotal = useMemo(() => areas.reduce((sum, area) => sum + area.areaM2, 0), [areas]);
 
   // 구역 are loaded here (the rest of the board does not need them).
@@ -535,6 +577,7 @@ export default function MapView({
       const saved = data.area;
       if (saved) {
         setAreas((current) => [...current.filter((area) => area.id !== saved.id), saved]);
+        setAreaHidden(saved.id, false);
         setSelected({ kind: "area", id: saved.id });
         setShowAreas(true);
         if (!areaDraft.id) {
@@ -577,6 +620,7 @@ export default function MapView({
   function chooseArea(area: MapArea) {
     setMenu(null);
     setShowAreas(true);
+    setAreaHidden(area.id, false);
     setSelected({ kind: "area", id: area.id });
     fitGeometries([area.geometry]);
   }
@@ -657,7 +701,7 @@ export default function MapView({
     const points: Array<[number, number]> = [
       ...(showItems ? shownPinned.map((item) => [item.lat, item.lng] as [number, number]) : []),
       ...(showPlaces ? visiblePlaces.map((place) => [place.lat, place.lng] as [number, number]) : []),
-      ...(showAreas ? areas.flatMap((area) => geometryBounds(area.geometry)) : []),
+      ...(showAreas ? shownAreas.flatMap((area) => geometryBounds(area.geometry)) : []),
     ];
     if (!points.length) {
       map.setView(KOREA_CENTER, KOREA_ZOOM);
@@ -877,7 +921,7 @@ export default function MapView({
     if (!showAreas) {
       return;
     }
-    for (const area of areas) {
+    for (const area of shownAreas) {
       const isSelected = selected?.kind === "area" && selected.id === area.id;
       const shape = L.geoJSON(area.geometry as unknown as GeoJSON.GeoJsonObject, {
         style: {
@@ -897,7 +941,7 @@ export default function MapView({
         shape.bringToFront();
       }
     }
-  }, [areas, ready, selected, showAreas]);
+  }, [shownAreas, ready, selected, showAreas]);
 
   // Shape being drawn, and the SHP import preview.
   useEffect(() => {
@@ -1278,17 +1322,43 @@ export default function MapView({
           </button>
         </div>
         {areas.length ? (
-          <div className="px-2 pb-1 text-[11px] text-[var(--text-faint)]">
-            {areas.length}개 · 합계 {formatArea(areaTotal)}
-          </div>
+          <>
+            <div className="px-2 pb-1 text-[11px] text-[var(--text-faint)]">
+              {areas.length}개 · 합계 {formatArea(areaTotal)}
+            </div>
+            <div className="flex items-center gap-2 px-2 pb-1 text-[11px] text-[var(--text-faint)]">
+              <span>{hiddenAreaCount ? `${hiddenAreaCount}개 숨김` : "모든 구역 표시 중"}</span>
+              <button
+                type="button"
+                className="ml-auto font-semibold text-[var(--accent)] hover:underline disabled:opacity-40"
+                disabled={!hiddenAreaCount}
+                onClick={() => setHiddenAreaIds(new Set())}
+              >
+                모두 표시
+              </button>
+              <button
+                type="button"
+                className="font-semibold text-[var(--accent)] hover:underline disabled:opacity-40"
+                disabled={hiddenAreaCount === areas.length}
+                onClick={() => {
+                  setHiddenAreaIds(new Set(areas.map((area) => area.id)));
+                  setSelected((current) => (current?.kind === "area" ? null : current));
+                }}
+              >
+                모두 숨기기
+              </button>
+            </div>
+          </>
         ) : null}
-        {sortedAreas.map((area) => (
+        {sortedAreas.map((area) => {
+          const hidden = hiddenAreaIds.has(area.id);
+          return (
+          <div key={area.id} className="flex items-center gap-0.5" data-hidden={hidden}>
           <button
-            key={area.id}
             type="button"
             onClick={() => chooseArea(area)}
             data-active={selected?.kind === "area" && selected.id === area.id}
-            className="tb-map-row"
+            className={`tb-map-row min-w-0 flex-1 ${hidden ? "opacity-45" : ""}`}
           >
             <span className="tb-map-row-icon" style={{ borderColor: area.color, background: `${area.color}2e` }} aria-hidden="true">
               ⬠
@@ -1301,7 +1371,19 @@ export default function MapView({
               </span>
             </span>
           </button>
-        ))}
+          <button
+            type="button"
+            className="tb-iconbtn h-8 w-8 shrink-0 text-sm"
+            aria-pressed={!hidden}
+            aria-label={`${area.name} 구역 ${hidden ? "켜기" : "끄기"}`}
+            title={hidden ? "지도에 구역 표시" : "지도에서 구역 숨기기"}
+            onClick={() => setAreaHidden(area.id, !hidden)}
+          >
+            {hidden ? "◌" : "◉"}
+          </button>
+          </div>
+          );
+        })}
         {!areas.length ? (
           <div className="px-2 py-6 text-center text-sm text-[var(--text-faint)]">
             등록된 구역이 없습니다.

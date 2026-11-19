@@ -379,7 +379,9 @@ export default function ManualContent() {
           닫히고, 이름·색·메모를 적어 저장합니다. 면적은 지구 곡률을 반영해 계산하며{" "}
           <strong>㎡ · ha · 평</strong>(넓으면 ㎢도)으로 보여 줍니다. 구역을 누르면 면적·둘레·꼭짓점
           수가 나오고 <Key>수정</Key> <Key>삭제</Key> <Key>영역 보기</Key> <Key>GeoJSON</Key>(내려받기)를
-          쓸 수 있습니다. 구역 탭 위쪽에 전체 개수와 합계 면적이 나옵니다.
+          쓸 수 있습니다. 구역 탭 위쪽에 전체 개수와 합계 면적이 나오고, 각 구역 오른쪽의{" "}
+          <Key>◉</Key>로 그 구역만 끄고 켤 수 있습니다(<Key>모두 표시</Key> <Key>모두 숨기기</Key>, 이
+          브라우저에 기억).
         </p>
         <p>
           <strong>SHP 올리기</strong>: 구역 탭의 <Key>⇪ SHP 올리기</Key>로 Shapefile을 올리면 면(폴리곤)이
