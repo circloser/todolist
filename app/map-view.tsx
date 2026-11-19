@@ -57,6 +57,7 @@ type Mode = null | { kind: "assign"; itemId: number } | { kind: "new-place" } | 
 /** Where the "add here" menu opens; flipX/flipY keep it inside the map. */
 type Menu = { lat: number; lng: number; x: number; y: number; flipX: boolean; flipY: boolean };
 type Tab = "items" | "places" | "unplaced";
+const HIDDEN_ITEMS_KEY = "wc-map-hidden-items";
 type Toast = { id: number; text: string; undo?: () => void };
 
 const STATUS_COLORS = [
@@ -149,6 +150,15 @@ export default function MapView({
     () => typeof window === "undefined" || window.matchMedia("(min-width: 1024px)").matches
   );
   const [showItems, setShowItems] = useState(true);
+  // Work-item pins switched off one by one (remembered in this browser).
+  const [hiddenItemIds, setHiddenItemIds] = useState<Set<number>>(() => {
+    try {
+      const raw = JSON.parse(window.localStorage.getItem(HIDDEN_ITEMS_KEY) ?? "[]");
+      return new Set(Array.isArray(raw) ? raw.filter((id) => Number.isInteger(id)) : []);
+    } catch {
+      return new Set();
+    }
+  });
   const [showPlaces, setShowPlaces] = useState(true);
   const [hiddenKinds, setHiddenKinds] = useState<Set<string>>(new Set());
   const [query, setQuery] = useState("");
@@ -162,6 +172,31 @@ export default function MapView({
   const [myLocation, setMyLocation] = useState<{ lat: number; lng: number } | null>(null);
 
   const pinned = useMemo(() => items.filter(located), [items]);
+  const shownPinned = useMemo(() => pinned.filter((item) => !hiddenItemIds.has(item.id)), [hiddenItemIds, pinned]);
+  const hiddenPinnedCount = pinned.length - shownPinned.length;
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(HIDDEN_ITEMS_KEY, JSON.stringify([...hiddenItemIds]));
+    } catch {
+      // Not remembered; fine.
+    }
+  }, [hiddenItemIds]);
+
+  function setItemHidden(id: number, hidden: boolean) {
+    setHiddenItemIds((current) => {
+      if (current.has(id) === hidden) {
+        return current;
+      }
+      const next = new Set(current);
+      if (hidden) {
+        next.add(id);
+      } else {
+        next.delete(id);
+      }
+      return next;
+    });
+  }
   const unplaced = useMemo(() => items.filter((item) => !located(item)), [items]);
   const kinds = useMemo(() => placeKindsInUse(places), [places]);
   const visiblePlaces = useMemo(
@@ -386,7 +421,7 @@ export default function MapView({
       return;
     }
     const points: Array<[number, number]> = [
-      ...(showItems ? pinned.map((item) => [item.lat, item.lng] as [number, number]) : []),
+      ...(showItems ? shownPinned.map((item) => [item.lat, item.lng] as [number, number]) : []),
       ...(showPlaces ? visiblePlaces.map((place) => [place.lat, place.lng] as [number, number]) : []),
     ];
     if (!points.length) {
@@ -500,7 +535,7 @@ export default function MapView({
     const markers = new Map<string, LeafletNS.Marker>();
 
     if (showItems) {
-      for (const item of pinned) {
+      for (const item of shownPinned) {
         const isSelected = selected?.kind === "item" && selected.id === item.id;
         const editable = canEditItem(item);
         const marker = L.marker([item.lat, item.lng], {
@@ -557,7 +592,7 @@ export default function MapView({
     }
     markersRef.current = markers;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pinned, visiblePlaces, showItems, showPlaces, selected, ready, isManager, me]);
+  }, [shownPinned, visiblePlaces, showItems, showPlaces, selected, ready, isManager, me]);
 
   // Temporary markers: the spot of the open menu, a search result, my location.
   useEffect(() => {
@@ -689,6 +724,7 @@ export default function MapView({
   function chooseItem(item: WorkflowItem & { lat: number; lng: number }) {
     setMenu(null);
     setShowItems(true);
+    setItemHidden(item.id, false);
     setSelected({ kind: "item", id: item.id });
     flyTo(item.lat, item.lng, 14);
   }
@@ -731,15 +767,41 @@ export default function MapView({
             </span>
           ))}
         </div>
-        {pinned.map((item) => (
+        {pinned.length ? (
+          <div className="flex items-center gap-2 px-2 pb-1 text-[11px] text-[var(--text-faint)]">
+            <span>{hiddenPinnedCount ? `${hiddenPinnedCount}개 숨김` : "모든 핀 표시 중"}</span>
+            <button
+              type="button"
+              className="ml-auto font-semibold text-[var(--accent)] hover:underline disabled:opacity-40"
+              disabled={!hiddenPinnedCount}
+              onClick={() => setHiddenItemIds(new Set())}
+            >
+              모두 표시
+            </button>
+            <button
+              type="button"
+              className="font-semibold text-[var(--accent)] hover:underline disabled:opacity-40"
+              disabled={hiddenPinnedCount === pinned.length}
+              onClick={() => {
+                setHiddenItemIds(new Set(pinned.map((item) => item.id)));
+                setSelected((current) => (current?.kind === "item" ? null : current));
+              }}
+            >
+              모두 숨기기
+            </button>
+          </div>
+        ) : null}
+        {pinned.map((item) => {
+          const hidden = hiddenItemIds.has(item.id);
+          return (
+          <div key={item.id} className="flex items-center gap-0.5" data-hidden={hidden}>
           <button
-            key={item.id}
             type="button"
             onClick={() => chooseItem(item)}
             onMouseEnter={() => highlight(`item:${item.id}`, true)}
             onMouseLeave={() => highlight(`item:${item.id}`, false)}
             data-active={selected?.kind === "item" && selected.id === item.id}
-            className="tb-map-row"
+            className={`tb-map-row min-w-0 flex-1 ${hidden ? "opacity-45" : ""}`}
           >
             <span className="tb-map-row-dot" style={{ background: itemColor(item) }}>
               {itemProgress(item)}
@@ -752,7 +814,24 @@ export default function MapView({
               </span>
             </span>
           </button>
-        ))}
+          <button
+            type="button"
+            className="tb-iconbtn h-8 w-8 shrink-0 text-sm"
+            aria-pressed={!hidden}
+            aria-label={`${item.title || "업무"} 핀 ${hidden ? "켜기" : "끄기"}`}
+            title={hidden ? "지도에 핀 표시" : "지도에서 핀 숨기기"}
+            onClick={() => {
+              setItemHidden(item.id, !hidden);
+              if (!hidden && selected?.kind === "item" && selected.id === item.id) {
+                setSelected(null);
+              }
+            }}
+          >
+            {hidden ? "◌" : "◉"}
+          </button>
+          </div>
+          );
+        })}
         {!pinned.length ? (
           <div className="px-2 py-6 text-center text-sm text-[var(--text-faint)]">
             지도에 표시된 업무가 없습니다.
