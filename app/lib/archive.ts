@@ -44,6 +44,11 @@ export function dueArchiveYear(item: WorkflowItem, currentYear = kstYear()) {
   return year !== null && year < currentYear ? year : null;
 }
 
+/** Folder for archiving by hand: the year it was finished, else this year. */
+export function manualArchiveYear(item: WorkflowItem, currentYear = kstYear()) {
+  return isItemDone(item) ? (completionYear(item) ?? currentYear) : currentYear;
+}
+
 /** Year folders, newest first, with their items. */
 export function archiveFolders(items: WorkflowItem[]) {
   const byYear = new Map<number, WorkflowItem[]>();

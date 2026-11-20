@@ -3372,35 +3372,74 @@ export default function TaskBoard() {
     }, 80);
   }
 
-  /** Puts a finished item into its year's 보관함, or takes it back to the board. */
-  async function setItemArchived(item: WorkflowItem, archived: boolean) {
+  /** 보관함 (부서장): puts items away (or takes them back to the board). */
+  async function setItemsArchived(targets: WorkflowItem[], archived: boolean, groupLabel = "") {
+    if (!targets.length) {
+      return false;
+    }
     setError("");
-    setSavingItemIds((current) => new Set(current).add(item.id));
+    const ids = targets.map((item) => item.id);
+    setSavingItemIds((current) => new Set([...current, ...ids]));
     try {
       const response = await taskRequest({
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "archive-item", itemId: item.id, archived }),
+        body: JSON.stringify({ action: "archive-items", itemIds: ids, archived, groupName: groupLabel }),
       });
       const data = (await response.json().catch(() => ({}))) as TaskResponse;
-      if (!response.ok || !data.item) {
+      if (!response.ok || !data.items) {
         setError(data.error ?? (archived ? "보관하지 못했습니다." : "복원하지 못했습니다."));
-        return;
+        return false;
       }
-      const saved = data.item;
-      setItems((current) => current.map((entry) => (entry.id === saved.id ? saved : entry)));
+      setItems(data.items);
       if (data.history) {
         setHistory(data.history);
       }
+      return true;
     } catch {
       setError("네트워크 오류로 저장하지 못했습니다.");
+      return false;
     } finally {
       setSavingItemIds((current) => {
         const next = new Set(current);
-        next.delete(item.id);
+        ids.forEach((id) => next.delete(id));
         return next;
       });
     }
+  }
+
+  async function archiveItem(item: WorkflowItem) {
+    if (
+      !isItemDone(item) &&
+      !window.confirm(`'${item.title || "업무"}'는 아직 끝나지 않았습니다(진행 ${itemProgress(item)}%). 보관함으로 옮길까요?`)
+    ) {
+      return;
+    }
+    await setItemsArchived([item], true);
+  }
+
+  /** Every item on the board under this 분류 (sub-분류 included, filters ignored). */
+  function branchItems(groupKey: string) {
+    return items.filter((item) => groupContainsCategory(groupKey, groupName(item)));
+  }
+
+  async function archiveGroup(groupKey: string) {
+    const targets = branchItems(groupKey);
+    if (!targets.length) {
+      return;
+    }
+    const open = targets.filter((item) => !isItemDone(item)).length;
+    const label = categoryLeaf(groupKey);
+    if (
+      !window.confirm(
+        `'${label}' 분류의 업무 ${targets.length}개${categoryDepth(groupKey) === 0 ? "(하위 분류 포함)" : ""}를 보관함으로 옮길까요?` +
+          (open ? `\n진행 중인 업무 ${open}개도 함께 옮겨집니다.` : "") +
+          "\n완료된 업무는 완료한 연도, 진행 중인 업무는 올해 폴더에 보관되며 보관함에서 되돌릴 수 있습니다."
+      )
+    ) {
+      return;
+    }
+    await setItemsArchived(targets, true, groupKey);
   }
 
   function openItem(id: number) {
@@ -4971,6 +5010,17 @@ export default function TaskBoard() {
                       {isManager ? (
                       <button
                         type="button"
+                        onClick={() => void archiveGroup(group.name)}
+                        className="tb-iconbtn h-7 w-7 shrink-0 text-xs"
+                        title={`이 분류의 업무 전체를 보관함으로 옮기기`}
+                        aria-label={`${categoryLeaf(group.name)} 분류 전체 보관`}
+                      >
+                        📦
+                      </button>
+                      ) : null}
+                      {isManager ? (
+                      <button
+                        type="button"
                         disabled={deletingGroups.has(group.name)}
                         onClick={() => void deleteGroup(group.name)}
                         className="tb-iconbtn tb-iconbtn-danger h-7 w-7 shrink-0 disabled:cursor-not-allowed disabled:opacity-40"
@@ -5162,13 +5212,13 @@ export default function TaskBoard() {
                         >
                           {expanded ? "▴" : "▾"}
                         </button>
-                        {isManager && done ? (
+                        {isManager ? (
                         <button
                           type="button"
                           disabled={savingItemIds.has(item.id)}
-                          onClick={() => void setItemArchived(item, true)}
+                          onClick={() => void archiveItem(item)}
                           className="tb-iconbtn h-8 w-8 disabled:cursor-not-allowed disabled:opacity-40"
-                          title="완료된 업무를 보관함으로 옮기기 (해가 바뀌면 자동으로 옮겨집니다)"
+                          title={done ? "보관함으로 옮기기 (완료된 업무는 해가 바뀌면 자동으로 옮겨집니다)" : "진행 중인 업무를 보관함으로 옮기기"}
                           aria-label={`${item.title || "업무"} 보관`}
                         >
                           📦
@@ -7126,7 +7176,9 @@ export default function TaskBoard() {
           items={archivedItems}
           focusId={archiveFocusId}
           canRestore={() => isManager}
-          onRestore={(item) => setItemArchived(item, false)}
+          onRestore={async (targets, label) => {
+            await setItemsArchived(targets, false, label);
+          }}
           onClose={() => setArchiveOpen(false)}
         />
       ) : null}

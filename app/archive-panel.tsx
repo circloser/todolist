@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 
 import { archiveFolders, completionYear } from "./lib/archive";
-import { assigneeName, type WorkflowItem } from "./lib/workflow";
+import { assigneeName, isItemDone, itemProgress, type WorkflowItem } from "./lib/workflow";
 
 // 연도별 보관함: work finished in an earlier year, kept out of the board.
 // Folders by year (newest first), then by 업무 위계; open an item to see its
@@ -17,6 +17,22 @@ function finishedOn(item: WorkflowItem) {
   const latest = dates.sort().at(-1) as string;
   const kst = new Date(Date.parse(latest) + 9 * 3600_000);
   return Number.isNaN(kst.getTime()) ? latest.slice(0, 10) : kst.toISOString().slice(0, 10);
+}
+
+function categoryParts(category: string) {
+  return category
+    .split(">")
+    .map((part) => part.trim())
+    .filter(Boolean);
+}
+
+function rootOf(category: string) {
+  return categoryParts(category)[0] ?? "미분류";
+}
+
+/** "현장조사 › 식생" under the 대분류, or "". */
+function subPath(category: string) {
+  return categoryParts(category).slice(1).join(" › ");
 }
 
 function won(value: number | null) {
@@ -33,13 +49,23 @@ export default function ArchivePanel({
   items: WorkflowItem[];
   focusId: number | null;
   canRestore: (item: WorkflowItem) => boolean;
-  onRestore: (item: WorkflowItem) => Promise<void>;
+  /** Back to the board: one item, or a whole 분류 (label = its name). */
+  onRestore: (items: WorkflowItem[], label: string) => Promise<void>;
   onClose: () => void;
 }) {
   const folders = useMemo(() => archiveFolders(items), [items]);
   const [query, setQuery] = useState("");
   const [openIds, setOpenIds] = useState<Set<number>>(() => new Set(focusId ? [focusId] : []));
-  const [busyId, setBusyId] = useState<number | null>(null);
+  const [busyKey, setBusyKey] = useState<string | null>(null);
+
+  async function restore(key: string, targets: WorkflowItem[], label: string) {
+    setBusyKey(key);
+    try {
+      await onRestore(targets, label);
+    } finally {
+      setBusyKey(null);
+    }
+  }
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -80,7 +106,7 @@ export default function ArchivePanel({
           <div className="min-w-0 flex-1">
             <h2 className="text-base font-semibold">📦 보관함</h2>
             <p className="text-xs text-[var(--text-muted)]">
-              지난해에 완료된 업무는 해가 바뀌면 그 연도 폴더로 자동 보관되어 목록·대시보드·달력·지도에서 빠집니다.
+              지난해에 완료된 업무는 해가 바뀌면 그 연도 폴더로 자동 보관되어 목록·대시보드·달력·지도에서 빠집니다. 부서장은 진행 중인 업무나 분류 전체도 보관·복원할 수 있습니다.
             </p>
           </div>
           <button type="button" onClick={onClose} className="tb-iconbtn h-8 w-8 shrink-0" aria-label="닫기">
@@ -107,8 +133,9 @@ export default function ArchivePanel({
           {folders.map((folder, index) => {
             const shown = folder.items.filter(matches);
             const groups = new Map<string, WorkflowItem[]>();
+            // Grouped by 대분류 (the 중분류 shows under each item).
             for (const item of shown) {
-              const key = item.category.trim() || "미분류";
+              const key = rootOf(item.category);
               groups.set(key, [...(groups.get(key) ?? []), item]);
             }
             return (
@@ -134,7 +161,25 @@ export default function ArchivePanel({
                     .sort((a, b) => a[0].localeCompare(b[0], "ko-KR"))
                     .map(([category, list]) => (
                       <div key={category} className="pt-2">
-                        <div className="px-2 pb-1 text-[11px] font-semibold text-[var(--text-faint)]">{category.replace(/\s*>\s*/g, " › ")}</div>
+                        <div className="flex items-center gap-2 px-2 pb-1">
+                          <span className="min-w-0 flex-1 truncate text-[11px] font-semibold text-[var(--text-faint)]">
+                            {category} · {list.length}건
+                          </span>
+                          {list.length > 1 && list.every(canRestore) ? (
+                            <button
+                              type="button"
+                              className="shrink-0 text-[11px] font-semibold text-[var(--accent)] hover:underline disabled:opacity-50"
+                              disabled={busyKey !== null}
+                              onClick={() => {
+                                if (window.confirm(`'${category}' 분류의 업무 ${list.length}개를 목록으로 되돌릴까요?`)) {
+                                  void restore(`g${folder.year}-${category}`, list, category);
+                                }
+                              }}
+                            >
+                              {busyKey === `g${folder.year}-${category}` ? "복원 중…" : "이 분류 모두 복원"}
+                            </button>
+                          ) : null}
+                        </div>
                         {list.map((item) => {
                           const open = openIds.has(item.id);
                           return (
@@ -160,10 +205,18 @@ export default function ArchivePanel({
                                     })
                                   }
                                 >
-                                  <span className="block text-sm font-medium leading-snug">✓ {item.title || "제목 없음"}</span>
+                                  <span className="block text-sm font-medium leading-snug">
+                                    {isItemDone(item) ? "✓ " : "◔ "}
+                                    {item.title || "제목 없음"}
+                                  </span>
                                   <span className="block truncate text-[11px] text-[var(--text-faint)]">
+                                    {subPath(item.category) ? `${subPath(item.category)} · ` : ""}
                                     {assigneeName(item.assignee)}
-                                    {finishedOn(item) ? ` · 완료 ${finishedOn(item)}` : ""}
+                                    {isItemDone(item)
+                                      ? finishedOn(item)
+                                        ? ` · 완료 ${finishedOn(item)}`
+                                        : ""
+                                      : ` · 미완료 · 진행 ${itemProgress(item)}%`}
                                     {won(item.allocatedBudget) ? ` · 예산 ${won(item.allocatedBudget)}` : ""}
                                   </span>
                                 </button>
@@ -171,18 +224,11 @@ export default function ArchivePanel({
                                   <button
                                     type="button"
                                     className="tb-btn shrink-0 !px-2.5 !py-1 text-xs"
-                                    disabled={busyId === item.id}
-                                    onClick={async () => {
-                                      setBusyId(item.id);
-                                      try {
-                                        await onRestore(item);
-                                      } finally {
-                                        setBusyId(null);
-                                      }
-                                    }}
+                                    disabled={busyKey !== null}
+                                    onClick={() => void restore(`i${item.id}`, [item], "")}
                                     title="목록으로 되돌리기 (다시 자동 보관되지 않습니다)"
                                   >
-                                    {busyId === item.id ? "복원 중…" : "목록으로 복원"}
+                                    {busyKey === `i${item.id}` ? "복원 중…" : "목록으로 복원"}
                                   </button>
                                 ) : null}
                               </div>
@@ -199,7 +245,9 @@ export default function ArchivePanel({
                                   <ol className="space-y-0.5">
                                     {item.steps.map((step) => (
                                       <li key={step.id} className="flex gap-2">
-                                        <span className="text-[var(--accent)]">✓</span>
+                                        <span className={step.status === "done" ? "text-[var(--accent)]" : "text-[var(--text-faint)]"}>
+                                          {step.status === "done" ? "✓" : "○"}
+                                        </span>
                                         <span className="min-w-0 flex-1">{step.title}</span>
                                         <span className="shrink-0 text-[var(--text-faint)]">
                                           {step.completedAt ? finishedOn({ ...item, steps: [step] }) : ""}
@@ -207,7 +255,9 @@ export default function ArchivePanel({
                                       </li>
                                     ))}
                                   </ol>
-                                  <div className="text-[11px] text-[var(--text-faint)]">{completionYear(item)}년 완료 · 보관 폴더 {item.archivedYear}년</div>
+                                  <div className="text-[11px] text-[var(--text-faint)]">
+                                    {isItemDone(item) ? `${completionYear(item)}년 완료` : "진행 중에 보관"} · 보관 폴더 {item.archivedYear}년
+                                  </div>
                                 </div>
                               ) : null}
                             </div>
