@@ -1834,6 +1834,8 @@ const MANAGER_ONLY_ACTIONS = new Set([
   "save-webhook",
   "update-settings",
   "send-deadline-alerts",
+  // 보관함: only a 부서장 archives or restores work.
+  "archive-item",
 ]);
 
 const MANAGER_ONLY = "부서장만 할 수 있는 작업입니다.";

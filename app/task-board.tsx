@@ -5162,7 +5162,7 @@ export default function TaskBoard() {
                         >
                           {expanded ? "▴" : "▾"}
                         </button>
-                        {canEdit(item) && done ? (
+                        {isManager && done ? (
                         <button
                           type="button"
                           disabled={savingItemIds.has(item.id)}
@@ -6964,7 +6964,7 @@ export default function TaskBoard() {
 
             <div className="overflow-x-auto">
               <div className="min-w-[620px] sm:min-w-[760px]">
-                <div className="grid grid-cols-[124px_1fr] border-b border-[var(--border)] bg-[var(--surface-2)] sm:grid-cols-[230px_1fr]">
+                <div className="grid grid-cols-[136px_1fr] border-b border-[var(--border)] bg-[var(--surface-2)] sm:grid-cols-[230px_1fr]">
                   <div className="sticky left-0 z-10 bg-[var(--surface-2)] px-3 py-2 text-[11px] font-semibold text-[var(--text-muted)]">
                     업무
                   </div>
@@ -6991,7 +6991,7 @@ export default function TaskBoard() {
                     return (
                       <div
                         key={item.id}
-                        className="grid grid-cols-[124px_1fr] border-b border-[var(--border)] last:border-b-0 hover:bg-[var(--surface-2)] sm:grid-cols-[230px_1fr]"
+                        className="grid grid-cols-[136px_1fr] border-b border-[var(--border)] last:border-b-0 hover:bg-[var(--surface-2)] sm:grid-cols-[230px_1fr]"
                       >
                         <button
                           type="button"
@@ -7000,7 +7000,7 @@ export default function TaskBoard() {
                           style={{ boxShadow: `inset 3px 0 0 ${rowColor}` }}
                           title="목록에서 열기"
                         >
-                          <div className="truncate text-sm font-medium">
+                          <div className="tb-gantt-title text-sm font-medium" title={item.title || "제목 없음"}>
                             {item.title || "제목 없음"}
                           </div>
                           <div className="truncate text-[11px] text-[var(--text-faint)]">
@@ -7008,7 +7008,7 @@ export default function TaskBoard() {
                           </div>
                         </button>
 
-                        <div className="relative h-12" data-gantt-timeline>
+                        <div className="relative min-h-12" data-gantt-timeline>
                           {gantt.ticks.slice(1, -1).map((tick) => (
                             <span
                               key={tick.pct}
@@ -7125,7 +7125,7 @@ export default function TaskBoard() {
         <ArchivePanel
           items={archivedItems}
           focusId={archiveFocusId}
-          canRestore={(item) => canEdit(item)}
+          canRestore={() => isManager}
           onRestore={(item) => setItemArchived(item, false)}
           onClose={() => setArchiveOpen(false)}
         />

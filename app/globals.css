@@ -2112,3 +2112,24 @@ body {
     }
   }
 }
+
+@layer components {
+  /* 간트: task names stay on one line on wide screens, two on phones. */
+  .tb-gantt-title {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  @media (max-width: 640px) {
+    .tb-gantt-title {
+      display: -webkit-box;
+      -webkit-box-orient: vertical;
+      -webkit-line-clamp: 2;
+      white-space: normal;
+      word-break: keep-all;
+      overflow-wrap: anywhere;
+      font-size: 13px;
+      line-height: 1.3;
+    }
+  }
+}
