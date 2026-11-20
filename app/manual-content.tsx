@@ -443,7 +443,8 @@ export default function ManualContent() {
       <Section id="manual-map">
         <p>
           <Key>지도</Key>는 일반 지도 앱처럼 씁니다. 끌어서 이동, 휠·두 손가락으로 확대하고, 오른쪽
-          위에서 <Key>일반</Key> <Key>위성</Key> <Key>하이브리드</Key>를 바로 바꿉니다. 오른쪽 버튼은{" "}
+          위에서 <Key>일반</Key> <Key>위성</Key> <Key>하이브리드</Key>를 바로 바꾸고, <Key>가</Key>로 업무·장소·구역 이름
+          <strong>라벨</strong>을 켜고 끕니다(기본 켜짐, 이 브라우저에 기억. 끄면 핀에 마우스를 올렸을 때만 이름이 보입니다). 오른쪽 버튼은{" "}
           <Key>📌</Key> 장소 추가, <Key>⬠</Key> 구역 그리기, <Key>＋</Key> 업무 추가, <Key>◎</Key> 내 위치,{" "}
           <Key>⤢</Key> 모든 핀이 보이게, <Key>⚙</Key> 지도 설정(지도 제공자·API 키)입니다.
         </p>

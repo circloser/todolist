@@ -81,6 +81,15 @@ type Tab = "items" | "places" | "areas" | "unplaced";
 const HIDDEN_ITEMS_KEY = "wc-map-hidden-items";
 const HIDDEN_AREAS_KEY = "wc-map-hidden-areas";
 const HIDDEN_PLACES_KEY = "wc-map-hidden-places";
+const LABELS_KEY = "wc-map-labels";
+
+function readLabelsPref() {
+  try {
+    return window.localStorage.getItem(LABELS_KEY) !== "off";
+  } catch {
+    return true;
+  }
+}
 
 function readHiddenIds(key: string) {
   try {
@@ -248,6 +257,8 @@ export default function MapView({
   const [myLocation, setMyLocation] = useState<{ lat: number; lng: number } | null>(null);
   const [areas, setAreas] = useState<MapArea[]>([]);
   const [showAreas, setShowAreas] = useState(true);
+  // Names always shown next to pins and on 구역 (remembered in this browser).
+  const [showLabels, setShowLabels] = useState(readLabelsPref);
   // 구역 switched off one by one (remembered in this browser).
   const [hiddenAreaIds, setHiddenAreaIds] = useState<Set<number>>(() => readHiddenIds(HIDDEN_AREAS_KEY));
   // Place pins switched off one by one (remembered in this browser).
@@ -888,7 +899,12 @@ export default function MapView({
             iconAnchor: [17, 17],
           }),
         }).addTo(itemLayer);
-        marker.bindTooltip(escapeHtml(item.title || "업무"), { direction: "top", offset: [0, -14] });
+        marker.bindTooltip(
+          escapeHtml(item.title || "업무"),
+          showLabels
+            ? { permanent: true, direction: "bottom", offset: [0, 14], className: "tb-map-label" }
+            : { direction: "top", offset: [0, -14] }
+        );
         marker.on("click", () => {
           setMenu(null);
           setSelected({ kind: "item", id: item.id });
@@ -916,7 +932,12 @@ export default function MapView({
             iconAnchor: [16, 37],
           }),
         }).addTo(placeLayer);
-        marker.bindTooltip(escapeHtml(place.name), { direction: "top", offset: [0, -34] });
+        marker.bindTooltip(
+          escapeHtml(place.name),
+          showLabels
+            ? { permanent: true, direction: "bottom", offset: [0, 2], className: "tb-map-label tb-map-label-place" }
+            : { direction: "top", offset: [0, -34] }
+        );
         marker.on("click", () => {
           setMenu(null);
           setSelected({ kind: "place", id: place.id });
@@ -930,7 +951,7 @@ export default function MapView({
     }
     markersRef.current = markers;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [shownPinned, shownPlaces, showItems, showPlaces, selected, ready, isManager, me]);
+  }, [shownPinned, shownPlaces, showItems, showPlaces, selected, ready, isManager, me, showLabels]);
 
   // 구역 polygons.
   useEffect(() => {
@@ -954,7 +975,14 @@ export default function MapView({
           fillOpacity: isSelected ? 0.32 : 0.16,
         },
       }).addTo(layer);
-      shape.bindTooltip(`${escapeHtml(area.name)} · ${shortArea(area.areaM2)}`, { sticky: true });
+      shape.bindTooltip(
+        showLabels
+          ? `${escapeHtml(area.name)}<small>${shortArea(area.areaM2)}</small>`
+          : `${escapeHtml(area.name)} · ${shortArea(area.areaM2)}`,
+        showLabels
+          ? { permanent: true, direction: "center", className: "tb-map-label tb-map-label-area" }
+          : { sticky: true }
+      );
       shape.on("click", (event: LeafletNS.LeafletMouseEvent) => {
         L.DomEvent.stopPropagation(event);
         handlersRef.current.area(area.id, event.latlng.lat, event.latlng.lng);
@@ -963,7 +991,7 @@ export default function MapView({
         shape.bringToFront();
       }
     }
-  }, [shownAreas, ready, selected, showAreas]);
+  }, [shownAreas, ready, selected, showAreas, showLabels]);
 
   // Shape being drawn, and the SHP import preview.
   useEffect(() => {
@@ -1686,6 +1714,25 @@ export default function MapView({
             </button>
           ))}
         </div>
+        <button
+          type="button"
+          className="tb-map-fab tb-map-label-toggle"
+          aria-pressed={showLabels}
+          data-active={showLabels}
+          onClick={() => {
+            const next = !showLabels;
+            setShowLabels(next);
+            try {
+              window.localStorage.setItem(LABELS_KEY, next ? "on" : "off");
+            } catch {
+              // Not remembered; fine.
+            }
+          }}
+          title={showLabels ? "라벨 끄기 (업무·장소·구역 이름)" : "라벨 켜기 (업무·장소·구역 이름)"}
+          aria-label="라벨"
+        >
+          가
+        </button>
         <button type="button" className="tb-map-fab" onClick={onOpenSettings} title="지도 설정 (지도 제공자·API 키)" aria-label="지도 설정">
           ⚙
         </button>
