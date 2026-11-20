@@ -20,8 +20,7 @@ import {
   type BoardAccess,
 } from "../auth-store";
 import { pickMemberColor, sameMemberName } from "../../lib/team";
-import { completionYear, dueArchiveYear, kstYear } from "../../lib/archive";
-import { isItemDone } from "../../lib/workflow";
+import { dueArchiveYear, kstYear, manualArchiveYear } from "../../lib/archive";
 import { displayBoardTitle } from "../../brand";
 
 type StepStatus = "todo" | "done";
@@ -1836,6 +1835,7 @@ const MANAGER_ONLY_ACTIONS = new Set([
   "send-deadline-alerts",
   // 보관함: only a 부서장 archives or restores work.
   "archive-item",
+  "archive-items",
 ]);
 
 const MANAGER_ONLY = "부서장만 할 수 있는 작업입니다.";
@@ -2623,6 +2623,7 @@ export async function PATCH(request: Request) {
       }>;
       groupOrder?: string[];
       archived?: boolean;
+      itemIds?: unknown[];
     };
     const now = new Date().toISOString();
     const d1 = getD1();
@@ -2637,47 +2638,48 @@ export async function PATCH(request: Request) {
       return denied;
     }
 
-    // 보관함: put a finished item away now, or take it back to the board.
-    if (payload.action === "archive-item") {
-      const itemId = Number(payload.itemId);
-      const item = Number.isFinite(itemId) ? await getItem(itemId, workspaceId) : null;
-      if (!item) {
+    // 보관함 (부서장): put items away now (finished or not), or take them back
+    // to the board. One item ({itemId}) or many ({itemIds}, e.g. a 대분류).
+    if (payload.action === "archive-item" || payload.action === "archive-items") {
+      const ids = (payload.action === "archive-items" && Array.isArray(payload.itemIds) ? payload.itemIds : [payload.itemId])
+        .map(Number)
+        .filter((id) => Number.isInteger(id) && id > 0);
+      const unique = [...new Set(ids)].slice(0, 1000);
+      const all = await getItems(workspaceId);
+      const targets = all.filter((item) => unique.includes(item.id));
+      if (!targets.length) {
         return Response.json({ error: "업무를 찾을 수 없습니다." }, { status: 404 });
       }
-      if (payload.archived === true) {
-        if (!isItemDone(item)) {
-          return Response.json({ error: "모든 단계가 완료된 업무만 보관할 수 있습니다." }, { status: 400 });
-        }
-        const year = completionYear(item) ?? kstYear();
-        await d1
-          .prepare("UPDATE workflow_items SET archived_year = ?, archive_hold = 0, updated_by = ?, updated_at = ? WHERE workspace_id = ? AND id = ?")
-          .bind(year, actor, now, workspaceId, itemId)
-          .run();
-        await logHistory({
-          workspaceId,
-          itemId,
-          entityType: "item",
-          entityId: itemId,
-          action: "archive",
-          summary: `${actor}님이 '${item.title}' 업무를 ${year}년 보관함으로 옮김`,
-          actor,
-        });
-      } else {
-        await d1
-          .prepare("UPDATE workflow_items SET archived_year = NULL, archive_hold = 1, updated_by = ?, updated_at = ? WHERE workspace_id = ? AND id = ?")
-          .bind(actor, now, workspaceId, itemId)
-          .run();
-        await logHistory({
-          workspaceId,
-          itemId,
-          entityType: "item",
-          entityId: itemId,
-          action: "restore",
-          summary: `${actor}님이 '${item.title}' 업무를 보관함에서 목록으로 되돌림`,
-          actor,
-        });
-      }
-      return Response.json({ item: await getItem(itemId, workspaceId), history: await getHistory(workspaceId) });
+      const archiving = payload.archived === true;
+      const currentYear = kstYear();
+      await d1.batch(
+        targets.map((item) =>
+          archiving
+            ? d1
+                .prepare("UPDATE workflow_items SET archived_year = ?, archive_hold = 0, updated_by = ?, updated_at = ? WHERE workspace_id = ? AND id = ?")
+                .bind(manualArchiveYear(item, currentYear), actor, now, workspaceId, item.id)
+            : d1
+                .prepare("UPDATE workflow_items SET archived_year = NULL, archive_hold = 1, updated_by = ?, updated_at = ? WHERE workspace_id = ? AND id = ?")
+                .bind(actor, now, workspaceId, item.id)
+        )
+      );
+      const label = typeof payload.groupName === "string" && payload.groupName.trim() ? `'${payload.groupName.trim().slice(0, 80)}' 분류의 ` : "";
+      const what = targets.length === 1 ? `'${targets[0].title}' 업무를` : `${label}업무 ${targets.length}개를`;
+      await logHistory({
+        workspaceId,
+        itemId: targets.length === 1 ? targets[0].id : null,
+        entityType: "item",
+        entityId: targets.length === 1 ? targets[0].id : null,
+        action: archiving ? "archive" : "restore",
+        summary: archiving ? `${actor}님이 ${what} 보관함으로 옮김` : `${actor}님이 ${what} 보관함에서 목록으로 되돌림`,
+        actor,
+      });
+      const items = await getItems(workspaceId);
+      return Response.json({
+        items,
+        item: items.find((item) => item.id === targets[0].id) ?? null,
+        history: await getHistory(workspaceId),
+      });
     }
 
     if (payload.action === "update-workspace") {
