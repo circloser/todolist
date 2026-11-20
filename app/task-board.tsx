@@ -37,6 +37,8 @@ import {
 } from "./lib/board-config";
 import { WETLAND_PRESETS } from "./lib/wetlands";
 import ManualContent, { revealManualSection } from "./manual-content";
+import { isArchived } from "./lib/archive";
+import ArchivePanel from "./archive-panel";
 import AuthScreen from "./auth-screen";
 import { BRAND, CompassMark } from "./brand";
 import CalendarView, { EventList } from "./calendar-view";
@@ -246,7 +248,10 @@ function workspaceOrganizationName(workspace: WorkspaceSummary | null) {
 }
 
 export default function TaskBoard() {
-  const [items, setItems] = useState<WorkflowItem[]>([]);
+  // Every item of the board; the screens use `items` (not in 보관함).
+  const [allItems, setItems] = useState<WorkflowItem[]>([]);
+  const items = useMemo(() => allItems.filter((item) => !isArchived(item)), [allItems]);
+  const archivedItems = useMemo(() => allItems.filter(isArchived), [allItems]);
   const [templates, setTemplates] = useState<TemplateOption[]>(defaultTemplates);
   const [history, setHistory] = useState<HistoryEntry[]>([]);
   const [assigneeSettings, setAssigneeSettings] = useState<Record<string, string>>(
@@ -283,6 +288,9 @@ export default function TaskBoard() {
   // 설정 (보드·알림 웹훅·운영 옵션) and 변경 이력, opened from the header.
   const [settingsTab, setSettingsTab] = useState<SettingsTab | null>(null);
   const [historyOpen, setHistoryOpen] = useState(false);
+  // 보관함 dialog (and the archived item to show, from search/links).
+  const [archiveOpen, setArchiveOpen] = useState(false);
+  const [archiveFocusId, setArchiveFocusId] = useState<number | null>(null);
   const [minutesHighlight, setMinutesHighlight] = useState<string[]>([]);
   const [workLogFocus, setWorkLogFocus] = useState<{
     key: number;
@@ -1798,7 +1806,7 @@ export default function TaskBoard() {
       >
     >
   ) {
-    const previousItems = items;
+    const previousItems = allItems;
     setError("");
     setSavingItemIds((current) => new Set(current).add(id));
 
@@ -1855,7 +1863,7 @@ export default function TaskBoard() {
       return;
     }
 
-    const previousItems = items;
+    const previousItems = allItems;
     setError("");
     setDeletingItemIds((current) => new Set(current).add(item.id));
     setItems((current) => current.filter((currentItem) => currentItem.id !== item.id));
@@ -1905,7 +1913,7 @@ export default function TaskBoard() {
     step: WorkflowStep,
     status: StepStatus
   ) {
-    const previousItems = items;
+    const previousItems = allItems;
     setError("");
     setSavingStepIds((current) => new Set(current).add(step.id));
     setItems((current) =>
@@ -1990,7 +1998,7 @@ export default function TaskBoard() {
       Pick<WorkflowSubtask, "title" | "status" | "dueDate" | "blockers">
     >
   ) {
-    const previousItems = items;
+    const previousItems = allItems;
     setError("");
     setSavingSubtaskIds((current) => new Set(current).add(subtaskId));
 
@@ -2113,7 +2121,7 @@ export default function TaskBoard() {
   }
 
   async function deleteSubtask(subtask: WorkflowSubtask) {
-    const previousItems = items;
+    const previousItems = allItems;
     setError("");
     setItems((current) =>
       current.map((item) =>
@@ -2768,7 +2776,7 @@ export default function TaskBoard() {
     category: string,
     order: number[]
   ) {
-    const previousItems = items;
+    const previousItems = allItems;
     setError("");
     setSavingOrder(true);
     setSortMode("manual");
@@ -3045,7 +3053,7 @@ export default function TaskBoard() {
       return;
     }
 
-    const previousItems = items;
+    const previousItems = allItems;
     const previousGroupOrder = groupOrder;
     const previousCategoryFilter = categoryFilter;
     const previousActiveAddGroup = activeAddGroup;
@@ -3129,7 +3137,7 @@ export default function TaskBoard() {
       return;
     }
 
-    const previousItems = items;
+    const previousItems = allItems;
     const previousOrder = groupOrder;
     setSavingGroup(true);
     setError("");
@@ -3191,7 +3199,7 @@ export default function TaskBoard() {
       return;
     }
 
-    const previousItems = items;
+    const previousItems = allItems;
     const previousOrder = groupOrder;
     setSavingGroup(true);
     setError("");
@@ -3364,7 +3372,44 @@ export default function TaskBoard() {
     }, 80);
   }
 
+  /** Puts a finished item into its year's 보관함, or takes it back to the board. */
+  async function setItemArchived(item: WorkflowItem, archived: boolean) {
+    setError("");
+    setSavingItemIds((current) => new Set(current).add(item.id));
+    try {
+      const response = await taskRequest({
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "archive-item", itemId: item.id, archived }),
+      });
+      const data = (await response.json().catch(() => ({}))) as TaskResponse;
+      if (!response.ok || !data.item) {
+        setError(data.error ?? (archived ? "보관하지 못했습니다." : "복원하지 못했습니다."));
+        return;
+      }
+      const saved = data.item;
+      setItems((current) => current.map((entry) => (entry.id === saved.id ? saved : entry)));
+      if (data.history) {
+        setHistory(data.history);
+      }
+    } catch {
+      setError("네트워크 오류로 저장하지 못했습니다.");
+    } finally {
+      setSavingItemIds((current) => {
+        const next = new Set(current);
+        next.delete(item.id);
+        return next;
+      });
+    }
+  }
+
   function openItem(id: number) {
+    const archivedTarget = archivedItems.find((item) => item.id === id);
+    if (archivedTarget) {
+      setArchiveFocusId(id);
+      setArchiveOpen(true);
+      return;
+    }
     const target = items.find((item) => item.id === id);
     if (target) {
       revealGroup(groupName(target));
@@ -3699,6 +3744,16 @@ export default function TaskBoard() {
                     </MenuItem>
                   ) : null}
                   <div className="tb-menu-sep" />
+                  <MenuItem
+                    icon="📦"
+                    onSelect={() => {
+                      close();
+                      setArchiveFocusId(null);
+                      setArchiveOpen(true);
+                    }}
+                  >
+                    보관함{archivedItems.length ? ` (${archivedItems.length})` : ""}
+                  </MenuItem>
                   <MenuItem
                     icon="🕘"
                     onSelect={() => {
@@ -4608,28 +4663,45 @@ export default function TaskBoard() {
               </div>
             ) : null}
 
-            {!loading && listRootNames.length > 1 ? (
-              <div className="tb-list-fold flex items-center gap-2 px-1 pb-1 text-xs text-[var(--text-muted)]">
+            {!loading && (listRootNames.length > 1 || archivedItems.length) ? (
+              <div className="tb-list-fold flex flex-wrap items-center gap-2 px-1 pb-1 text-xs text-[var(--text-muted)]">
                 <span>
                   대분류 {listRootNames.length}개
                   {listRootNames.some((name) => collapsedGroups.has(name))
                     ? ` · 접힘 ${listRootNames.filter((name) => collapsedGroups.has(name)).length}`
                     : ""}
                 </span>
-                <button
-                  type="button"
-                  onClick={() => setCollapsedGroups(new Set())}
-                  className="tb-btn ml-auto !px-2.5 !py-1 text-xs"
-                >
-                  모두 펼치기
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setCollapsedGroups(new Set(listRootNames))}
-                  className="tb-btn !px-2.5 !py-1 text-xs"
-                >
-                  모두 접기
-                </button>
+                {archivedItems.length ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setArchiveFocusId(null);
+                      setArchiveOpen(true);
+                    }}
+                    className="font-semibold text-[var(--accent)] hover:underline"
+                    title="지난해에 완료되어 연도별로 보관된 업무"
+                  >
+                    📦 보관함 {archivedItems.length}
+                  </button>
+                ) : null}
+                {listRootNames.length > 1 ? (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => setCollapsedGroups(new Set())}
+                      className="tb-btn ml-auto !px-2.5 !py-1 text-xs"
+                    >
+                      모두 펼치기
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setCollapsedGroups(new Set(listRootNames))}
+                      className="tb-btn !px-2.5 !py-1 text-xs"
+                    >
+                      모두 접기
+                    </button>
+                  </>
+                ) : null}
               </div>
             ) : null}
 
@@ -5090,6 +5162,18 @@ export default function TaskBoard() {
                         >
                           {expanded ? "▴" : "▾"}
                         </button>
+                        {isManager && done ? (
+                        <button
+                          type="button"
+                          disabled={savingItemIds.has(item.id)}
+                          onClick={() => void setItemArchived(item, true)}
+                          className="tb-iconbtn h-8 w-8 disabled:cursor-not-allowed disabled:opacity-40"
+                          title="완료된 업무를 보관함으로 옮기기 (해가 바뀌면 자동으로 옮겨집니다)"
+                          aria-label={`${item.title || "업무"} 보관`}
+                        >
+                          📦
+                        </button>
+                        ) : null}
                         {canEdit(item) ? (
                         <button
                           type="button"
@@ -6880,7 +6964,7 @@ export default function TaskBoard() {
 
             <div className="overflow-x-auto">
               <div className="min-w-[620px] sm:min-w-[760px]">
-                <div className="grid grid-cols-[124px_1fr] border-b border-[var(--border)] bg-[var(--surface-2)] sm:grid-cols-[230px_1fr]">
+                <div className="grid grid-cols-[136px_1fr] border-b border-[var(--border)] bg-[var(--surface-2)] sm:grid-cols-[230px_1fr]">
                   <div className="sticky left-0 z-10 bg-[var(--surface-2)] px-3 py-2 text-[11px] font-semibold text-[var(--text-muted)]">
                     업무
                   </div>
@@ -6907,7 +6991,7 @@ export default function TaskBoard() {
                     return (
                       <div
                         key={item.id}
-                        className="grid grid-cols-[124px_1fr] border-b border-[var(--border)] last:border-b-0 hover:bg-[var(--surface-2)] sm:grid-cols-[230px_1fr]"
+                        className="grid grid-cols-[136px_1fr] border-b border-[var(--border)] last:border-b-0 hover:bg-[var(--surface-2)] sm:grid-cols-[230px_1fr]"
                       >
                         <button
                           type="button"
@@ -6916,7 +7000,7 @@ export default function TaskBoard() {
                           style={{ boxShadow: `inset 3px 0 0 ${rowColor}` }}
                           title="목록에서 열기"
                         >
-                          <div className="truncate text-sm font-medium">
+                          <div className="tb-gantt-title text-sm font-medium" title={item.title || "제목 없음"}>
                             {item.title || "제목 없음"}
                           </div>
                           <div className="truncate text-[11px] text-[var(--text-faint)]">
@@ -6924,7 +7008,7 @@ export default function TaskBoard() {
                           </div>
                         </button>
 
-                        <div className="relative h-12" data-gantt-timeline>
+                        <div className="relative min-h-12" data-gantt-timeline>
                           {gantt.ticks.slice(1, -1).map((tick) => (
                             <span
                               key={tick.pct}
@@ -7036,6 +7120,16 @@ export default function TaskBoard() {
         )}
 
       </section>
+
+      {archiveOpen ? (
+        <ArchivePanel
+          items={archivedItems}
+          focusId={archiveFocusId}
+          canRestore={() => isManager}
+          onRestore={(item) => setItemArchived(item, false)}
+          onClose={() => setArchiveOpen(false)}
+        />
+      ) : null}
 
       {manualOpen ? (
         <div
@@ -8521,7 +8615,7 @@ export default function TaskBoard() {
       {searchOpen ? (
         <SearchPalette
           request={apiRequest}
-          items={items}
+          items={allItems}
           members={members}
           places={mapPlaces}
           onClose={() => setSearchOpen(false)}

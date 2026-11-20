@@ -170,6 +170,7 @@ export default function SearchPalette({
       .filter(({ fields }) => matchesAll(fields, terms))
       .sort(
         (first, second) =>
+          Number(Boolean(first.item.archivedYear)) - Number(Boolean(second.item.archivedYear)) ||
           Number(!matchesAll([["업무명", second.item.title]], terms)) -
             Number(!matchesAll([["업무명", first.item.title]], terms)) ||
           first.item.position - second.item.position
@@ -180,7 +181,12 @@ export default function SearchPalette({
         id: String(item.id),
         title: item.title,
         ...searchSnippet(fields, terms),
-        meta: [categoryKey(item.category), assigneeName(item.assignee), item.dueDate ? `마감 ${item.dueDate}` : ""]
+        meta: [
+          item.archivedYear ? `📦 ${item.archivedYear}년 보관` : "",
+          categoryKey(item.category),
+          assigneeName(item.assignee),
+          item.dueDate && !item.archivedYear ? `마감 ${item.dueDate}` : "",
+        ]
           .filter(Boolean)
           .join(" · "),
         target: { itemId: item.id },

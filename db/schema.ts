@@ -81,6 +81,8 @@ export const workflowItems = sqliteTable(
     lat: real("lat"),
     lng: real("lng"),
     links: text("links").notNull().default("[]"),
+    archivedYear: integer("archived_year"),
+    archiveHold: integer("archive_hold").notNull().default(0),
     templateKey: text("template_key").notNull().default("general-service"),
     position: integer("position").notNull(),
     updatedBy: text("updated_by").notNull().default(""),

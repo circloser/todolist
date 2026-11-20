@@ -20,6 +20,8 @@ import {
   type BoardAccess,
 } from "../auth-store";
 import { pickMemberColor, sameMemberName } from "../../lib/team";
+import { completionYear, dueArchiveYear, kstYear } from "../../lib/archive";
+import { isItemDone } from "../../lib/workflow";
 import { displayBoardTitle } from "../../brand";
 
 type StepStatus = "todo" | "done";
@@ -47,6 +49,8 @@ type WorkflowItemRow = {
   updated_by: string;
   updated_at: string;
   created_at: string;
+  archived_year?: number | null;
+  archive_hold?: number | null;
 };
 
 type WorkflowStepRow = {
@@ -514,6 +518,8 @@ function toItem(
     updatedBy: row.updated_by,
     updatedAt: row.updated_at,
     createdAt: row.created_at,
+    archivedYear: row.archived_year ?? null,
+    archiveHold: Boolean(row.archive_hold),
     steps: steps.map((step) => ({
       id: step.id,
       itemId: step.item_id,
@@ -720,6 +726,9 @@ async function ensureSchema() {
   await addColumnIfMissing(
     "ALTER TABLE workflow_items ADD COLUMN location TEXT NOT NULL DEFAULT ''"
   );
+  // 연도별 보관함 (finished in an earlier year → that year's folder).
+  await addColumnIfMissing("ALTER TABLE workflow_items ADD COLUMN archived_year INTEGER");
+  await addColumnIfMissing("ALTER TABLE workflow_items ADD COLUMN archive_hold INTEGER NOT NULL DEFAULT 0");
   await addColumnIfMissing("ALTER TABLE workflow_items ADD COLUMN lat REAL");
   await addColumnIfMissing("ALTER TABLE workflow_items ADD COLUMN lng REAL");
   await addColumnIfMissing(
@@ -1825,6 +1834,8 @@ const MANAGER_ONLY_ACTIONS = new Set([
   "save-webhook",
   "update-settings",
   "send-deadline-alerts",
+  // 보관함: only a 부서장 archives or restores work.
+  "archive-item",
 ]);
 
 const MANAGER_ONLY = "부서장만 할 수 있는 작업입니다.";
@@ -1948,6 +1959,38 @@ async function authorizeTaskMutation(
   return null;
 }
 
+/**
+ * Moves work finished in an earlier year into that year's 보관함 (runs when
+ * the board loads, so the first visit of a new year tidies the board).
+ */
+async function archiveFinishedItems(workspaceId: string, items: Awaited<ReturnType<typeof getItems>>) {
+  const currentYear = kstYear();
+  const due = items
+    .map((item) => ({ item, year: dueArchiveYear(item, currentYear) }))
+    .filter((entry): entry is { item: (typeof items)[number]; year: number } => entry.year !== null);
+  if (!due.length) {
+    return items;
+  }
+  const d1 = getD1();
+  await d1.batch(
+    due.map(({ item, year }) =>
+      d1
+        .prepare("UPDATE workflow_items SET archived_year = ? WHERE workspace_id = ? AND id = ? AND archived_year IS NULL")
+        .bind(year, workspaceId, item.id)
+    )
+  );
+  const years = [...new Set(due.map((entry) => entry.year))].sort();
+  await logHistory({
+    workspaceId,
+    entityType: "item",
+    action: "archive",
+    summary: `해가 바뀌어 완료된 업무 ${due.length}개를 ${years.map((year) => `${year}년`).join("·")} 보관함으로 옮김`,
+    actor: "자동 보관",
+  });
+  const moved = new Map(due.map((entry) => [entry.item.id, entry.year]));
+  return items.map((item) => (moved.has(item.id) ? { ...item, archivedYear: moved.get(item.id) ?? null } : item));
+}
+
 export async function GET(request: Request) {
   try {
     await prepareWorkflow();
@@ -1968,7 +2011,7 @@ export async function GET(request: Request) {
     const templateList = await getTemplatesFromDb();
 
     return Response.json({
-      items: await getItems(workspaceId),
+      items: await archiveFinishedItems(workspaceId, await getItems(workspaceId)),
       stages: templateList[0]?.stages ?? [],
       legacyStages: defaultStages,
       templates: templateList,
@@ -2579,6 +2622,7 @@ export async function PATCH(request: Request) {
         progress?: number | string | null;
       }>;
       groupOrder?: string[];
+      archived?: boolean;
     };
     const now = new Date().toISOString();
     const d1 = getD1();
@@ -2591,6 +2635,49 @@ export async function PATCH(request: Request) {
     const denied = await authorizeTaskMutation(access, "PATCH", payload);
     if (denied) {
       return denied;
+    }
+
+    // 보관함: put a finished item away now, or take it back to the board.
+    if (payload.action === "archive-item") {
+      const itemId = Number(payload.itemId);
+      const item = Number.isFinite(itemId) ? await getItem(itemId, workspaceId) : null;
+      if (!item) {
+        return Response.json({ error: "업무를 찾을 수 없습니다." }, { status: 404 });
+      }
+      if (payload.archived === true) {
+        if (!isItemDone(item)) {
+          return Response.json({ error: "모든 단계가 완료된 업무만 보관할 수 있습니다." }, { status: 400 });
+        }
+        const year = completionYear(item) ?? kstYear();
+        await d1
+          .prepare("UPDATE workflow_items SET archived_year = ?, archive_hold = 0, updated_by = ?, updated_at = ? WHERE workspace_id = ? AND id = ?")
+          .bind(year, actor, now, workspaceId, itemId)
+          .run();
+        await logHistory({
+          workspaceId,
+          itemId,
+          entityType: "item",
+          entityId: itemId,
+          action: "archive",
+          summary: `${actor}님이 '${item.title}' 업무를 ${year}년 보관함으로 옮김`,
+          actor,
+        });
+      } else {
+        await d1
+          .prepare("UPDATE workflow_items SET archived_year = NULL, archive_hold = 1, updated_by = ?, updated_at = ? WHERE workspace_id = ? AND id = ?")
+          .bind(actor, now, workspaceId, itemId)
+          .run();
+        await logHistory({
+          workspaceId,
+          itemId,
+          entityType: "item",
+          entityId: itemId,
+          action: "restore",
+          summary: `${actor}님이 '${item.title}' 업무를 보관함에서 목록으로 되돌림`,
+          actor,
+        });
+      }
+      return Response.json({ item: await getItem(itemId, workspaceId), history: await getHistory(workspaceId) });
     }
 
     if (payload.action === "update-workspace") {

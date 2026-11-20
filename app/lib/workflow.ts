@@ -72,6 +72,10 @@ export type WorkflowItem = {
   createdAt: string;
   steps: WorkflowStep[];
   subtasks: WorkflowSubtask[];
+  /** Year folder of a finished item kept out of the board (null = on the board). */
+  archivedYear?: number | null;
+  /** Taken back out of 보관함 by hand: never archived again automatically. */
+  archiveHold?: boolean;
 };
 
 export type TemplateStage = {
