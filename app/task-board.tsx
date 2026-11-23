@@ -824,10 +824,13 @@ export default function TaskBoard() {
     groupOrder.forEach((name) => names.add(categoryKey(name)));
     items.forEach((item) => names.add(groupName(item)));
 
-    return [...names].sort((first, second) =>
-      first.localeCompare(second, "ko-KR")
-    );
-  }, [groupOrder, items]);
+    // 분류 emptied into the 보관함 are not offered either.
+    const branchHas = (list: WorkflowItem[], name: string) =>
+      list.some((item) => groupContainsCategory(name, groupName(item)));
+    return [...names]
+      .filter((name) => branchHas(items, name) || !branchHas(archivedItems, name))
+      .sort((first, second) => first.localeCompare(second, "ko-KR"));
+  }, [archivedItems, groupOrder, items]);
 
   const orderedCategoryNames = useMemo(() => {
     const names: string[] = [];
@@ -846,8 +849,13 @@ export default function TaskBoard() {
       .forEach((item) => pushName(groupName(item)));
     categories.forEach(pushName);
 
-    return names;
-  }, [categories, groupOrder, items]);
+    // A 분류 whose work all went to the 보관함 leaves the board with it (it
+    // comes back, in its old place, when something in it is restored).
+    // 분류 that never had work (just added) stay.
+    const branchHas = (list: WorkflowItem[], name: string) =>
+      list.some((item) => groupContainsCategory(name, groupName(item)));
+    return names.filter((name) => branchHas(items, name) || !branchHas(archivedItems, name));
+  }, [archivedItems, categories, groupOrder, items]);
 
   const templatesByKey = useMemo(
     () => new Map(templates.map((template) => [template.key, template])),
@@ -5146,6 +5154,20 @@ export default function TaskBoard() {
                               {done ? "완료" : shortDueLabel(item.dueDate)}
                             </span>
                           ) : null}
+                          {item.allocatedBudget || item.requiredBudget ? (
+                            <span
+                              className="tb-list-budget"
+                              title={`편성 예산 ${formatBudget(item.allocatedBudget) || 0}원 · 소요 예산 ${formatBudget(item.requiredBudget) || 0}원`}
+                            >
+                              <span className="text-[var(--text-faint)]">예산</span>{" "}
+                              <strong className="font-semibold text-[var(--text)]">
+                                {item.allocatedBudget ? `${formatBudget(item.allocatedBudget)}원` : "-"}
+                              </strong>
+                              {item.requiredBudget ? (
+                                <span className="text-[var(--text-faint)]"> (소요 {formatBudget(item.requiredBudget)}원)</span>
+                              ) : null}
+                            </span>
+                          ) : null}
                           {item.location ? (
                             <span className="tb-badge tb-badge-muted">
                               📍 {item.location}
@@ -7174,6 +7196,7 @@ export default function TaskBoard() {
       {archiveOpen ? (
         <ArchivePanel
           items={archivedItems}
+          categoryOrder={groupOrder}
           focusId={archiveFocusId}
           canRestore={() => isManager}
           onRestore={async (targets, label) => {
